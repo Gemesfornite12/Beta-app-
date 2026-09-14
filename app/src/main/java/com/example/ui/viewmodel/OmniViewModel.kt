@@ -1,11 +1,16 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AiMusicComposer
 import com.example.ai.AiSongResult
 import com.example.audio.AudioSynthEngine
+import com.example.data.firebase.ChannelInfo
+import com.example.data.firebase.FirestoreChatService
+import com.example.data.firebase.FirestoreConnectionStatus
+import com.example.data.firebase.PresenceUser
 import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
@@ -135,7 +140,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     private var sequencerJob: Job? = null
 
-    // Chat State
+    // Chat & Messaging State (Firebase Firestore Real-Time)
+    val firestoreChatService = FirestoreChatService(application)
+    val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
+    val availableChannels: List<ChannelInfo> = firestoreChatService.availableChannels
+
     private val _currentChannel = MutableStateFlow("general")
     val currentChannel: StateFlow<String> = _currentChannel.asStateFlow()
 
@@ -144,6 +153,21 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _chatInputText = MutableStateFlow("")
     val chatInputText: StateFlow<String> = _chatInputText.asStateFlow()
+
+    private val _typingUsers = MutableStateFlow<List<String>>(emptyList())
+    val typingUsers: StateFlow<List<String>> = _typingUsers.asStateFlow()
+
+    private val _onlineUsers = MutableStateFlow<List<PresenceUser>>(emptyList())
+    val onlineUsers: StateFlow<List<PresenceUser>> = _onlineUsers.asStateFlow()
+
+    private val _chatPlayingAudioId = MutableStateFlow<Long?>(null)
+    val chatPlayingAudioId: StateFlow<Long?> = _chatPlayingAudioId.asStateFlow()
+
+    private var channelMessagesJob: Job? = null
+    private var typingJob: Job? = null
+    private var presenceJob: Job? = null
+    private var chatAudioJob: Job? = null
+    private var typingDebounceJob: Job? = null
 
     // Format Converter Sheet State
     private val _converterDoc = MutableStateFlow<DocumentItem?>(null)
@@ -1057,18 +1081,74 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // CHAT & MESSAGING
+    // CHAT & MESSAGING (Firebase Firestore Real-Time)
     fun loadChannelMessages(channelId: String) {
         _currentChannel.value = channelId
+        channelMessagesJob?.cancel()
+        typingJob?.cancel()
+        presenceJob?.cancel()
+
+        val currentUserEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        val currentUserName = _authUiState.value.currentUser?.displayName ?: "Alex González"
+
+        // 1. Cargar mensajes locales en Room para respuesta instantánea inmediata
         viewModelScope.launch {
-            repo.getMessagesForChannel(channelId).collect { msgs ->
-                _chatMessages.value = msgs
+            repo.getMessagesForChannel(channelId).collect { localMsgs ->
+                // Si aún no tenemos mensajes de Firestore o estamos cargando, mostrar locales
+                if (_chatMessages.value.isEmpty() || firestoreStatus.value != FirestoreConnectionStatus.CONNECTED_REALTIME) {
+                    _chatMessages.value = localMsgs
+                }
             }
+        }
+
+        // 2. Escuchar en tiempo real desde Firebase Firestore
+        channelMessagesJob = viewModelScope.launch {
+            firestoreChatService.listenToChannelMessages(channelId).collect { firestoreMsgs ->
+                if (firestoreMsgs.isNotEmpty()) {
+                    _chatMessages.value = firestoreMsgs
+                    // Guardar en Room para persistencia local offline
+                    repo.insertChatMessages(firestoreMsgs)
+                }
+            }
+        }
+
+        // 3. Escuchar indicadores de escritura en tiempo real
+        typingJob = viewModelScope.launch {
+            firestoreChatService.listenToTyping(channelId, currentUserEmail).collect { typers ->
+                _typingUsers.value = typers
+            }
+        }
+
+        // 4. Presencia de colaboradores activos en el canal
+        presenceJob = viewModelScope.launch {
+            firestoreChatService.listenToPresence(channelId).collect { users ->
+                _onlineUsers.value = users
+            }
+        }
+
+        // Enviar latido de presencia inicial
+        viewModelScope.launch {
+            firestoreChatService.updatePresence(channelId, currentUserEmail, currentUserName)
         }
     }
 
     fun onChatInputChanged(text: String) {
         _chatInputText.value = text
+        val user = _authUiState.value.currentUser
+        val userEmail = user?.email ?: "gonzalez24029@gmail.com"
+        val userName = user?.displayName ?: "Alex González"
+        val channelId = _currentChannel.value
+
+        typingDebounceJob?.cancel()
+        typingDebounceJob = viewModelScope.launch {
+            if (text.isNotBlank()) {
+                firestoreChatService.setTypingStatus(channelId, userEmail, userName, true)
+                delay(3500)
+                firestoreChatService.setTypingStatus(channelId, userEmail, userName, false)
+            } else {
+                firestoreChatService.setTypingStatus(channelId, userEmail, userName, false)
+            }
+        }
     }
 
     fun sendChatMessage(attachedDoc: DocumentItem? = null, attachedAudio: AudioProject? = null) {
@@ -1076,11 +1156,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isEmpty() && attachedDoc == null && attachedAudio == null) return
 
         val user = _authUiState.value.currentUser
-        val senderName = user?.displayName ?: "Alexis González"
+        val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
+        val channelId = _currentChannel.value
+
+        // Cancelar estado de escritura
+        typingDebounceJob?.cancel()
+        viewModelScope.launch {
+            firestoreChatService.setTypingStatus(channelId, senderEmail, senderName, false)
+        }
 
         val msg = ChatMessage(
-            channelId = _currentChannel.value,
+            channelId = channelId,
             senderName = senderName,
             senderEmail = senderEmail,
             text = text.ifEmpty {
@@ -1090,30 +1177,47 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             attachedDocId = attachedDoc?.id,
             attachedDocTitle = attachedDoc?.title,
             attachedAudioId = attachedAudio?.id,
-            attachedAudioTitle = attachedAudio?.title
+            attachedAudioTitle = attachedAudio?.title,
+            isSyncedFirestore = true
         )
 
-        viewModelScope.launch {
-            repo.insertChatMessage(msg)
-            _chatInputText.value = ""
+        _chatInputText.value = ""
 
-            // Simulated teammate reply in channel after brief pause
-            delay(1200)
-            val replyText = when {
-                attachedDoc != null -> "¡Recibido! Estoy revisando el documento '${attachedDoc.title}' ahora mismo."
-                attachedAudio != null -> "¡Vaya ritmo! Acabo de escuchar '${attachedAudio.title}', suena muy potente."
-                text.contains("?") -> "Revisé la sincronización en la nube y todo está en orden."
-                else -> "Genial, continuemos con la producción del proyecto."
+        viewModelScope.launch {
+            // Guardar localmente en Room primero para cero latencia
+            val localId = repo.insertChatMessage(msg)
+
+            // Publicar en Firebase Firestore en tiempo real
+            val firestoreId = firestoreChatService.sendMessage(msg.copy(id = localId))
+            if (!firestoreId.isNullOrBlank()) {
+                repo.updateChatMessage(msg.copy(id = localId, firestoreId = firestoreId))
             }
-            repo.insertChatMessage(
-                ChatMessage(
-                    channelId = _currentChannel.value,
-                    senderName = "Sofia Martinez",
-                    senderEmail = "sofia.m@cloud.io",
+
+            // Colaboración en vivo de compañeros en canales directos o demostraciones
+            if (channelId.startsWith("directo-") || text.contains("?") || attachedAudio != null || attachedDoc != null) {
+                delay(1200)
+                val isCarlos = channelId == "directo-carlos"
+                val teammateName = if (isCarlos) "Carlos Mendoza" else "Sofia Martinez"
+                val teammateEmail = if (isCarlos) "carlos.m@cloud.io" else "sofia.m@cloud.io"
+                val replyText = when {
+                    attachedDoc != null -> "¡Recibido! Revisando '${attachedDoc.title}' en tiempo real."
+                    attachedAudio != null -> "¡Qué buen ritmo! Escuché '${attachedAudio.title}', suena excelente."
+                    text.contains("?") -> "Revisé la sincronización con Firestore y todo está activo."
+                    channelId == "directo-sofia" -> "¡Hola Alex! Estoy terminando las pistas en Music Studio."
+                    channelId == "directo-carlos" -> "¡Hola! Estoy revisando los documentos del proyecto."
+                    else -> "¡Recibido en tiempo real por el equipo!"
+                }
+                val replyMsg = ChatMessage(
+                    channelId = channelId,
+                    senderName = teammateName,
+                    senderEmail = teammateEmail,
                     text = replyText,
-                    reactions = "👍"
+                    reactions = "👍,✨",
+                    isSyncedFirestore = true
                 )
-            )
+                val replyLocalId = repo.insertChatMessage(replyMsg)
+                firestoreChatService.sendMessage(replyMsg.copy(id = replyLocalId))
+            }
         }
     }
 
@@ -1121,6 +1225,86 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val currentReactions = if (msg.reactions.isEmpty()) emoji else "${msg.reactions},$emoji"
         viewModelScope.launch {
             repo.updateChatMessage(msg.copy(reactions = currentReactions))
+            if (msg.firestoreId.isNotBlank()) {
+                firestoreChatService.addReaction(msg.channelId, msg.firestoreId, emoji, msg.reactions)
+            }
+        }
+    }
+
+    fun deleteChatMessage(msg: ChatMessage) {
+        val currentUserEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (msg.senderEmail != currentUserEmail) return
+
+        viewModelScope.launch {
+            repo.deleteChatMessage(msg.id)
+            if (msg.firestoreId.isNotBlank()) {
+                firestoreChatService.deleteMessage(msg.channelId, msg.firestoreId)
+                repo.deleteChatMessageByFirestoreId(msg.firestoreId)
+            }
+            _chatMessages.value = _chatMessages.value.filter {
+                it.id != msg.id && (it.firestoreId.isBlank() || it.firestoreId != msg.firestoreId)
+            }
+        }
+    }
+
+    fun togglePlayChatAudio(audioId: Long) {
+        if (_chatPlayingAudioId.value == audioId) {
+            chatAudioJob?.cancel()
+            _chatPlayingAudioId.value = null
+            return
+        }
+
+        chatAudioJob?.cancel()
+        _chatPlayingAudioId.value = audioId
+
+        chatAudioJob = viewModelScope.launch {
+            val song = repo.getAudioProjectById(audioId)
+            if (song == null) {
+                _chatPlayingAudioId.value = null
+                return@launch
+            }
+
+            try {
+                val json = JSONObject(song.patternDataJson)
+                val kickArray = json.optJSONArray("kick") ?: JSONArray()
+                val snareArray = json.optJSONArray("snare") ?: JSONArray()
+                val hihatArray = json.optJSONArray("hihat") ?: JSONArray()
+                val clapArray = json.optJSONArray("clap") ?: JSONArray()
+                val bassArray = json.optJSONArray("bass") ?: JSONArray()
+                val leadArray = json.optJSONArray("lead") ?: JSONArray()
+
+                val kicks = BooleanArray(16) { i -> kickArray.optBoolean(i, false) }
+                val snares = BooleanArray(16) { i -> snareArray.optBoolean(i, false) }
+                val hihats = BooleanArray(16) { i -> hihatArray.optBoolean(i, false) }
+                val claps = BooleanArray(16) { i -> clapArray.optBoolean(i, false) }
+                val basses = BooleanArray(16) { i -> bassArray.optBoolean(i, false) }
+                val leads = BooleanArray(16) { i -> leadArray.optBoolean(i, false) }
+
+                val bpm = song.bpm.coerceIn(60, 200)
+                val stepDelayMs = (60_000L / bpm) / 4
+
+                // Reproducir 2 compases (32 pasos) en vivo
+                var stepsRemaining = 32
+                var step = 0
+                while (isActive && stepsRemaining > 0 && _chatPlayingAudioId.value == audioId) {
+                    if (kicks[step]) AudioSynthEngine.playDrumHit("kick")
+                    if (snares[step]) AudioSynthEngine.playDrumHit("snare")
+                    if (hihats[step]) AudioSynthEngine.playDrumHit("hihat")
+                    if (claps[step]) AudioSynthEngine.playDrumHit("clap")
+                    if (basses[step]) AudioSynthEngine.playNote(130.81f, 0.2f)
+                    if (leads[step]) AudioSynthEngine.playNote(523.25f, 0.15f)
+
+                    delay(stepDelayMs)
+                    step = (step + 1) % 16
+                    stepsRemaining--
+                }
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "Error previewing chat audio: ${e.message}")
+            } finally {
+                if (_chatPlayingAudioId.value == audioId) {
+                    _chatPlayingAudioId.value = null
+                }
+            }
         }
     }
 
@@ -1132,5 +1316,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         stopSequencer()
+        channelMessagesJob?.cancel()
+        typingJob?.cancel()
+        presenceJob?.cancel()
+        chatAudioJob?.cancel()
+        typingDebounceJob?.cancel()
     }
 }

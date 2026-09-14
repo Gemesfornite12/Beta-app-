@@ -67,7 +67,8 @@ data class AudioProject(
 @Entity(tableName = "chat_messages")
 data class ChatMessage(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val channelId: String = "general", // "general", "musica", "docs", or direct email
+    val firestoreId: String = "",
+    val channelId: String = "general", // "general", "musica-colab", "revision-docs", or direct email
     val senderName: String,
     val senderEmail: String,
     val text: String,
@@ -76,5 +77,6 @@ data class ChatMessage(
     val attachedDocTitle: String? = null,
     val attachedAudioId: Long? = null,
     val attachedAudioTitle: String? = null,
-    val reactions: String = "" // e.g. "🔥,👍"
+    val reactions: String = "", // e.g. "🔥,👍"
+    val isSyncedFirestore: Boolean = true
 )

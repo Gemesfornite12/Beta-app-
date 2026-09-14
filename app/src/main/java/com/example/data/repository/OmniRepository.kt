@@ -34,7 +34,10 @@ class OmniRepository(private val db: AppDatabase) {
     suspend fun deleteAudioProject(id: Long) = db.audioProjectDao().deleteAudioProject(id)
 
     suspend fun insertChatMessage(msg: ChatMessage): Long = db.chatMessageDao().insertMessage(msg)
+    suspend fun insertChatMessages(msgs: List<ChatMessage>) = db.chatMessageDao().insertMessages(msgs)
     suspend fun updateChatMessage(msg: ChatMessage) = db.chatMessageDao().updateMessage(msg)
+    suspend fun deleteChatMessage(id: Long) = db.chatMessageDao().deleteMessage(id)
+    suspend fun deleteChatMessageByFirestoreId(firestoreId: String) = db.chatMessageDao().deleteMessageByFirestoreId(firestoreId)
 
     suspend fun getUserByEmail(email: String): UserAccount? = db.userDao().getUserByEmail(email)
     suspend fun saveUser(user: UserAccount) = db.userDao().insertUser(user)

@@ -82,9 +82,15 @@ interface ChatMessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessage): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessages(messages: List<ChatMessage>)
+
     @Update
     suspend fun updateMessage(message: ChatMessage)
 
     @Query("DELETE FROM chat_messages WHERE id = :id")
     suspend fun deleteMessage(id: Long)
+
+    @Query("DELETE FROM chat_messages WHERE firestoreId = :firestoreId")
+    suspend fun deleteMessageByFirestoreId(firestoreId: String)
 }

@@ -42,7 +42,7 @@ class Converters {
         AudioProject::class,
         ChatMessage::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
