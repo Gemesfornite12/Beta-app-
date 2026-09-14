@@ -1,0 +1,6 @@
+{
+  "name": "OmniStudio",
+  "description": "Suite todo-en-uno en la nube que integra editor de documentos con conversor de formatos, suite de creación musical con secuenciador y sintetizador, y mensajería en tiempo real con cuentas en la nube.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

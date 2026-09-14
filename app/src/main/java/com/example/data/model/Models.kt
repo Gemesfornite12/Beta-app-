@@ -1,0 +1,75 @@
+package com.example.data.model
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity(tableName = "users")
+data class UserAccount(
+    @PrimaryKey val email: String,
+    val username: String,
+    val displayName: String,
+    val passwordHash: String,
+    val isGoogleAccount: Boolean = false,
+    val avatarUrl: String = "",
+    val cloudStorageUsedMb: Int = 1420,
+    val cloudStorageTotalMb: Int = 15360, // 15 GB
+    val lastLoginTimestamp: Long = System.currentTimeMillis()
+)
+
+enum class DocumentType {
+    DOC, SLIDE, SHEET, TXT, PDF, RESUME
+}
+
+enum class DocumentFormat(val extension: String, val displayName: String, val mimeType: String) {
+    DOCX("docx", "Documento Word (.docx)", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    PDF("pdf", "Documento PDF (.pdf)", "application/pdf"),
+    TXT("txt", "Texto Plano (.txt)", "text/plain"),
+    MARKDOWN("md", "Markdown (.md)", "text/markdown"),
+    HTML("html", "Página Web (.html)", "text/html"),
+    PPTX("pptx", "Presentación (.pptx)", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+}
+
+@Entity(tableName = "documents")
+data class DocumentItem(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val content: String,
+    val docType: DocumentType = DocumentType.DOC,
+    val currentFormat: DocumentFormat = DocumentFormat.DOCX,
+    val slideCount: Int = 1,
+    val slidesJson: String = "[]", // Serialized slide data for presentations
+    val authorEmail: String,
+    val lastModified: Long = System.currentTimeMillis(),
+    val isSyncedCloud: Boolean = true,
+    val fileSizeKb: Int = 45,
+    val isFavorite: Boolean = false
+)
+
+@Entity(tableName = "audio_projects")
+data class AudioProject(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val genre: String = "Lo-Fi Hip Hop",
+    val bpm: Int = 110,
+    val patternDataJson: String, // 16-step grid per track
+    val authorEmail: String,
+    val durationSeconds: Int = 16,
+    val lastModified: Long = System.currentTimeMillis(),
+    val isSyncedCloud: Boolean = true,
+    val fileSizeKb: Int = 128
+)
+
+@Entity(tableName = "chat_messages")
+data class ChatMessage(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val channelId: String = "general", // "general", "musica", "docs", or direct email
+    val senderName: String,
+    val senderEmail: String,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val attachedDocId: Long? = null,
+    val attachedDocTitle: String? = null,
+    val attachedAudioId: Long? = null,
+    val attachedAudioTitle: String? = null,
+    val reactions: String = "" // e.g. "🔥,👍"
+)
