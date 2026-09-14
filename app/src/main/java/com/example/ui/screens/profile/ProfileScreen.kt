@@ -269,6 +269,9 @@ fun ProfileScreen(
             // Logout Button
             Button(
                 onClick = {
+                    try {
+                        com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                    } catch (_: Exception) {}
                     viewModel.logout()
                     onLogout()
                 },

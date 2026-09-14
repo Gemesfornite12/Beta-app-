@@ -235,6 +235,26 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun syncUserFromFirebaseAuth(email: String?, displayName: String?, photoUrl: String? = null) {
+        val userEmail = email ?: "user@omnistudio.cloud"
+        val userName = displayName ?: userEmail.substringBefore("@")
+        val account = UserAccount(
+            email = userEmail,
+            username = userEmail.substringBefore("@"),
+            displayName = userName,
+            passwordHash = "firebase_auth_session",
+            isGoogleAccount = true
+        )
+        viewModelScope.launch {
+            repo.saveUser(account)
+            _authUiState.value = _authUiState.value.copy(
+                currentUser = account,
+                isLoggedIn = true,
+                authFeedbackMessage = "¡Bienvenido, $userName!"
+            )
+        }
+    }
+
     fun logout() {
         _authUiState.value = _authUiState.value.copy(
             isLoggedIn = false,

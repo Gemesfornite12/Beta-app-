@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -65,31 +66,48 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.OmniViewModel
 
 @Composable
 fun AuthScreen(
-    viewModel: OmniViewModel,
+    viewModel: OmniViewModel? = null,
+    authViewModel: AuthViewModel = viewModel(),
     onAuthSuccess: () -> Unit
 ) {
-    val authState by viewModel.authUiState.collectAsState()
+    val authState by authViewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
     var isPasswordVisible by remember { mutableStateOf(false) }
     var recoveryEmailInput by remember { mutableStateOf("") }
-    var recoveryCodeInput by remember { mutableStateOf("") }
-    var newPasswordInput by remember { mutableStateOf("") }
-
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(authState.isLoggedIn) {
-        if (authState.isLoggedIn) {
+    // Sincronizar estado cuando el usuario se autentica
+    LaunchedEffect(authState.isAuthenticated) {
+        if (authState.isAuthenticated) {
+            viewModel?.syncUserFromFirebaseAuth(
+                email = authState.userEmail,
+                displayName = authState.userDisplayName,
+                photoUrl = authState.userPhotoUrl
+            )
             onAuthSuccess()
         }
     }
 
-    LaunchedEffect(authState.authFeedbackMessage) {
-        authState.authFeedbackMessage?.let { msg ->
+    // Mostrar mensajes de error
+    LaunchedEffect(authState.errorMessage) {
+        authState.errorMessage?.let { error ->
+            snackbarHostState.showSnackbar(error)
+            authViewModel.clearMessages()
+        }
+    }
+
+    // Mostrar mensajes de éxito
+    LaunchedEffect(authState.successMessage) {
+        authState.successMessage?.let { msg ->
             snackbarHostState.showSnackbar(msg)
-            viewModel.clearFeedbackMessage()
+            authViewModel.clearMessages()
         }
     }
 
@@ -182,23 +200,23 @@ fun AuthScreen(
                     ) {
                         TabButton(
                             title = "Iniciar Sesión",
-                            isSelected = authState.isAuthModeLogin,
-                            onClick = { if (!authState.isAuthModeLogin) viewModel.toggleAuthMode() },
-                            modifier = Modifier.weight(1f)
+                            isSelected = !authState.isRegisterMode,
+                            onClick = { if (authState.isRegisterMode) authViewModel.toggleAuthMode() },
+                            modifier = Modifier.weight(1f).testTag("tab_login")
                         )
                         TabButton(
                             title = "Registrarse",
-                            isSelected = !authState.isAuthModeLogin,
-                            onClick = { if (authState.isAuthModeLogin) viewModel.toggleAuthMode() },
-                            modifier = Modifier.weight(1f)
+                            isSelected = authState.isRegisterMode,
+                            onClick = { if (!authState.isRegisterMode) authViewModel.toggleAuthMode() },
+                            modifier = Modifier.weight(1f).testTag("tab_register")
                         )
                     }
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Google Sign-In Button
+                    // Google Sign-In Button via Credential Manager
                     OutlinedButton(
-                        onClick = { viewModel.loginWithGoogle() },
+                        onClick = { authViewModel.signInWithGoogle(context) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
@@ -207,9 +225,10 @@ fun AuthScreen(
                         colors = ButtonDefaults.outlinedButtonColors(
                             containerColor = Color(0xFF0F172A),
                             contentColor = Color.White
-                        )
+                        ),
+                        enabled = !authState.isLoading && !authState.isGoogleLoading
                     ) {
-                        if (authState.isGoogleSigningIn) {
+                        if (authState.isGoogleLoading) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
                                 color = Color(0xFF818CF8),
@@ -256,11 +275,11 @@ fun AuthScreen(
                     }
 
                     // Register name field
-                    AnimatedVisibility(visible = !authState.isAuthModeLogin) {
+                    AnimatedVisibility(visible = authState.isRegisterMode) {
                         Column {
                             OutlinedTextField(
                                 value = authState.nameInput,
-                                onValueChange = { viewModel.onNameInputChanged(it) },
+                                onValueChange = { authViewModel.onNameChange(it) },
                                 label = { Text("Nombre y Apellidos") },
                                 leadingIcon = {
                                     Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFF94A3B8))
@@ -276,7 +295,7 @@ fun AuthScreen(
                     // Email Field
                     OutlinedTextField(
                         value = authState.emailInput,
-                        onValueChange = { viewModel.onEmailInputChanged(it) },
+                        onValueChange = { authViewModel.onEmailChange(it) },
                         label = { Text("Correo Electrónico") },
                         placeholder = { Text("ejemplo@cloud.io") },
                         leadingIcon = {
@@ -293,7 +312,7 @@ fun AuthScreen(
                     // Password Field
                     OutlinedTextField(
                         value = authState.passwordInput,
-                        onValueChange = { viewModel.onPasswordInputChanged(it) },
+                        onValueChange = { authViewModel.onPasswordChange(it) },
                         label = { Text("Contraseña") },
                         leadingIcon = {
                             Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF94A3B8))
@@ -315,7 +334,7 @@ fun AuthScreen(
                     )
 
                     // Forgot Password Link
-                    if (authState.isAuthModeLogin) {
+                    if (!authState.isRegisterMode) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
@@ -323,7 +342,7 @@ fun AuthScreen(
                             TextButton(
                                 onClick = {
                                     recoveryEmailInput = authState.emailInput
-                                    viewModel.openForgotPassword()
+                                    authViewModel.openForgotPasswordDialog()
                                 },
                                 modifier = Modifier.testTag("btn_forgot_password")
                             ) {
@@ -339,9 +358,15 @@ fun AuthScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                     }
 
-                    // Main Action Button
+                    // Main Action Button (Login / Register)
                     Button(
-                        onClick = { viewModel.loginWithEmail() },
+                        onClick = {
+                            if (authState.isRegisterMode) {
+                                authViewModel.signUpWithEmail()
+                            } else {
+                                authViewModel.signInWithEmail()
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
@@ -350,12 +375,38 @@ fun AuthScreen(
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF4F46E5),
                             contentColor = Color.White
-                        )
+                        ),
+                        enabled = !authState.isLoading && !authState.isGoogleLoading
+                    ) {
+                        if (authState.isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = if (!authState.isRegisterMode) "Entrar a OmniStudio" else "Crear Cuenta en Firebase",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Toggle mode quick text button
+                    TextButton(
+                        onClick = { authViewModel.toggleAuthMode() },
+                        modifier = Modifier.testTag("btn_toggle_auth_mode")
                     ) {
                         Text(
-                            text = if (authState.isAuthModeLogin) "Entrar a OmniStudio" else "Crear Cuenta Cloud",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            text = if (!authState.isRegisterMode)
+                                "¿No tienes cuenta? Regístrate gratis"
+                            else
+                                "¿Ya tienes cuenta? Inicia sesión",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 13.sp
                         )
                     }
                 }
@@ -363,17 +414,17 @@ fun AuthScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "Almacenamiento seguro en la nube y sincronización instantánea.",
+                text = "Autenticación segura con Firebase Auth y Google Cloud Identity.",
                 color = Color(0xFF64748B),
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center
             )
         }
 
-        // Forgot Password Dialog Modal
-        if (authState.isForgotPasswordOpen) {
+        // Forgot Password Dialog Modal via Firebase Auth
+        if (authState.isForgotPasswordDialogOpen) {
             AlertDialog(
-                onDismissRequest = { viewModel.closeForgotPassword() },
+                onDismissRequest = { authViewModel.closeForgotPasswordDialog() },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF818CF8))
@@ -384,67 +435,56 @@ fun AuthScreen(
                 text = {
                     Column(modifier = Modifier.padding(top = 8.dp)) {
                         Text(
-                            text = if (!authState.recoveryEmailSent)
-                                "Ingresa el correo vinculado a tu cuenta para enviarte las instrucciones de restablecimiento."
+                            text = if (!authState.passwordResetSent)
+                                "Ingresa el correo vinculado a tu cuenta para enviarte un enlace de restablecimiento de contraseña mediante Firebase Auth."
                             else
-                                "Hemos enviado un código de recuperación a tu correo. Ingresa el código y define tu nueva contraseña.",
+                                "Hemos enviado las instrucciones para restablecer tu contraseña. Revisa tu bandeja de entrada o carpeta de spam.",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        if (!authState.recoveryEmailSent) {
+                        if (!authState.passwordResetSent) {
                             OutlinedTextField(
                                 value = recoveryEmailInput,
                                 onValueChange = { recoveryEmailInput = it },
                                 label = { Text("Correo de recuperación") },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                                 modifier = Modifier.fillMaxWidth().testTag("input_recovery_email"),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                        } else {
-                            OutlinedTextField(
-                                value = recoveryCodeInput,
-                                onValueChange = { recoveryCodeInput = it },
-                                label = { Text("Código recibido (Ej: 7894)") },
-                                placeholder = { Text("7894") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth().testTag("input_recovery_code"),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            OutlinedTextField(
-                                value = newPasswordInput,
-                                onValueChange = { newPasswordInput = it },
-                                label = { Text("Nueva contraseña") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth().testTag("input_new_password"),
                                 shape = RoundedCornerShape(10.dp)
                             )
                         }
                     }
                 },
                 confirmButton = {
-                    Button(
-                        onClick = {
-                            if (!authState.recoveryEmailSent) {
-                                viewModel.sendPasswordRecoveryEmail(recoveryEmailInput)
+                    if (!authState.passwordResetSent) {
+                        Button(
+                            onClick = {
+                                authViewModel.sendPasswordReset(recoveryEmailInput)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                            modifier = Modifier.testTag("btn_send_recovery_email"),
+                            enabled = !authState.isLoading
+                        ) {
+                            if (authState.isLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                             } else {
-                                viewModel.resetPasswordWithCode(recoveryCodeInput, newPasswordInput)
+                                Text("Enviar Correo")
                             }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
-                        modifier = Modifier.testTag("btn_confirm_recovery")
-                    ) {
-                        Text(if (!authState.recoveryEmailSent) "Enviar Correo" else "Restablecer Contraseña")
+                        }
+                    } else {
+                        Button(
+                            onClick = { authViewModel.closeForgotPasswordDialog() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
+                        ) {
+                            Text("Entendido")
+                        }
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { viewModel.closeForgotPassword() }) {
+                    TextButton(onClick = { authViewModel.closeForgotPasswordDialog() }) {
                         Text("Cancelar")
                     }
                 }
