@@ -30,19 +30,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,11 +70,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
@@ -78,6 +86,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     viewModel: OmniViewModel,
@@ -96,11 +105,27 @@ fun ChatScreen(
     val typingUsers by viewModel.typingUsers.collectAsState()
     val onlineUsers by viewModel.onlineUsers.collectAsState()
     val playingAudioId by viewModel.chatPlayingAudioId.collectAsState()
+    val activeCall by viewModel.activeCall.collectAsState()
     val channels = viewModel.availableChannels
 
     val listState = rememberLazyListState()
     var showAttachDialog by remember { mutableStateOf(false) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
+    var previewMediaUrl by remember { mutableStateOf<String?>(null) }
+    var previewMediaType by remember { mutableStateOf<String?>(null) }
+
+    // Si hay una llamada activa de voz o video, mostrar pantalla de llamada inmersiva
+    if (activeCall != null) {
+        CallSessionScreen(
+            callSession = activeCall!!,
+            onToggleMute = { viewModel.toggleCallMute() },
+            onToggleCamera = { viewModel.toggleCallCamera() },
+            onToggleSpeaker = { viewModel.toggleCallSpeaker() },
+            onSwitchCamera = { viewModel.switchCallCamera() },
+            onEndCall = { viewModel.endActiveCall() }
+        )
+        return
+    }
 
     // Scroll al último mensaje cuando cambia la cantidad
     LaunchedEffect(messages.size) {
@@ -209,7 +234,7 @@ fun ChatScreen(
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0xFF334155),
-                            modifier = Modifier.padding(end = 8.dp)
+                            modifier = Modifier.padding(end = 4.dp)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -228,6 +253,38 @@ fun ChatScreen(
                                     color = Color.White
                                 )
                             }
+                        }
+
+                        // Botón de Llamada de Voz
+                        IconButton(
+                            onClick = {
+                                val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+                                viewModel.startVoiceCall(peerName = peer)
+                            },
+                            modifier = Modifier.testTag("btn_start_voice_call")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = "Llamada de voz",
+                                tint = Color(0xFF34D399),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Botón de Videollamada
+                        IconButton(
+                            onClick = {
+                                val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+                                viewModel.startVideoCall(peerName = peer)
+                            },
+                            modifier = Modifier.testTag("btn_start_video_call")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Videocam,
+                                contentDescription = "Videollamada",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
 
@@ -333,8 +390,20 @@ fun ChatScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.AttachFile,
-                            contentDescription = "Adjuntar archivo",
+                            contentDescription = "Adjuntar multimedia o archivo",
                             tint = Color(0xFF818CF8)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showAttachDialog = true },
+                        modifier = Modifier.testTag("btn_quick_gif")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Gif,
+                            contentDescription = "Enviar GIF",
+                            tint = Color(0xFFF43F5E),
+                            modifier = Modifier.size(28.dp)
                         )
                     }
 
@@ -455,6 +524,16 @@ fun ChatScreen(
                         onOpenAttachedAudio = { audioId ->
                             val audio = allAudio.firstOrNull { it.id == audioId }
                             if (audio != null) onOpenAudio(audio)
+                        },
+                        onPreviewMedia = { url, type ->
+                            previewMediaUrl = url
+                            previewMediaType = type
+                        },
+                        onStartVoiceCall = { peerName ->
+                            viewModel.startVoiceCall(peerName)
+                        },
+                        onStartVideoCall = { peerName ->
+                            viewModel.startVideoCall(peerName)
                         }
                     )
                 }
@@ -489,80 +568,103 @@ fun ChatScreen(
         )
     }
 
-    // Modal para adjuntar archivo
+    // Modal selector de Multimedia (Fotos, Videos, GIFs, Documentos y Beats)
     if (showAttachDialog) {
+        MediaPickerSheet(
+            channelName = activeChannelInfo?.name ?: currentChannel,
+            docs = allDocs,
+            audios = allAudio,
+            onSendMedia = { type, url, caption ->
+                viewModel.sendMediaMessage(mediaType = type, mediaUrl = url, caption = caption)
+            },
+            onSendDoc = { doc ->
+                viewModel.sendChatMessage(attachedDoc = doc)
+            },
+            onSendAudio = { audio ->
+                viewModel.sendChatMessage(attachedAudio = audio)
+            },
+            onDismiss = { showAttachDialog = false }
+        )
+    }
+
+    // Modal de visualización ampliada de Multimedia
+    if (previewMediaUrl != null) {
         AlertDialog(
-            onDismissRequest = { showAttachDialog = false },
-            title = { Text("Compartir en #${activeChannelInfo?.name ?: currentChannel}", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text(
-                        text = "Selecciona un documento o pista musical para publicar en tiempo real:",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text("Documentos recientes:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                    if (allDocs.isEmpty()) {
-                        Text("No hay documentos aún.", color = Color.Gray, fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp))
-                    } else {
-                        allDocs.take(3).forEach { doc ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .clickable {
-                                        viewModel.sendChatMessage(attachedDoc = doc)
-                                        showAttachDialog = false
-                                    },
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(doc.title, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                                        Text("${doc.currentFormat.displayName} • ${doc.docType}", fontSize = 10.sp, color = Color.Gray)
-                                    }
-                                }
+            onDismissRequest = {
+                previewMediaUrl = null
+                previewMediaType = null
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .testTag("dialog_media_preview"),
+            content = {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF0F172A),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = when (previewMediaType) {
+                                    "image" -> "📷 Imagen en Alta Definición"
+                                    "video" -> "🎥 Reproducción de Video"
+                                    "gif" -> "🎭 Animación GIF"
+                                    else -> "Multimedia"
+                                },
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            IconButton(onClick = {
+                                previewMediaUrl = null
+                                previewMediaType = null
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Pistas musicales creadas:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                    if (allAudio.isEmpty()) {
-                        Text("No hay pistas creadas aún.", color = Color.Gray, fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp))
-                    } else {
-                        allAudio.take(3).forEach { audio ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .clickable {
-                                        viewModel.sendChatMessage(attachedAudio = audio)
-                                        showAttachDialog = false
-                                    },
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        AsyncImage(
+                            model = previewMediaUrl,
+                            contentDescription = "Vista previa",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(250.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (previewMediaType == "video") {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF4F46E5),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color(0xFFA855F7))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(audio.title, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                                        Text("${audio.genre} • ${audio.bpm} BPM", fontSize = 10.sp, color = Color.Gray)
-                                    }
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Reproduciendo streaming en vivo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showAttachDialog = false }) { Text("Cancelar") }
             }
         )
     }
@@ -577,7 +679,10 @@ private fun MessageBubble(
     onReact: (String) -> Unit,
     onDelete: () -> Unit,
     onOpenAttachedDoc: (Long) -> Unit,
-    onOpenAttachedAudio: (Long) -> Unit
+    onOpenAttachedAudio: (Long) -> Unit,
+    onPreviewMedia: (url: String, type: String) -> Unit,
+    onStartVoiceCall: (peerName: String) -> Unit,
+    onStartVideoCall: (peerName: String) -> Unit
 ) {
     val timeFormatted = remember(message.timestamp) {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -759,6 +864,207 @@ private fun MessageBubble(
                                     ) {
                                         Text("Studio", fontSize = 11.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.Bold)
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // Renderizado de FOTOS adjuntas
+                    if (message.mediaType == "image" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onPreviewMedia(message.mediaUrl, "image") }
+                        ) {
+                            AsyncImage(
+                                model = message.mediaUrl,
+                                contentDescription = "Foto compartida",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(bottomStart = 8.dp, topEnd = 8.dp),
+                                color = Color.Black.copy(alpha = 0.65f),
+                                modifier = Modifier.align(Alignment.BottomEnd)
+                            ) {
+                                Text(
+                                    text = "📷 Toca para ampliar",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Renderizado de VIDEOS adjuntos
+                    if (message.mediaType == "video" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF0F172A))
+                                .clickable { onPreviewMedia(message.mediaUrl, "video") }
+                        ) {
+                            if (!message.mediaThumbnail.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = message.mediaThumbnail,
+                                    contentDescription = "Video",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp)
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(140.dp)
+                                        .background(
+                                            Brush.linearGradient(
+                                                listOf(Color(0xFF1E293B), Color(0xFF312E81))
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Videocam,
+                                        contentDescription = null,
+                                        tint = Color(0xFFA5B4FC),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                }
+                            }
+
+                            // Botón de reproducción de video
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF4F46E5).copy(alpha = 0.9f),
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .align(Alignment.Center)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Reproducir Video",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+
+                            // Badge de Video
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFF7C3AED),
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(6.dp)
+                            ) {
+                                Text(
+                                    text = "VIDEO HD",
+                                    color = Color.White,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Renderizado de GIFs animados
+                    if (message.mediaType == "gif" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onPreviewMedia(message.mediaUrl, "gif") }
+                        ) {
+                            AsyncImage(
+                                model = message.mediaUrl,
+                                contentDescription = "GIF animado",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFFEF4444),
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(6.dp)
+                            ) {
+                                Text(
+                                    text = "GIF",
+                                    color = Color.White,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Renderizado de Registro de LLAMADAS (Voz o Video)
+                    if (message.mediaType == "call_voice" || message.mediaType == "call_video") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (message.mediaType == "call_video") Color(0xFF0284C7) else Color(0xFF059669),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (message.mediaType == "call_video") Icons.Default.Videocam else Icons.Default.Call,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (message.mediaType == "call_video") "Videollamada finalizada" else "Llamada de voz finalizada",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    val durMin = message.callDurationSec / 60
+                                    val durSec = message.callDurationSec % 60
+                                    Text(
+                                        text = "Duración: ${String.format("%02d:%02d", durMin, durSec)}",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        if (message.mediaType == "call_video") {
+                                            onStartVideoCall(message.senderName)
+                                        } else {
+                                            onStartVoiceCall(message.senderName)
+                                        }
+                                    }
+                                ) {
+                                    Text("Llamar", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                                 }
                             }
                         }

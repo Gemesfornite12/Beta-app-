@@ -31,7 +31,9 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
@@ -95,6 +97,8 @@ fun DocEditorScreen(
     val currentDoc by viewModel.currentEditingDoc.collectAsState()
     val activeSlideIndex by viewModel.activeSlideIndex.collectAsState()
     val converterDoc by viewModel.converterDoc.collectAsState()
+    val docAutoSaveStatus by viewModel.docAutoSaveStatus.collectAsState()
+    val isDocSaving by viewModel.isDocSaving.collectAsState()
 
     val doc = currentDoc ?: run {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -143,102 +147,131 @@ fun DocEditorScreen(
             .navigationBarsPadding(),
         containerColor = Color(0xFF121214),
         topBar = {
-            // WPS Style Top Bar
-            Surface(
-                color = Color(0xFF1E1E24),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // WPS Style Top Bar
+                Surface(
+                    color = Color(0xFF1E1E24),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("btn_doc_back")) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Atrás",
-                            tint = Color.White
-                        )
-                    }
-
-                    IconButton(onClick = { /* Undo action */ }) {
-                        Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Deshacer", tint = Color(0xFFCBD5E1))
-                    }
-
-                    IconButton(onClick = { /* Redo action */ }) {
-                        Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Rehacer", tint = Color(0xFFCBD5E1))
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    // Title with click to rename
                     Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .clickable { isEditingTitle = true }
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = doc.title,
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(Icons.Default.Edit, contentDescription = "Editar título", tint = Color(0xFF818CF8), modifier = Modifier.size(14.dp))
-                    }
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("btn_doc_back")) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Atrás",
+                                tint = Color.White
+                            )
+                        }
 
-                    // Format Badge (DOCX / PPTX / PDF)
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF334155),
-                        modifier = Modifier
-                            .clickable { viewModel.openFormatConverter(doc) }
-                            .testTag("btn_change_format_pill")
-                    ) {
+                        IconButton(onClick = { /* Undo action */ }) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Deshacer", tint = Color(0xFFCBD5E1))
+                        }
+
+                        IconButton(onClick = { /* Redo action */ }) {
+                            Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Rehacer", tint = Color(0xFFCBD5E1))
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Title with click to rename
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { isEditingTitle = true }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = ".${doc.currentFormat.extension.uppercase()}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF38BDF8)
+                                text = doc.title,
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.AutoAwesome, contentDescription = "Convertir", tint = Color(0xFF38BDF8), modifier = Modifier.size(12.dp))
+                            Icon(Icons.Default.Edit, contentDescription = "Editar título", tint = Color(0xFF818CF8), modifier = Modifier.size(14.dp))
+                        }
+
+                        // Format Badge (DOCX / PPTX / PDF)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF334155),
+                            modifier = Modifier
+                                .clickable { viewModel.openFormatConverter(doc) }
+                                .testTag("btn_change_format_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = ".${doc.currentFormat.extension.uppercase()}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF38BDF8)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(Icons.Default.AutoAwesome, contentDescription = "Convertir", tint = Color(0xFF38BDF8), modifier = Modifier.size(12.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Share to Chat Button
+                        IconButton(
+                            onClick = {
+                                viewModel.sendChatMessage(attachedDoc = doc)
+                                onShareToChat()
+                            },
+                            modifier = Modifier.testTag("btn_share_doc_to_chat")
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Compartir en chat", tint = Color(0xFF818CF8))
+                        }
+
+                        // Save Button (Orange badge inspired by screenshot)
+                        Button(
+                            onClick = { viewModel.saveCurrentDocument() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("btn_save_doc"),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Save", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    // Share to Chat Button
-                    IconButton(
-                        onClick = {
-                            viewModel.sendChatMessage(attachedDoc = doc)
-                            onShareToChat()
-                        },
-                        modifier = Modifier.testTag("btn_share_doc_to_chat")
+                // Auto-Save Cloud Sync Sub-bar
+                Surface(
+                    color = Color(0xFF16161D),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Compartir en chat", tint = Color(0xFF818CF8))
-                    }
-
-                    // Save Button (Orange badge inspired by screenshot)
-                    Button(
-                        onClick = { viewModel.saveCurrentDocument() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.testTag("btn_save_doc"),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Save", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Icon(
+                            imageVector = if (isDocSaving) Icons.Default.Sync else Icons.Default.CloudDone,
+                            contentDescription = null,
+                            tint = if (isDocSaving) Color(0xFFF59E0B) else Color(0xFF10B981),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = docAutoSaveStatus,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isDocSaving) Color(0xFFFBBF24) else Color(0xFF94A3B8)
+                        )
                     }
                 }
             }

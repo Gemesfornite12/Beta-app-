@@ -32,6 +32,7 @@ enum class DocumentFormat(val extension: String, val displayName: String, val mi
 @Entity(tableName = "documents")
 data class DocumentItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val firestoreId: String = "",
     val title: String,
     val content: String,
     val docType: DocumentType = DocumentType.DOC,
@@ -41,6 +42,7 @@ data class DocumentItem(
     val authorEmail: String,
     val lastModified: Long = System.currentTimeMillis(),
     val isSyncedCloud: Boolean = true,
+    val lastSyncedFirestore: Long = 0L,
     val fileSizeKb: Int = 45,
     val isFavorite: Boolean = false
 )
@@ -48,6 +50,7 @@ data class DocumentItem(
 @Entity(tableName = "audio_projects")
 data class AudioProject(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val firestoreId: String = "",
     val title: String,
     val description: String = "",
     val genre: String = "Lo-Fi Hip Hop",
@@ -61,6 +64,7 @@ data class AudioProject(
     val durationSeconds: Int = 16,
     val lastModified: Long = System.currentTimeMillis(),
     val isSyncedCloud: Boolean = true,
+    val lastSyncedFirestore: Long = 0L,
     val fileSizeKb: Int = 128
 )
 
@@ -77,6 +81,30 @@ data class ChatMessage(
     val attachedDocTitle: String? = null,
     val attachedAudioId: Long? = null,
     val attachedAudioTitle: String? = null,
+    val mediaType: String = "", // "", "image", "video", "gif", "call_voice", "call_video"
+    val mediaUrl: String? = null,
+    val mediaThumbnail: String? = null,
+    val callDurationSec: Int = 0,
     val reactions: String = "", // e.g. "🔥,👍"
     val isSyncedFirestore: Boolean = true
+)
+
+enum class CallStatus {
+    RINGING,
+    CONNECTED,
+    ENDED
+}
+
+data class CallSession(
+    val callId: String,
+    val channelId: String,
+    val peerName: String,
+    val peerEmail: String,
+    val isVideo: Boolean,
+    val status: CallStatus = CallStatus.RINGING,
+    val durationSeconds: Int = 0,
+    val isMuted: Boolean = false,
+    val isCameraOn: Boolean = true,
+    val isSpeakerOn: Boolean = true,
+    val isFrontCamera: Boolean = true
 )

@@ -13,6 +13,8 @@ import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.PresenceUser
 import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
+import com.example.data.model.CallSession
+import com.example.data.model.CallStatus
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
@@ -179,6 +181,30 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _conversionSuccessMessage = MutableStateFlow<String?>(null)
     val conversionSuccessMessage: StateFlow<String?> = _conversionSuccessMessage.asStateFlow()
 
+    // Auto-Save System (Firestore Cloud Sync)
+    private val _docAutoSaveStatus = MutableStateFlow("Guardado automático activo")
+    val docAutoSaveStatus: StateFlow<String> = _docAutoSaveStatus.asStateFlow()
+
+    private val _isDocSaving = MutableStateFlow(false)
+    val isDocSaving: StateFlow<Boolean> = _isDocSaving.asStateFlow()
+
+    private var docAutoSaveJob: Job? = null
+    private var docDirty = false
+
+    private val _musicAutoSaveStatus = MutableStateFlow("Auto-guardado activo")
+    val musicAutoSaveStatus: StateFlow<String> = _musicAutoSaveStatus.asStateFlow()
+
+    private val _isMusicSaving = MutableStateFlow(false)
+    val isMusicSaving: StateFlow<Boolean> = _isMusicSaving.asStateFlow()
+
+    private var musicAutoSaveJob: Job? = null
+    private var musicDirty = false
+
+    // Calling System (Audio & Video Calling)
+    private val _activeCall = MutableStateFlow<CallSession?>(null)
+    val activeCall: StateFlow<CallSession?> = _activeCall.asStateFlow()
+    private var callTimerJob: Job? = null
+
     init {
         val db = AppDatabase.getInstance(application)
         repo = OmniRepository(db)
@@ -210,6 +236,19 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             )
             loadChannelMessages("general")
             initDefaultSequencerTracks()
+        }
+
+        // Bucle periódico de sincronización automática con Firestore (cada 8 segundos si hay cambios pendientes)
+        viewModelScope.launch {
+            while (isActive) {
+                delay(8000)
+                if (docDirty) {
+                    triggerAutoSaveDocument()
+                }
+                if (musicDirty) {
+                    triggerAutoSaveMusic()
+                }
+            }
         }
     }
 
@@ -468,18 +507,48 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateCurrentDocTitle(newTitle: String) {
         _currentEditingDoc.value = _currentEditingDoc.value?.copy(title = newTitle, lastModified = System.currentTimeMillis())
+        scheduleDocAutoSave()
     }
 
     fun updateCurrentDocContent(newContent: String) {
         _currentEditingDoc.value = _currentEditingDoc.value?.copy(content = newContent, lastModified = System.currentTimeMillis())
+        scheduleDocAutoSave()
+    }
+
+    private fun scheduleDocAutoSave() {
+        docDirty = true
+        docAutoSaveJob?.cancel()
+        docAutoSaveJob = viewModelScope.launch {
+            delay(1200)
+            triggerAutoSaveDocument()
+        }
+    }
+
+    fun triggerAutoSaveDocument() {
+        val doc = _currentEditingDoc.value ?: return
+        viewModelScope.launch {
+            _isDocSaving.value = true
+            _docAutoSaveStatus.value = "Sincronizando con Firestore..."
+            repo.updateDocument(doc)
+            val fsId = firestoreChatService.syncDocument(doc)
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            if (!fsId.isNullOrBlank()) {
+                _currentEditingDoc.value = _currentEditingDoc.value?.copy(
+                    firestoreId = fsId,
+                    lastSyncedFirestore = System.currentTimeMillis()
+                )
+                _docAutoSaveStatus.value = "Sincronizado con Firestore ($timeStr)"
+            } else {
+                _docAutoSaveStatus.value = "Guardado en caché local ($timeStr)"
+            }
+            docDirty = false
+            _isDocSaving.value = false
+        }
     }
 
     fun saveCurrentDocument() {
-        val doc = _currentEditingDoc.value ?: return
-        viewModelScope.launch {
-            repo.updateDocument(doc)
-            _conversionSuccessMessage.value = "Documento guardado en la nube correctamente"
-        }
+        triggerAutoSaveDocument()
+        _conversionSuccessMessage.value = "Documento guardado y sincronizado con Firestore correctamente"
     }
 
     fun deleteDocument(id: Long) {
@@ -522,7 +591,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             )
             _currentEditingDoc.value = updatedDoc
             _activeSlideIndex.value = jsonArray.length() - 1
-            viewModelScope.launch { repo.updateDocument(updatedDoc) }
+            scheduleDocAutoSave()
         } catch (_: Exception) {}
     }
 
@@ -536,6 +605,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 slideObj.put("subtitle", subtitle)
                 val updatedDoc = doc.copy(slidesJson = jsonArray.toString(), lastModified = System.currentTimeMillis())
                 _currentEditingDoc.value = updatedDoc
+                scheduleDocAutoSave()
             }
         } catch (_: Exception) {}
     }
@@ -649,6 +719,66 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         return obj.toString()
     }
 
+    private fun scheduleMusicAutoSave() {
+        musicDirty = true
+        musicAutoSaveJob?.cancel()
+        musicAutoSaveJob = viewModelScope.launch {
+            delay(1500)
+            triggerAutoSaveMusic()
+        }
+    }
+
+    fun triggerAutoSaveMusic() {
+        val tracks = _sequencerTracks.value
+        if (tracks.isEmpty()) return
+        viewModelScope.launch {
+            _isMusicSaving.value = true
+            _musicAutoSaveStatus.value = "Sincronizando con Firestore..."
+            val patternJson = serializePatternData()
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            val current = _activeAudioProject.value
+
+            val projectToSave = if (current != null) {
+                current.copy(
+                    bpm = _currentBpm.value,
+                    patternDataJson = patternJson,
+                    lastModified = System.currentTimeMillis()
+                )
+            } else {
+                val currentUser = _authUiState.value.currentUser
+                AudioProject(
+                    title = "Mi Pista de Estudio",
+                    genre = "Lo-Fi Hip Hop",
+                    bpm = _currentBpm.value,
+                    patternDataJson = patternJson,
+                    authorEmail = currentUser?.email ?: "gonzalez24029@gmail.com",
+                    authorName = currentUser?.displayName ?: "Alex González"
+                )
+            }
+
+            val savedId = if (projectToSave.id != 0L) {
+                repo.updateAudioProject(projectToSave)
+                projectToSave.id
+            } else {
+                repo.insertAudioProject(projectToSave)
+            }
+
+            val fsId = firestoreChatService.syncAudioProject(projectToSave.copy(id = savedId))
+            val updated = repo.getAudioProjectById(savedId)?.let {
+                if (!fsId.isNullOrBlank()) it.copy(firestoreId = fsId, lastSyncedFirestore = System.currentTimeMillis()) else it
+            }
+            _activeAudioProject.value = updated
+
+            if (!fsId.isNullOrBlank()) {
+                _musicAutoSaveStatus.value = "Pista sincronizada en Firestore ($timeStr)"
+            } else {
+                _musicAutoSaveStatus.value = "Pista guardada localmente ($timeStr)"
+            }
+            musicDirty = false
+            _isMusicSaving.value = false
+        }
+    }
+
     fun toggleStep(trackIndex: Int, stepIndex: Int) {
         val list = _sequencerTracks.value.toMutableList()
         if (trackIndex in list.indices) {
@@ -660,6 +790,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (newSteps[stepIndex]) {
                 AudioSynthEngine.playDrumHit(track.soundType)
             }
+            scheduleMusicAutoSave()
         }
     }
 
@@ -774,6 +905,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { kotlin.random.Random.nextFloat() > 0.75f })
         )
         _sequencerTracks.value = tracks
+        scheduleMusicAutoSave()
     }
 
     fun playTrackSoundPreview(track: SequencerTrack) {
@@ -787,10 +919,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBpm(bpm: Int) {
         _currentBpm.value = bpm.coerceIn(60, 200)
+        scheduleMusicAutoSave()
     }
 
     fun adjustBpm(delta: Int) {
         _currentBpm.value = (_currentBpm.value + delta).coerceIn(60, 200)
+        scheduleMusicAutoSave()
     }
 
     fun toggleMetronome() {
@@ -1305,6 +1439,174 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     _chatPlayingAudioId.value = null
                 }
             }
+        }
+    }
+
+    // RICH MEDIA MESSAGING (Fotos, Videos, GIFs)
+    fun sendMediaMessage(mediaType: String, mediaUrl: String, caption: String = "") {
+        val user = _authUiState.value.currentUser
+        val senderName = user?.displayName ?: "Alex González"
+        val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
+        val channelId = _currentChannel.value
+
+        val fallbackText = when (mediaType) {
+            "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
+            "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
+            "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
+            else -> caption
+        }
+
+        val msg = ChatMessage(
+            channelId = channelId,
+            senderName = senderName,
+            senderEmail = senderEmail,
+            text = fallbackText,
+            mediaType = mediaType,
+            mediaUrl = mediaUrl,
+            isSyncedFirestore = true
+        )
+
+        viewModelScope.launch {
+            val localId = repo.insertChatMessage(msg)
+            val firestoreId = firestoreChatService.sendMessage(msg.copy(id = localId))
+            if (!firestoreId.isNullOrBlank()) {
+                repo.updateChatMessage(msg.copy(id = localId, firestoreId = firestoreId))
+            }
+
+            // Simular respuesta de compañero en canales directos o general
+            if (channelId.startsWith("directo-") || channelId == "general") {
+                delay(1200)
+                val teammateName = if (channelId == "directo-carlos") "Carlos Mendoza" else "Sofia Martinez"
+                val teammateEmail = if (channelId == "directo-carlos") "carlos.m@cloud.io" else "sofia.m@cloud.io"
+                val replyReaction = when (mediaType) {
+                    "image" -> "¡Excelente captura! Se ve muy bien."
+                    "video" -> "¡Genial el clip de video! Lo estoy reproduciendo."
+                    "gif" -> "😂 ¡Buenísimo el GIF!"
+                    else -> "¡Recibido!"
+                }
+                val reply = ChatMessage(
+                    channelId = channelId,
+                    senderName = teammateName,
+                    senderEmail = teammateEmail,
+                    text = replyReaction,
+                    isSyncedFirestore = true
+                )
+                val repId = repo.insertChatMessage(reply)
+                firestoreChatService.sendMessage(reply.copy(id = repId))
+            }
+        }
+    }
+
+    // CALLING SYSTEM (Audio & Video Calling)
+    fun startVoiceCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
+        val chId = channelId ?: _currentChannel.value
+        val callId = "call_${System.currentTimeMillis()}"
+        val session = CallSession(
+            callId = callId,
+            channelId = chId,
+            peerName = peerName,
+            peerEmail = peerEmail,
+            isVideo = false,
+            status = CallStatus.RINGING
+        )
+        _activeCall.value = session
+
+        viewModelScope.launch {
+            firestoreChatService.startCallSignal(session)
+            delay(1500)
+            if (_activeCall.value?.callId == callId) {
+                _activeCall.value = _activeCall.value?.copy(status = CallStatus.CONNECTED)
+                startCallTimer()
+            }
+        }
+    }
+
+    fun startVideoCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
+        val chId = channelId ?: _currentChannel.value
+        val callId = "call_${System.currentTimeMillis()}"
+        val session = CallSession(
+            callId = callId,
+            channelId = chId,
+            peerName = peerName,
+            peerEmail = peerEmail,
+            isVideo = true,
+            status = CallStatus.RINGING
+        )
+        _activeCall.value = session
+
+        viewModelScope.launch {
+            firestoreChatService.startCallSignal(session)
+            delay(1800)
+            if (_activeCall.value?.callId == callId) {
+                _activeCall.value = _activeCall.value?.copy(status = CallStatus.CONNECTED)
+                startCallTimer()
+            }
+        }
+    }
+
+    private fun startCallTimer() {
+        callTimerJob?.cancel()
+        callTimerJob = viewModelScope.launch {
+            while (isActive && _activeCall.value?.status == CallStatus.CONNECTED) {
+                delay(1000)
+                _activeCall.value = _activeCall.value?.let { it.copy(durationSeconds = it.durationSeconds + 1) }
+            }
+        }
+    }
+
+    fun toggleCallMute() {
+        _activeCall.value = _activeCall.value?.let { it.copy(isMuted = !it.isMuted) }
+    }
+
+    fun toggleCallCamera() {
+        _activeCall.value = _activeCall.value?.let { it.copy(isCameraOn = !it.isCameraOn) }
+    }
+
+    fun toggleCallSpeaker() {
+        _activeCall.value = _activeCall.value?.let { it.copy(isSpeakerOn = !it.isSpeakerOn) }
+    }
+
+    fun switchCallCamera() {
+        _activeCall.value = _activeCall.value?.let { it.copy(isFrontCamera = !it.isFrontCamera) }
+    }
+
+    fun endActiveCall() {
+        val call = _activeCall.value ?: return
+        callTimerJob?.cancel()
+        callTimerJob = null
+        val duration = call.durationSeconds
+        val chId = call.channelId
+        val callId = call.callId
+        val isVideo = call.isVideo
+        val peer = call.peerName
+        _activeCall.value = null
+
+        viewModelScope.launch {
+            firestoreChatService.endCallSignal(chId, callId)
+            val minutes = duration / 60
+            val seconds = duration % 60
+            val durationFormatted = String.format("%02d:%02d", minutes, seconds)
+            val summaryText = if (isVideo) {
+                "📹 Videollamada finalizada • $durationFormatted con $peer"
+            } else {
+                "📞 Llamada de voz finalizada • $durationFormatted con $peer"
+            }
+
+            val user = _authUiState.value.currentUser
+            val senderName = user?.displayName ?: "Alex González"
+            val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
+
+            val callMsg = ChatMessage(
+                channelId = chId,
+                senderName = senderName,
+                senderEmail = senderEmail,
+                text = summaryText,
+                mediaType = if (isVideo) "call_video" else "call_voice",
+                callDurationSec = duration,
+                isSyncedFirestore = true
+            )
+            val localId = repo.insertChatMessage(callMsg)
+            firestoreChatService.sendMessage(callMsg.copy(id = localId))
         }
     }
 

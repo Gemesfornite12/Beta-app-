@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -116,6 +117,8 @@ fun MusicStudioScreen(
     val currentStep by viewModel.currentStep.collectAsState()
     val currentBpm by viewModel.currentBpm.collectAsState()
     val isMetronomeEnabled by viewModel.isMetronomeEnabled.collectAsState()
+    val musicAutoSaveStatus by viewModel.musicAutoSaveStatus.collectAsState()
+    val isMusicSaving by viewModel.isMusicSaving.collectAsState()
 
     var projectTitle by remember(activeProject?.title) {
         mutableStateOf(activeProject?.title ?: "Nuevo Beat OmniStudio")
@@ -242,6 +245,33 @@ fun MusicStudioScreen(
                             modifier = Modifier.testTag("btn_save_beat")
                         ) {
                             Icon(Icons.Default.CloudDone, contentDescription = "Guardar", tint = Color(0xFF38BDF8))
+                        }
+                    }
+
+                    // Auto-Save Cloud Sync Bar
+                    Surface(
+                        color = Color(0xFF131127),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (isMusicSaving) Icons.Default.Sync else Icons.Default.CloudDone,
+                                contentDescription = null,
+                                tint = if (isMusicSaving) Color(0xFFF59E0B) else Color(0xFF10B981),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = musicAutoSaveStatus,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isMusicSaving) Color(0xFFFBBF24) else Color(0xFFA78BFA)
+                            )
                         }
                     }
 

@@ -2,7 +2,10 @@ package com.example.data.firebase
 
 import android.content.Context
 import android.util.Log
+import com.example.data.model.AudioProject
+import com.example.data.model.CallSession
 import com.example.data.model.ChatMessage
+import com.example.data.model.DocumentItem
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.DocumentSnapshot
@@ -185,6 +188,10 @@ class FirestoreChatService(private val context: Context) {
                 "attachedDocTitle" to message.attachedDocTitle,
                 "attachedAudioId" to message.attachedAudioId,
                 "attachedAudioTitle" to message.attachedAudioTitle,
+                "mediaType" to message.mediaType,
+                "mediaUrl" to message.mediaUrl,
+                "mediaThumbnail" to message.mediaThumbnail,
+                "callDurationSec" to message.callDurationSec,
                 "reactions" to message.reactions
             )
 
@@ -389,6 +396,10 @@ class FirestoreChatService(private val context: Context) {
         val attachedDocTitle = doc.getString("attachedDocTitle")
         val attachedAudioId = doc.getLong("attachedAudioId")
         val attachedAudioTitle = doc.getString("attachedAudioTitle")
+        val mediaType = doc.getString("mediaType") ?: ""
+        val mediaUrl = doc.getString("mediaUrl")
+        val mediaThumbnail = doc.getString("mediaThumbnail")
+        val callDurationSec = doc.getLong("callDurationSec")?.toInt() ?: 0
         val reactions = doc.getString("reactions") ?: ""
 
         return ChatMessage(
@@ -403,8 +414,126 @@ class FirestoreChatService(private val context: Context) {
             attachedDocTitle = attachedDocTitle,
             attachedAudioId = attachedAudioId,
             attachedAudioTitle = attachedAudioTitle,
+            mediaType = mediaType,
+            mediaUrl = mediaUrl,
+            mediaThumbnail = mediaThumbnail,
+            callDurationSec = callDurationSec,
             reactions = reactions,
             isSyncedFirestore = true
         )
+    }
+
+    /**
+     * Sincroniza un documento a Firestore en la colección 'cloud_documents'.
+     */
+    suspend fun syncDocument(doc: DocumentItem): String? {
+        val db = firestore ?: return null
+        return try {
+            val docRef = if (doc.firestoreId.isNotBlank()) {
+                db.collection("cloud_documents").document(doc.firestoreId)
+            } else {
+                db.collection("cloud_documents").document()
+            }
+            val firestoreId = docRef.id
+            val data = hashMapOf(
+                "firestoreId" to firestoreId,
+                "localId" to doc.id,
+                "title" to doc.title,
+                "content" to doc.content,
+                "docType" to doc.docType.name,
+                "currentFormat" to doc.currentFormat.name,
+                "slideCount" to doc.slideCount,
+                "slidesJson" to doc.slidesJson,
+                "authorEmail" to doc.authorEmail,
+                "lastModified" to doc.lastModified,
+                "lastSyncedFirestore" to System.currentTimeMillis()
+            )
+            docRef.set(data, SetOptions.merge()).await()
+            firestoreId
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing document to Firestore: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Sincroniza un proyecto musical a Firestore en la colección 'cloud_audio_projects'.
+     */
+    suspend fun syncAudioProject(project: AudioProject): String? {
+        val db = firestore ?: return null
+        return try {
+            val docRef = if (project.firestoreId.isNotBlank()) {
+                db.collection("cloud_audio_projects").document(project.firestoreId)
+            } else {
+                db.collection("cloud_audio_projects").document()
+            }
+            val firestoreId = docRef.id
+            val data = hashMapOf(
+                "firestoreId" to firestoreId,
+                "localId" to project.id,
+                "title" to project.title,
+                "description" to project.description,
+                "genre" to project.genre,
+                "bpm" to project.bpm,
+                "patternDataJson" to project.patternDataJson,
+                "authorEmail" to project.authorEmail,
+                "authorName" to project.authorName,
+                "isPublic" to project.isPublic,
+                "aiPrompt" to project.aiPrompt,
+                "notesMelody" to project.notesMelody,
+                "durationSeconds" to project.durationSeconds,
+                "lastModified" to project.lastModified,
+                "lastSyncedFirestore" to System.currentTimeMillis()
+            )
+            docRef.set(data, SetOptions.merge()).await()
+            firestoreId
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing audio project to Firestore: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Inicia una señal de llamada en Firestore.
+     */
+    suspend fun startCallSignal(call: CallSession): Boolean {
+        val db = firestore ?: return false
+        return try {
+            val callRef = db.collection("chat_channels")
+                .document(call.channelId)
+                .collection("active_calls")
+                .document(call.callId)
+            val data = hashMapOf(
+                "callId" to call.callId,
+                "channelId" to call.channelId,
+                "peerName" to call.peerName,
+                "peerEmail" to call.peerEmail,
+                "isVideo" to call.isVideo,
+                "status" to call.status.name,
+                "startTimeMs" to System.currentTimeMillis()
+            )
+            callRef.set(data).await()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting call signal in Firestore: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Finaliza la llamada en Firestore.
+     */
+    suspend fun endCallSignal(channelId: String, callId: String) {
+        val db = firestore ?: return
+        try {
+            db.collection("chat_channels")
+                .document(channelId)
+                .collection("active_calls")
+                .document(callId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error ending call signal in Firestore: ${e.message}")
+        }
     }
 }
