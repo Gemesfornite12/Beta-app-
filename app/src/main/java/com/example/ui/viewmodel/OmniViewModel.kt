@@ -3,6 +3,8 @@ package com.example.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.AiMusicComposer
+import com.example.ai.AiSongResult
 import com.example.audio.AudioSynthEngine
 import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
@@ -43,6 +45,7 @@ data class SequencerTrack(
     val name: String,
     val soundType: String,
     val isMuted: Boolean = false,
+    val isSolo: Boolean = false,
     val steps: BooleanArray = BooleanArray(16) { false }
 ) {
     override fun equals(other: Any?): Boolean {
@@ -52,6 +55,7 @@ data class SequencerTrack(
         if (name != other.name) return false
         if (soundType != other.soundType) return false
         if (isMuted != other.isMuted) return false
+        if (isSolo != other.isSolo) return false
         if (!steps.contentEquals(other.steps)) return false
         return true
     }
@@ -60,6 +64,7 @@ data class SequencerTrack(
         var result = name.hashCode()
         result = 31 * result + soundType.hashCode()
         result = 31 * result + isMuted.hashCode()
+        result = 31 * result + isSolo.hashCode()
         result = 31 * result + steps.contentHashCode()
         return result
     }
@@ -74,6 +79,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // Documents & Audio Projects
     val documents: StateFlow<List<DocumentItem>>
     val audioProjects: StateFlow<List<AudioProject>>
+    val publicAudioProjects: StateFlow<List<AudioProject>>
+
+    // AI Song Creator State
+    private val _isGeneratingSong = MutableStateFlow(false)
+    val isGeneratingSong: StateFlow<Boolean> = _isGeneratingSong.asStateFlow()
+
+    private val _aiGenerationStatus = MutableStateFlow<String?>(null)
+    val aiGenerationStatus: StateFlow<String?> = _aiGenerationStatus.asStateFlow()
+
+    private val _lastAiResult = MutableStateFlow<AiSongResult?>(null)
+    val lastAiResult: StateFlow<AiSongResult?> = _lastAiResult.asStateFlow()
+
+    // Community Preview & Feedback State
+    private val _previewPlayingSongId = MutableStateFlow<Long?>(null)
+    val previewPlayingSongId: StateFlow<Long?> = _previewPlayingSongId.asStateFlow()
+    private var previewJob: Job? = null
+
+    private val _musicFeedbackMessage = MutableStateFlow<String?>(null)
+    val musicFeedbackMessage: StateFlow<String?> = _musicFeedbackMessage.asStateFlow()
 
     // Search query & category filter
     private val _searchQuery = MutableStateFlow("")
@@ -105,6 +129,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _currentStep = MutableStateFlow(0)
     val currentStep: StateFlow<Int> = _currentStep.asStateFlow()
+
+    private val _isMetronomeEnabled = MutableStateFlow(false)
+    val isMetronomeEnabled: StateFlow<Boolean> = _isMetronomeEnabled.asStateFlow()
 
     private var sequencerJob: Job? = null
 
@@ -139,6 +166,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         audioProjects = repo.allAudioProjects.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            emptyList()
+        )
+
+        publicAudioProjects = repo.publicAudioProjects.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
@@ -615,6 +648,110 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleSoloTrack(trackIndex: Int) {
+        val list = _sequencerTracks.value.toMutableList()
+        if (trackIndex in list.indices) {
+            val track = list[trackIndex]
+            val newSolo = !track.isSolo
+            list[trackIndex] = track.copy(isSolo = newSolo)
+            _sequencerTracks.value = list
+        }
+    }
+
+    fun clearTrack(trackIndex: Int) {
+        val list = _sequencerTracks.value.toMutableList()
+        if (trackIndex in list.indices) {
+            val track = list[trackIndex]
+            list[trackIndex] = track.copy(steps = BooleanArray(16) { false })
+            _sequencerTracks.value = list
+        }
+    }
+
+    fun fillTrackEvery(trackIndex: Int, interval: Int) {
+        val list = _sequencerTracks.value.toMutableList()
+        if (trackIndex in list.indices) {
+            val track = list[trackIndex]
+            val newSteps = BooleanArray(16) { i -> i % interval == 0 }
+            list[trackIndex] = track.copy(steps = newSteps)
+            _sequencerTracks.value = list
+        }
+    }
+
+    fun clearAllSteps() {
+        val list = _sequencerTracks.value.map { track ->
+            track.copy(steps = BooleanArray(16) { false })
+        }
+        _sequencerTracks.value = list
+    }
+
+    fun loadPatternPreset(presetName: String) {
+        when (presetName.uppercase()) {
+            "LOFI", "LO-FI" -> {
+                _currentBpm.value = 85
+                val tracks = listOf(
+                    SequencerTrack("Kick Drum", "kick", steps = BooleanArray(16) { it == 0 || it == 10 }),
+                    SequencerTrack("Snare Drum", "snare", steps = BooleanArray(16) { it == 4 || it == 12 }),
+                    SequencerTrack("Hi-Hat", "hihat", steps = BooleanArray(16) { it % 2 == 0 }),
+                    SequencerTrack("Clap FX", "clap", steps = BooleanArray(16) { it == 12 }),
+                    SequencerTrack("Synth Bass", "bass", steps = BooleanArray(16) { it == 0 || it == 3 || it == 8 || it == 10 }),
+                    SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { it == 2 || it == 6 || it == 11 || it == 14 })
+                )
+                _sequencerTracks.value = tracks
+            }
+            "TRAP" -> {
+                _currentBpm.value = 140
+                val tracks = listOf(
+                    SequencerTrack("Kick Drum", "kick", steps = BooleanArray(16) { it == 0 || it == 7 || it == 10 }),
+                    SequencerTrack("Snare Drum", "snare", steps = BooleanArray(16) { it == 8 }),
+                    SequencerTrack("Hi-Hat", "hihat", steps = BooleanArray(16) { true }),
+                    SequencerTrack("Clap FX", "clap", steps = BooleanArray(16) { it == 4 || it == 12 }),
+                    SequencerTrack("Synth Bass", "bass", steps = BooleanArray(16) { it == 0 || it == 3 || it == 6 || it == 10 }),
+                    SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { it == 0 || it == 6 || it == 12 })
+                )
+                _sequencerTracks.value = tracks
+            }
+            "HOUSE" -> {
+                _currentBpm.value = 124
+                val tracks = listOf(
+                    SequencerTrack("Kick Drum", "kick", steps = BooleanArray(16) { it % 4 == 0 }),
+                    SequencerTrack("Snare Drum", "snare", steps = BooleanArray(16) { it == 4 || it == 12 }),
+                    SequencerTrack("Hi-Hat", "hihat", steps = BooleanArray(16) { it == 2 || it == 6 || it == 10 || it == 14 }),
+                    SequencerTrack("Clap FX", "clap", steps = BooleanArray(16) { it == 4 || it == 12 }),
+                    SequencerTrack("Synth Bass", "bass", steps = BooleanArray(16) { it == 2 || it == 6 || it == 10 || it == 14 }),
+                    SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { it == 0 || it == 3 || it == 8 || it == 11 })
+                )
+                _sequencerTracks.value = tracks
+            }
+            "BOOMBAP", "BOOM BAP" -> {
+                _currentBpm.value = 92
+                val tracks = listOf(
+                    SequencerTrack("Kick Drum", "kick", steps = BooleanArray(16) { it == 0 || it == 3 || it == 8 || it == 11 }),
+                    SequencerTrack("Snare Drum", "snare", steps = BooleanArray(16) { it == 4 || it == 12 }),
+                    SequencerTrack("Hi-Hat", "hihat", steps = BooleanArray(16) { it % 2 == 0 }),
+                    SequencerTrack("Clap FX", "clap", steps = BooleanArray(16) { it == 12 }),
+                    SequencerTrack("Synth Bass", "bass", steps = BooleanArray(16) { it == 0 || it == 3 || it == 8 || it == 11 }),
+                    SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { it == 4 || it == 8 || it == 12 })
+                )
+                _sequencerTracks.value = tracks
+            }
+            "EMPTY" -> {
+                clearAllSteps()
+            }
+        }
+    }
+
+    fun randomizePattern() {
+        val tracks = listOf(
+            SequencerTrack("Kick Drum", "kick", steps = BooleanArray(16) { it == 0 || (it in 6..12 && kotlin.random.Random.nextFloat() > 0.65f) }),
+            SequencerTrack("Snare Drum", "snare", steps = BooleanArray(16) { it == 4 || it == 12 || (kotlin.random.Random.nextFloat() > 0.85f) }),
+            SequencerTrack("Hi-Hat", "hihat", steps = BooleanArray(16) { it % 2 == 0 || kotlin.random.Random.nextFloat() > 0.5f }),
+            SequencerTrack("Clap FX", "clap", steps = BooleanArray(16) { it == 4 || it == 12 }),
+            SequencerTrack("Synth Bass", "bass", steps = BooleanArray(16) { it == 0 || it == 8 || (kotlin.random.Random.nextFloat() > 0.75f) }),
+            SequencerTrack("Lead Synth", "lead", steps = BooleanArray(16) { kotlin.random.Random.nextFloat() > 0.75f })
+        )
+        _sequencerTracks.value = tracks
+    }
+
     fun playTrackSoundPreview(track: SequencerTrack) {
         AudioSynthEngine.playDrumHit(track.soundType)
     }
@@ -626,6 +763,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBpm(bpm: Int) {
         _currentBpm.value = bpm.coerceIn(60, 200)
+    }
+
+    fun adjustBpm(delta: Int) {
+        _currentBpm.value = (_currentBpm.value + delta).coerceIn(60, 200)
+    }
+
+    fun toggleMetronome() {
+        _isMetronomeEnabled.value = !_isMetronomeEnabled.value
+    }
+
+    fun rewindSequencer() {
+        _currentStep.value = 0
     }
 
     fun togglePlaySequencer() {
@@ -643,16 +792,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             var step = _currentStep.value
             while (isActive && _isPlayingSequencer.value) {
                 _currentStep.value = step
-                // Trigger active sounds on this step
-                for (track in _sequencerTracks.value) {
-                    if (!track.isMuted && track.steps[step]) {
+                // Metrónomo en cada tiempo de negra (pasos 0, 4, 8, 12)
+                if (_isMetronomeEnabled.value && step % 4 == 0) {
+                    AudioSynthEngine.playMetronomeClick(isDownbeat = step == 0)
+                }
+
+                val tracks = _sequencerTracks.value
+                val hasSolo = tracks.any { it.isSolo }
+
+                // Disparo de sonidos activos en este paso
+                for (track in tracks) {
+                    val shouldPlay = if (hasSolo) {
+                        track.isSolo && track.steps[step]
+                    } else {
+                        !track.isMuted && track.steps[step]
+                    }
+                    if (shouldPlay) {
                         AudioSynthEngine.playDrumHit(track.soundType)
                     }
                 }
                 step = (step + 1) % 16
-                // Calculate step duration: 16th note delay = (60,000 / BPM) / 4
+                // Duración del paso (semicorchea): (60,000 / BPM) / 4
                 val stepDelayMs = ((60000.0 / _currentBpm.value) / 4.0).toLong()
-                delay(stepDelayMs.coerceAtLeast(40L))
+                delay(stepDelayMs.coerceAtLeast(35L))
             }
         }
     }
@@ -664,8 +826,204 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _currentStep.value = 0
     }
 
-    fun saveActiveAudioProject(title: String, genre: String) {
-        val userEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+    fun clearMusicFeedback() {
+        _musicFeedbackMessage.value = null
+    }
+
+    fun isSongOwner(song: AudioProject): Boolean {
+        val currentUser = _authUiState.value.currentUser
+        val userEmail = currentUser?.email?.trim() ?: ""
+        val userName = currentUser?.displayName?.trim() ?: ""
+        val userLogin = currentUser?.username?.trim() ?: ""
+
+        if (userEmail.isNotEmpty() && userEmail.equals(song.authorEmail.trim(), ignoreCase = true)) return true
+        if (userName.isNotEmpty() && userName.equals(song.authorName.trim(), ignoreCase = true)) return true
+        if (userLogin.isNotEmpty() && userLogin.equals(song.authorName.trim(), ignoreCase = true)) return true
+        return false
+    }
+
+    fun generateSongWithAi(title: String, description: String, onFinished: (() -> Unit)? = null) {
+        if (_isGeneratingSong.value) return
+        _isGeneratingSong.value = true
+        _aiGenerationStatus.value = "Analizando estilo musical y estructura con IA..."
+
+        viewModelScope.launch {
+            try {
+                stopPlayPreview()
+                stopSequencer()
+                delay(300)
+                _aiGenerationStatus.value = "Sintetizando compases, bajo y percusión..."
+                val result = AiMusicComposer.generateSong(title, description)
+                _lastAiResult.value = result
+
+                _aiGenerationStatus.value = "Cargando en el secuenciador..."
+                _currentBpm.value = result.bpm
+                _sequencerTracks.value = result.tracks
+
+                val currentUser = _authUiState.value.currentUser
+                val userEmail = currentUser?.email ?: "gonzalez24029@gmail.com"
+                val userName = currentUser?.displayName ?: "Alex González"
+
+                val newProject = AudioProject(
+                    title = result.title,
+                    description = result.description,
+                    genre = result.genre,
+                    bpm = result.bpm,
+                    patternDataJson = result.patternJson,
+                    authorEmail = userEmail,
+                    authorName = userName,
+                    isPublic = false,
+                    aiPrompt = description,
+                    notesMelody = result.melodyNotes.joinToString(", ")
+                )
+                val newId = repo.insertAudioProject(newProject)
+                val savedProject = repo.getAudioProjectById(newId)
+                _activeAudioProject.value = savedProject
+
+                _musicFeedbackMessage.value = "¡Canción '${result.title}' creada con IA lista para escuchar!"
+                onFinished?.invoke()
+            } catch (e: Exception) {
+                _musicFeedbackMessage.value = "Error al generar canción: ${e.message}"
+            } finally {
+                _isGeneratingSong.value = false
+                _aiGenerationStatus.value = null
+            }
+        }
+    }
+
+    fun publishSong(songId: Long, isPublic: Boolean) {
+        viewModelScope.launch {
+            val song = repo.getAudioProjectById(songId) ?: return@launch
+            if (!isSongOwner(song)) {
+                _musicFeedbackMessage.value = "Solo el autor original (${song.authorName}) puede publicar o despublicar esta canción."
+                return@launch
+            }
+            repo.updateAudioProjectPublicStatus(songId, isPublic)
+            if (_activeAudioProject.value?.id == songId) {
+                _activeAudioProject.value = _activeAudioProject.value?.copy(isPublic = isPublic)
+            }
+            _musicFeedbackMessage.value = if (isPublic) {
+                "¡Canción '${song.title}' publicada! Ahora todos en la comunidad pueden verla y escucharla."
+            } else {
+                "Canción retirada de la comunidad (ahora es privada)."
+            }
+        }
+    }
+
+    fun publishActiveSong(isPublic: Boolean) {
+        val active = _activeAudioProject.value ?: return
+        publishSong(active.id, isPublic)
+    }
+
+    fun renamePublicSong(songId: Long, newTitle: String): Boolean {
+        val clean = newTitle.trim()
+        if (clean.isEmpty()) return false
+        viewModelScope.launch {
+            val song = repo.getAudioProjectById(songId)
+            if (song != null) {
+                if (isSongOwner(song)) {
+                    repo.updateAudioProjectTitle(songId, clean)
+                    if (_activeAudioProject.value?.id == songId) {
+                        _activeAudioProject.value = _activeAudioProject.value?.copy(title = clean)
+                    }
+                    _musicFeedbackMessage.value = "Nombre actualizado a '$clean'"
+                } else {
+                    _musicFeedbackMessage.value = "No tienes permiso. Solo el creador original (${song.authorName}) puede cambiar el nombre."
+                }
+            }
+        }
+        return true
+    }
+
+    fun deleteSongIfOwner(songId: Long, onDeleted: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            val song = repo.getAudioProjectById(songId)
+            if (song != null) {
+                if (isSongOwner(song)) {
+                    repo.deleteAudioProject(songId)
+                    if (_activeAudioProject.value?.id == songId) {
+                        _activeAudioProject.value = null
+                        stopSequencer()
+                    }
+                    if (_previewPlayingSongId.value == songId) {
+                        stopPlayPreview()
+                    }
+                    _musicFeedbackMessage.value = "Canción '${song.title}' eliminada exitosamente."
+                    onDeleted?.invoke()
+                } else {
+                    _musicFeedbackMessage.value = "No puedes borrar esta canción. Solo quien la publicó (${song.authorName}) puede borrarla."
+                }
+            }
+        }
+    }
+
+    fun togglePlayPreview(song: AudioProject) {
+        if (_previewPlayingSongId.value == song.id) {
+            stopPlayPreview()
+            return
+        }
+        stopPlayPreview()
+        stopSequencer()
+        _previewPlayingSongId.value = song.id
+
+        previewJob = viewModelScope.launch {
+            val json = song.patternDataJson
+            val bpm = song.bpm.coerceIn(60, 200)
+            val stepDelayMs = (60_000L / bpm) / 4L
+
+            val kicks = BooleanArray(16)
+            val snares = BooleanArray(16)
+            val hihats = BooleanArray(16)
+            val claps = BooleanArray(16)
+            val basses = BooleanArray(16)
+            val leads = BooleanArray(16)
+
+            try {
+                val obj = JSONObject(json)
+                fun parseArr(key: String, dest: BooleanArray) {
+                    if (obj.has(key)) {
+                        val arr = obj.getJSONArray(key)
+                        for (i in 0 until minOf(arr.length(), 16)) {
+                            dest[i] = arr.optBoolean(i, false)
+                        }
+                    }
+                }
+                parseArr("kick", kicks)
+                parseArr("snare", snares)
+                parseArr("hihat", hihats)
+                parseArr("clap", claps)
+                parseArr("bass", basses)
+                parseArr("lead", leads)
+            } catch (_: Exception) {
+                kicks[0] = true; kicks[4] = true; kicks[8] = true; kicks[12] = true
+                hihats[2] = true; hihats[6] = true; hihats[10] = true; hihats[14] = true
+            }
+
+            var step = 0
+            while (isActive && _previewPlayingSongId.value == song.id) {
+                if (kicks[step]) AudioSynthEngine.playDrumHit("kick")
+                if (snares[step]) AudioSynthEngine.playDrumHit("snare")
+                if (hihats[step]) AudioSynthEngine.playDrumHit("hihat")
+                if (claps[step]) AudioSynthEngine.playDrumHit("clap")
+                if (basses[step]) AudioSynthEngine.playNote(130.81f, 0.2f)
+                if (leads[step]) AudioSynthEngine.playNote(523.25f, 0.15f)
+
+                delay(stepDelayMs)
+                step = (step + 1) % 16
+            }
+        }
+    }
+
+    fun stopPlayPreview() {
+        previewJob?.cancel()
+        previewJob = null
+        _previewPlayingSongId.value = null
+    }
+
+    fun saveActiveAudioProject(title: String, genre: String, description: String? = null, isPublic: Boolean? = null) {
+        val currentUser = _authUiState.value.currentUser
+        val userEmail = currentUser?.email ?: "gonzalez24029@gmail.com"
+        val userName = currentUser?.displayName ?: "Alex González"
         val patternJson = serializePatternData()
         val current = _activeAudioProject.value
         viewModelScope.launch {
@@ -673,8 +1031,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val updated = current.copy(
                     title = title,
                     genre = genre,
+                    description = description ?: current.description,
                     bpm = _currentBpm.value,
                     patternDataJson = patternJson,
+                    isPublic = isPublic ?: current.isPublic,
                     lastModified = System.currentTimeMillis()
                 )
                 repo.updateAudioProject(updated)
@@ -683,9 +1043,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val newProject = AudioProject(
                     title = title,
                     genre = genre,
+                    description = description ?: "",
                     bpm = _currentBpm.value,
                     patternDataJson = patternJson,
-                    authorEmail = userEmail
+                    authorEmail = userEmail,
+                    authorName = userName,
+                    isPublic = isPublic ?: false
                 )
                 val id = repo.insertAudioProject(newProject)
                 _activeAudioProject.value = repo.getAudioProjectById(id)

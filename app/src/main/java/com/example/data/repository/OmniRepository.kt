@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 class OmniRepository(private val db: AppDatabase) {
     val allDocuments: Flow<List<DocumentItem>> = db.documentDao().getAllDocuments()
     val allAudioProjects: Flow<List<AudioProject>> = db.audioProjectDao().getAllAudioProjects()
+    val publicAudioProjects: Flow<List<AudioProject>> = db.audioProjectDao().getPublicAudioProjects()
     val allUsers: Flow<List<UserAccount>> = db.userDao().getAllUsers()
 
     fun getMessagesForChannel(channelId: String): Flow<List<ChatMessage>> =
@@ -28,6 +29,8 @@ class OmniRepository(private val db: AppDatabase) {
     suspend fun getAudioProjectById(id: Long): AudioProject? = db.audioProjectDao().getAudioProjectById(id)
     suspend fun insertAudioProject(project: AudioProject): Long = db.audioProjectDao().insertAudioProject(project)
     suspend fun updateAudioProject(project: AudioProject) = db.audioProjectDao().updateAudioProject(project)
+    suspend fun updateAudioProjectTitle(id: Long, newTitle: String) = db.audioProjectDao().updateTitle(id, newTitle)
+    suspend fun updateAudioProjectPublicStatus(id: Long, isPublic: Boolean) = db.audioProjectDao().updatePublicStatus(id, isPublic)
     suspend fun deleteAudioProject(id: Long) = db.audioProjectDao().deleteAudioProject(id)
 
     suspend fun insertChatMessage(msg: ChatMessage): Long = db.chatMessageDao().insertMessage(msg)
@@ -111,14 +114,41 @@ class OmniRepository(private val db: AppDatabase) {
 
             val initialBeat = AudioProject(
                 title = "Midnight Cyber Beat",
+                description = "Beat sintético futurista con bajo envolvente y percusión retro 80s",
                 genre = "Synthwave / Lo-Fi",
                 bpm = 118,
                 patternDataJson = defaultBeatPattern,
                 authorEmail = defaultUser.email,
+                authorName = defaultUser.displayName,
+                isPublic = true,
+                aiPrompt = "Beat synthwave con arpegios electrónicos y batería contundente",
                 durationSeconds = 32,
                 fileSizeKb = 96
             )
             val beatId = db.audioProjectDao().insertAudioProject(initialBeat)
+
+            val sofiaBeatPattern = """{
+                "kick": [true, false, false, false, false, false, true, false, false, false, true, false, false, false, false, false],
+                "snare": [false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, false],
+                "hihat": [true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false],
+                "clap": [false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false],
+                "bass": [true, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false],
+                "lead": [false, false, true, false, true, false, false, false, false, false, true, false, false, true, false, false]
+            }"""
+            val communityBeat = AudioProject(
+                title = "Sunset Lo-Fi Oasis",
+                description = "Ritmo chill relajante para programar y concentrarse",
+                genre = "Chillhop / Lo-Fi",
+                bpm = 88,
+                patternDataJson = sofiaBeatPattern,
+                authorEmail = "sofia.m@cloud.io",
+                authorName = "Sofia Martinez",
+                isPublic = true,
+                aiPrompt = "Un beat lo-fi suave y cálido con melodía nostálgica y platillos lentos",
+                durationSeconds = 28,
+                fileSizeKb = 84
+            )
+            db.audioProjectDao().insertAudioProject(communityBeat)
 
             // Seed initial chat messages
             db.chatMessageDao().insertMessage(

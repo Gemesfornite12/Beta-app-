@@ -49,10 +49,15 @@ data class DocumentItem(
 data class AudioProject(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
+    val description: String = "",
     val genre: String = "Lo-Fi Hip Hop",
     val bpm: Int = 110,
     val patternDataJson: String, // 16-step grid per track
     val authorEmail: String,
+    val authorName: String = "Alex González",
+    val isPublic: Boolean = false,
+    val aiPrompt: String = "",
+    val notesMelody: String = "",
     val durationSeconds: Int = 16,
     val lastModified: Long = System.currentTimeMillis(),
     val isSyncedCloud: Boolean = true,

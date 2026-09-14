@@ -30,10 +30,12 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Slideshow
@@ -397,8 +399,10 @@ fun HomeScreen(
 
             // Music items
             items(filteredAudio) { audio ->
+                val isOwner = viewModel.isSongOwner(audio)
                 AudioProjectCard(
                     project = audio,
+                    isOwner = isOwner,
                     onClick = {
                         viewModel.openAudioProject(audio)
                         onOpenMusicStudio()
@@ -407,7 +411,10 @@ fun HomeScreen(
                         viewModel.sendChatMessage(attachedAudio = audio)
                         onOpenChat()
                     },
-                    onDelete = { viewModel.deleteAudioProject(audio.id) }
+                    onTogglePublic = {
+                        viewModel.publishSong(audio.id, !audio.isPublic)
+                    },
+                    onDelete = { viewModel.deleteSongIfOwner(audio.id) }
                 )
             }
 
@@ -680,8 +687,10 @@ private fun DocumentItemCard(
 @Composable
 private fun AudioProjectCard(
     project: AudioProject,
+    isOwner: Boolean,
     onClick: () -> Unit,
     onShareToChat: () -> Unit,
+    onTogglePublic: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -739,10 +748,31 @@ private fun AudioProjectCard(
                         )
                     }
                     Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (project.isPublic) Color(0xFF065F46).copy(alpha = 0.5f) else Color(0xFF334155)
+                    ) {
+                        Text(
+                            text = if (project.isPublic) "🌐 Pública" else "🔒 Privada",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (project.isPublic) Color(0xFF34D399) else Color(0xFF94A3B8),
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "${project.genre} • ${project.bpm} BPM",
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
+                    )
+                }
+                if (!isOwner) {
+                    Text(
+                        text = "Autor: ${project.authorName}",
+                        fontSize = 10.sp,
+                        color = Color(0xFF818CF8),
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                 }
             }
@@ -777,14 +807,40 @@ private fun AudioProjectCard(
                             onShareToChat()
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("Eliminar", color = Color(0xFFEF4444)) },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEF4444)) },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        }
-                    )
+                    if (isOwner) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (project.isPublic) "Hacer Privada" else "Publicar en Comunidad",
+                                    color = if (project.isPublic) Color(0xFFF59E0B) else Color(0xFF10B981)
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (project.isPublic) Icons.Default.Lock else Icons.Default.Public,
+                                    contentDescription = null,
+                                    tint = if (project.isPublic) Color(0xFFF59E0B) else Color(0xFF10B981)
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                onTogglePublic()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Eliminar", color = Color(0xFFEF4444)) },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEF4444)) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text("🔒 Solo el autor puede eliminar o editar", color = Color(0xFF64748B), fontSize = 11.sp) },
+                            onClick = { showMenu = false }
+                        )
+                    }
                 }
             }
         }

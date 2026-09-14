@@ -52,6 +52,9 @@ interface AudioProjectDao {
     @Query("SELECT * FROM audio_projects ORDER BY lastModified DESC")
     fun getAllAudioProjects(): Flow<List<AudioProject>>
 
+    @Query("SELECT * FROM audio_projects WHERE isPublic = 1 ORDER BY lastModified DESC")
+    fun getPublicAudioProjects(): Flow<List<AudioProject>>
+
     @Query("SELECT * FROM audio_projects WHERE id = :id LIMIT 1")
     suspend fun getAudioProjectById(id: Long): AudioProject?
 
@@ -60,6 +63,12 @@ interface AudioProjectDao {
 
     @Update
     suspend fun updateAudioProject(project: AudioProject)
+
+    @Query("UPDATE audio_projects SET title = :newTitle, lastModified = :lastModified WHERE id = :id")
+    suspend fun updateTitle(id: Long, newTitle: String, lastModified: Long = System.currentTimeMillis())
+
+    @Query("UPDATE audio_projects SET isPublic = :isPublic, lastModified = :lastModified WHERE id = :id")
+    suspend fun updatePublicStatus(id: Long, isPublic: Boolean, lastModified: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM audio_projects WHERE id = :id")
     suspend fun deleteAudioProject(id: Long)

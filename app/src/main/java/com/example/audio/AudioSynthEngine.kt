@@ -142,6 +142,25 @@ object AudioSynthEngine {
         playRawPcm(samples)
     }
 
+    fun playMetronomeClick(isDownbeat: Boolean) {
+        scope.launch {
+            try {
+                val duration = 0.04f
+                val numSamples = (SAMPLE_RATE * duration).toInt()
+                val samples = ShortArray(numSamples)
+                val freq = if (isDownbeat) 1200.0 else 800.0
+                for (i in 0 until numSamples) {
+                    val progress = i.toFloat() / numSamples
+                    val t = i.toFloat() / SAMPLE_RATE
+                    val env = exp(-20.0 * progress)
+                    val wave = sin(2.0 * PI * freq * t)
+                    samples[i] = (wave * env * Short.MAX_VALUE * 0.5f).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                }
+                playRawPcm(samples)
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun playRawPcm(samples: ShortArray) {
         val bufferSize = samples.size * 2
         val audioTrack = AudioTrack.Builder()
