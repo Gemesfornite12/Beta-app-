@@ -103,6 +103,7 @@ dependencies {
   implementation(libs.firebase.ai)
   // Firestore real-time database
   implementation(libs.firebase.firestore)
+  implementation(libs.firebase.messaging)
 
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
   // Sign-In via Credential Manager:

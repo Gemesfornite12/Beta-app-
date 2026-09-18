@@ -1,12 +1,17 @@
 package com.example
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -27,6 +32,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.ContextCompat
+import com.example.data.firebase.ChatNotificationManager
+import com.example.data.firebase.FcmTokenManager
 import com.example.ui.navigation.HashRoute
 import com.example.ui.navigation.HashRouter
 import com.example.ui.navigation.HashRouterDock
@@ -44,14 +52,46 @@ import com.example.ui.viewmodel.OmniViewModel
 class MainActivity : ComponentActivity() {
   private val viewModel: OmniViewModel by viewModels()
   private var currentIntentUri by mutableStateOf<Uri?>(null)
+  private var pendingPushChannelId by mutableStateOf<String?>(null)
+
+  private val notificationPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    Log.d("MainActivity", "POST_NOTIFICATIONS permission result: $isGranted")
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     currentIntentUri = intent?.data
+
+    // Inicializar canales de notificación y registrar ciclo de vida
+    ChatNotificationManager.createNotificationChannels(applicationContext)
+    ChatNotificationManager.isAppInForeground = true
+
+    // Extraer canal si la actividad se lanzó desde un toque en notificación push
+    intent?.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
+      pendingPushChannelId = chId
+    }
+
+    // Solicitar permiso POST_NOTIFICATIONS en Android 13+ (API 33+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      }
+    }
+
+    // Inicializar FCM y sincronizar token del dispositivo
+    FcmTokenManager.initialize(applicationContext, "gonzalez24029@gmail.com")
+
     setContent {
       MyApplicationTheme(darkTheme = true) {
-        OmniStudioApp(viewModel = viewModel, initialUri = currentIntentUri)
+        OmniStudioApp(
+          viewModel = viewModel,
+          initialUri = currentIntentUri,
+          pendingPushChannelId = pendingPushChannelId,
+          onClearPendingPushChannel = { pendingPushChannelId = null }
+        )
       }
     }
   }
@@ -60,11 +100,40 @@ class MainActivity : ComponentActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     currentIntentUri = intent.data
+
+    intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
+      pendingPushChannelId = chId
+    }
+  }
+
+  override fun onStart() {
+    super.onStart()
+    ChatNotificationManager.isAppInForeground = true
+  }
+
+  override fun onResume() {
+    super.onResume()
+    ChatNotificationManager.isAppInForeground = true
+  }
+
+  override fun onPause() {
+    super.onPause()
+    ChatNotificationManager.isAppInForeground = false
+  }
+
+  override fun onStop() {
+    super.onStop()
+    ChatNotificationManager.isAppInForeground = false
   }
 }
 
 @Composable
-fun OmniStudioApp(viewModel: OmniViewModel, initialUri: Uri? = null) {
+fun OmniStudioApp(
+  viewModel: OmniViewModel,
+  initialUri: Uri? = null,
+  pendingPushChannelId: String? = null,
+  onClearPendingPushChannel: () -> Unit = {}
+) {
   val authState by viewModel.authUiState.collectAsState()
   val initialRoute = if (authState.isLoggedIn) HashRoute.HOME else HashRoute.AUTH
   val hashRouter = rememberHashRouter(initialRoute = initialRoute)
@@ -83,6 +152,15 @@ fun OmniStudioApp(viewModel: OmniViewModel, initialUri: Uri? = null) {
   LaunchedEffect(initialUri) {
     if (initialUri != null) {
       hashRouter.handleDeepLink(initialUri)
+    }
+  }
+
+  // Manejar navegación directa a canal de chat al tocar una notificación push
+  LaunchedEffect(pendingPushChannelId) {
+    if (!pendingPushChannelId.isNullOrBlank()) {
+      viewModel.loadChannelMessages(pendingPushChannelId)
+      hashRouter.push(HashRoute.CHAT)
+      onClearPendingPushChannel()
     }
   }
 
