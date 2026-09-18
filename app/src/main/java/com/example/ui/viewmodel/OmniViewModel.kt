@@ -267,6 +267,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _callRingtoneMode = MutableStateFlow(0)
     val callRingtoneMode: StateFlow<Int> = _callRingtoneMode.asStateFlow()
 
+    // Configuración de Horario No Molestar (DND)
+    private val _dndEnabled = MutableStateFlow(false)
+    val dndEnabled: StateFlow<Boolean> = _dndEnabled.asStateFlow()
+
+    private val _dndStartHour = MutableStateFlow(22)
+    val dndStartHour: StateFlow<Int> = _dndStartHour.asStateFlow()
+
+    private val _dndStartMinute = MutableStateFlow(0)
+    val dndStartMinute: StateFlow<Int> = _dndStartMinute.asStateFlow()
+
+    private val _dndEndHour = MutableStateFlow(7)
+    val dndEndHour: StateFlow<Int> = _dndEndHour.asStateFlow()
+
+    private val _dndEndMinute = MutableStateFlow(0)
+    val dndEndMinute: StateFlow<Int> = _dndEndMinute.asStateFlow()
+
+    private val _dndDays = MutableStateFlow<Set<Int>>(setOf(1, 2, 3, 4, 5, 6, 7))
+    val dndDays: StateFlow<Set<Int>> = _dndDays.asStateFlow()
+
     // Preferencias de Notificaciones por Canal/Grupo (Mensajes, Llamadas de Voz, Videollamadas)
     private val _channelNotificationPrefs = MutableStateFlow<Map<String, ChannelNotificationPreference>>(emptyMap())
     val channelNotificationPrefs: StateFlow<Map<String, ChannelNotificationPreference>> = _channelNotificationPrefs.asStateFlow()
@@ -307,6 +326,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             _callSoundEnabled.value = prefs.getBoolean("call_sound_enabled", true)
             _callVibrationEnabled.value = prefs.getBoolean("call_vibration_enabled", true)
             _callRingtoneMode.value = prefs.getInt("call_ringtone_mode", 0)
+            _dndEnabled.value = prefs.getBoolean("dnd_enabled", false)
+            _dndStartHour.value = prefs.getInt("dnd_start_hour", 22)
+            _dndStartMinute.value = prefs.getInt("dnd_start_minute", 0)
+            _dndEndHour.value = prefs.getInt("dnd_end_hour", 7)
+            _dndEndMinute.value = prefs.getInt("dnd_end_minute", 0)
+            val daysStr = prefs.getString("dnd_days", "1,2,3,4,5,6,7") ?: "1,2,3,4,5,6,7"
+            _dndDays.value = daysStr.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
         } catch (e: Exception) {
             Log.e("OmniViewModel", "Error loading call settings preferences: ${e.message}")
         }
@@ -2173,6 +2199,61 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             Log.e("OmniViewModel", "Error saving call ringtone mode preference: ${e.message}")
         }
+    }
+
+    fun setDndEnabled(enabled: Boolean) {
+        _dndEnabled.value = enabled
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("dnd_enabled", enabled).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving dnd_enabled: ${e.message}")
+        }
+    }
+
+    fun setDndStartTime(hour: Int, minute: Int) {
+        _dndStartHour.value = hour
+        _dndStartMinute.value = minute
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putInt("dnd_start_hour", hour).putInt("dnd_start_minute", minute).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving dnd start time: ${e.message}")
+        }
+    }
+
+    fun setDndEndTime(hour: Int, minute: Int) {
+        _dndEndHour.value = hour
+        _dndEndMinute.value = minute
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putInt("dnd_end_hour", hour).putInt("dnd_end_minute", minute).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving dnd end time: ${e.message}")
+        }
+    }
+
+    fun toggleDndDay(day: Int) {
+        val current = _dndDays.value.toMutableSet()
+        if (current.contains(day)) {
+            if (current.size > 1) { // Guardar al menos un día activo
+                current.remove(day)
+            }
+        } else {
+            current.add(day)
+        }
+        _dndDays.value = current
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            val str = current.sorted().joinToString(",")
+            prefs.edit().putString("dnd_days", str).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving dnd_days: ${e.message}")
+        }
+    }
+
+    fun isDndActiveNow(): Boolean {
+        return CallSoundVibrationManager.isDndActive(getApplication())
     }
 
     fun testCallSoundAndVibration() {

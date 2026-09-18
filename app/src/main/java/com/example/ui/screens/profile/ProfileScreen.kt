@@ -2,6 +2,7 @@ package com.example.ui.screens.profile
 
 import com.example.data.model.ChannelNotificationPreference
 
+import android.app.TimePickerDialog
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -57,7 +58,11 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -109,6 +114,19 @@ fun ProfileScreen(
     val callRingtoneMode by viewModel.callRingtoneMode.collectAsState()
     val availableChannels by viewModel.availableChannels.collectAsState()
     val channelNotificationPrefs by viewModel.channelNotificationPrefs.collectAsState()
+
+    // DND Schedule State
+    val dndEnabled by viewModel.dndEnabled.collectAsState()
+    val dndStartHour by viewModel.dndStartHour.collectAsState()
+    val dndStartMinute by viewModel.dndStartMinute.collectAsState()
+    val dndEndHour by viewModel.dndEndHour.collectAsState()
+    val dndEndMinute by viewModel.dndEndMinute.collectAsState()
+    val dndDays by viewModel.dndDays.collectAsState()
+
+    val context = LocalContext.current
+    val isDndActive = remember(dndEnabled, dndStartHour, dndStartMinute, dndEndHour, dndEndMinute, dndDays) {
+        viewModel.isDndActiveNow()
+    }
     val user = authState.currentUser
 
     var isEditingProfile by remember { mutableStateOf(false) }
@@ -922,6 +940,253 @@ fun ProfileScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
                             shape = RoundedCornerShape(10.dp)
                         ) {
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // CARD: Programación Horario No Molestar (DND)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_dnd_schedule"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF8B5CF6).copy(alpha = 0.15f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bedtime,
+                                        contentDescription = null,
+                                        tint = Color(0xFF8B5CF6),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Horario No Molestar (DND)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                                )
+                                Text(
+                                    text = "Silencia alertas y llamadas automáticamente",
+                                    fontSize = 11.sp,
+                                    color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = dndEnabled,
+                            onCheckedChange = { viewModel.setDndEnabled(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF8B5CF6)
+                            ),
+                            modifier = Modifier.testTag("switch_dnd_enabled")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Chip de estado DND actual
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (dndEnabled && isDndActive) Color(0xFF8B5CF6) else (if (isDarkTheme) Color(0xFF334155) else Color(0xFFF1F5F9)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (dndEnabled && isDndActive) Icons.Default.DoNotDisturbOn else Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = if (dndEnabled && isDndActive) Color.White else (if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = when {
+                                    dndEnabled && isDndActive -> "🌙 MODO NO MOLESTAR ACTIVO (Sonido y vibración silenciados)"
+                                    dndEnabled -> String.format("⏰ Programado activo: %02d:%02d a %02d:%02d", dndStartHour, dndStartMinute, dndEndHour, dndEndMinute)
+                                    else -> "💤 Horario No Molestar desactivado"
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (dndEnabled && isDndActive) Color.White else (if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569))
+                            )
+                        }
+                    }
+
+                    if (dndEnabled) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Horas de Inicio y Fin
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Selector Hora Inicio
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Hora de Inicio:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    onClick = {
+                                        TimePickerDialog(
+                                            context,
+                                            { _, hour, minute -> viewModel.setDndStartTime(hour, minute) },
+                                            dndStartHour,
+                                            dndStartMinute,
+                                            true
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("btn_dnd_start_time")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = String.format("%02d:%02d", dndStartHour, dndStartMinute),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                                        )
+                                        Icon(
+                                            Icons.Default.Schedule,
+                                            contentDescription = null,
+                                            tint = Color(0xFF8B5CF6),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Selector Hora Fin
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Hora de Fin:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    onClick = {
+                                        TimePickerDialog(
+                                            context,
+                                            { _, hour, minute -> viewModel.setDndEndTime(hour, minute) },
+                                            dndEndHour,
+                                            dndEndMinute,
+                                            true
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("btn_dnd_end_time")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = String.format("%02d:%02d", dndEndHour, dndEndMinute),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                                        )
+                                        Icon(
+                                            Icons.Default.Schedule,
+                                            contentDescription = null,
+                                            tint = Color(0xFF8B5CF6),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Días de la semana
+                        Text(
+                            text = "Días activos:",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val daysList = listOf(
+                            1 to "L",
+                            2 to "M",
+                            3 to "X",
+                            4 to "J",
+                            5 to "V",
+                            6 to "S",
+                            7 to "D"
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            daysList.forEach { (dayIdx, label) ->
+                                val isSelected = dndDays.contains(dayIdx)
+                                Surface(
+                                    onClick = { viewModel.toggleDndDay(dayIdx) },
+                                    shape = CircleShape,
+                                    color = if (isSelected) Color(0xFF8B5CF6) else (if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0)),
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("dnd_day_chip_$dayIdx")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) Color.White else (if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569))
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

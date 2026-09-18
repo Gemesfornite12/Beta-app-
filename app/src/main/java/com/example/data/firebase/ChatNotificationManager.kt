@@ -184,6 +184,12 @@ object ChatNotificationManager {
             Log.d(TAG, "Notificaciones de mensaje desactivadas para canal: $channelId")
             return
         }
+
+        // Verificar si Horario No Molestar (DND) está activo
+        if (CallSoundVibrationManager.isDndActive(context)) {
+            Log.d(TAG, "Horario No Molestar (DND) activo: se silencia la notificación de mensaje")
+            return
+        }
         // Verificar permisos en Android 13+ (TIRAMISU)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val permissionCheck = ContextCompat.checkSelfPermission(

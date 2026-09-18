@@ -51,6 +51,49 @@ object CallSoundVibrationManager {
     }
 
     /**
+     * Comprueba si el horario No Molestar (DND) está activo actualmente.
+     */
+    fun isDndActive(context: Context): Boolean {
+        return try {
+            val prefs = context.getSharedPreferences("app_settings_prefs", Context.MODE_PRIVATE)
+            val enabled = prefs.getBoolean("dnd_enabled", false)
+            if (!enabled) return false
+
+            val startH = prefs.getInt("dnd_start_hour", 22)
+            val startM = prefs.getInt("dnd_start_minute", 0)
+            val endH = prefs.getInt("dnd_end_hour", 7)
+            val endM = prefs.getInt("dnd_end_minute", 0)
+            val daysStr = prefs.getString("dnd_days", "1,2,3,4,5,6,7") ?: "1,2,3,4,5,6,7"
+            val days = daysStr.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+            val now = java.util.Calendar.getInstance()
+            val calDay = now.get(java.util.Calendar.DAY_OF_WEEK)
+            val todayIdx = if (calDay == java.util.Calendar.SUNDAY) 7 else calDay - 1
+            val yesterdayIdx = if (todayIdx == 1) 7 else todayIdx - 1
+
+            val currentMins = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+            val startMins = startH * 60 + startM
+            val endMins = endH * 60 + endM
+
+            if (startMins == endMins) return days.contains(todayIdx)
+
+            if (startMins < endMins) {
+                days.contains(todayIdx) && (currentMins in startMins until endMins)
+            } else {
+                if (currentMins >= startMins) {
+                    days.contains(todayIdx)
+                } else if (currentMins < endMins) {
+                    days.contains(yesterdayIdx) || days.contains(todayIdx)
+                } else {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * Inicia el sonido de timbre y la vibración en bucle para una llamada entrante.
      * @param ringtoneMode 0 = Tono Melódico Rítmico (Raw Audio), 1 = Sistema Android, 2 = Frecuencia Digital Sintetizada
      */
@@ -61,6 +104,13 @@ object CallSoundVibrationManager {
         ringtoneMode: Int = 0
     ) {
         stopAll(context)
+
+        // Verificar si Horario No Molestar (DND) está activo
+        if (isDndActive(context)) {
+            Log.d(TAG, "Horario No Molestar (DND) activo: se silencia la llamada entrante")
+            return
+        }
+
         isPlayingIncoming = true
 
         // 1. Vibración continua en bucle (1s vibrar, 1s pausa)
