@@ -1,5 +1,9 @@
 package com.example.ui.screens.chat
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExitToApp
@@ -28,6 +33,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
@@ -84,6 +90,14 @@ fun CreateGroupDialog(
     var groupPhotoUrl by remember { mutableStateOf("") }
     var selectedMemberEmails by remember { mutableStateOf(setOf<String>()) }
     var userSearchQuery by remember { mutableStateOf("") }
+
+    val createGroupPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            groupPhotoUrl = uri.toString()
+        }
+    }
 
     val presetPhotos = listOf(
         "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150",
@@ -248,6 +262,26 @@ fun CreateGroupDialog(
                                 unfocusedBorderColor = Color(0xFF475569)
                             )
                         )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Button(
+                            onClick = {
+                                createGroupPhotoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("btn_create_group_pick_local_photo")
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Elegir foto del dispositivo / Galería", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     item {
@@ -584,6 +618,14 @@ fun GroupManageDialog(
     var confirmDeleteGroupDialog by remember { mutableStateOf(false) }
     var confirmLeaveGroupDialog by remember { mutableStateOf(false) }
 
+    val editGroupPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            editGroupPhotoUrl = uri.toString()
+        }
+    }
+
     val presetGroupPhotos = listOf(
         "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150",
         "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=150",
@@ -760,9 +802,29 @@ fun GroupManageDialog(
                                         )
                                     )
 
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Button(
+                                        onClick = {
+                                            editGroupPhotoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(38.dp)
+                                            .testTag("btn_edit_group_pick_local_photo")
+                                    ) {
+                                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Elegir foto del dispositivo / Galería", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+
                                     Spacer(modifier = Modifier.height(6.dp))
 
-                                    Text("Fotos predefinidas:", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                    Text("O elige una foto predefinida:", color = Color(0xFF94A3B8), fontSize = 10.sp)
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),

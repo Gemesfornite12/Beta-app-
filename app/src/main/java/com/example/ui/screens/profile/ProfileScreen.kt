@@ -1,5 +1,9 @@
 package com.example.ui.screens.profile
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudQueue
@@ -33,8 +38,15 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LockReset
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PhoneMissed
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,12 +91,29 @@ fun ProfileScreen(
 ) {
     val authState by viewModel.authUiState.collectAsState()
     val isDarkTheme by viewModel.isDarkTheme.collectAsState()
+    val callTimeoutMinutes by viewModel.callTimeoutMinutes.collectAsState()
     val user = authState.currentUser
 
     var isEditingProfile by remember { mutableStateOf(false) }
     var editNameInput by remember(user?.displayName) { mutableStateOf(user?.displayName ?: "Alex González") }
     var editAvatarInput by remember(user?.avatarUrl) { mutableStateOf(user?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80") }
     var profileSavedFeedback by remember { mutableStateOf(false) }
+
+    // Launcher del selector de fotos del sistema / galería local de Android
+    val profilePhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val uriStr = uri.toString()
+            editAvatarInput = uriStr
+            isEditingProfile = true
+            viewModel.updateUserProfile(
+                displayName = editNameInput.ifBlank { user?.displayName ?: "Usuario" },
+                avatarUrl = uriStr
+            )
+            profileSavedFeedback = true
+        }
+    }
 
     val presetAvatars = listOf(
         "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80",
@@ -137,28 +166,62 @@ fun ProfileScreen(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // User Avatar Card with photo preview
-            Surface(
-                modifier = Modifier.size(96.dp),
-                shape = CircleShape,
-                color = Color(0xFF4F46E5),
-                shadowElevation = 4.dp
-            ) {
-                val currentPhoto = if (isEditingProfile) editAvatarInput else (user?.avatarUrl ?: "")
-                if (currentPhoto.isNotBlank()) {
-                    AsyncImage(
-                        model = currentPhoto,
-                        contentDescription = "Foto de perfil",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+            // User Avatar Card with photo preview & clickable camera badge for local photo
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Surface(
+                    modifier = Modifier
+                        .size(100.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            profilePhotoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                        .testTag("btn_avatar_pick_local"),
+                    shape = CircleShape,
+                    color = Color(0xFF4F46E5),
+                    shadowElevation = 4.dp
+                ) {
+                    val currentPhoto = if (isEditingProfile) editAvatarInput else (user?.avatarUrl ?: "")
+                    if (currentPhoto.isNotBlank()) {
+                        AsyncImage(
+                            model = currentPhoto,
+                            contentDescription = "Foto de perfil",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = (user?.displayName ?: "A").take(1).uppercase(),
+                                fontSize = 40.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+
+                // Badge botón de cámara / galería para cambiar foto local desde el dispositivo
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF4F46E5),
+                    border = androidx.compose.foundation.BorderStroke(2.dp, if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF1F5F9)),
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clickable {
+                            profilePhotoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                        .testTag("btn_badge_pick_local_photo")
+                ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = (user?.displayName ?: "A").take(1).uppercase(),
-                            fontSize = 38.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
+                        Icon(
+                            imageVector = Icons.Default.AddPhotoAlternate,
+                            contentDescription = "Elegir foto del dispositivo",
+                            tint = Color.White,
+                            modifier = Modifier.size(17.dp)
                         )
                     }
                 }
@@ -366,7 +429,35 @@ fun ProfileScreen(
                             )
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Botón destacado para Elegir Foto del Dispositivo / Galería
+                        Button(
+                            onClick = {
+                                profilePhotoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("btn_pick_local_photo_gallery"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF4F46E5)
+                            ),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Elegir Foto del Dispositivo (Galería)",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "O elige un avatar sugerido:",
                             fontSize = 11.sp,
@@ -562,6 +653,109 @@ fun ProfileScreen(
                             )
                             Text("Activo: Perfil, grupos, docs y chats respaldados", color = Color(0xFF34D399), fontSize = 11.sp)
                         }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Configuración de Llamadas y Notificaciones (Tiempo de Espera: 1, 3, 4 o 5 minutos)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Call, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Llamadas y Notificaciones",
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDarkTheme) Color.White else Color(0xFF0F172A),
+                            fontSize = 15.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Tiempo de espera para responder llamadas:",
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155),
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "Si nadie responde dentro de este tiempo, la llamada se congelará automáticamente y se enviará una notificación de llamada perdida.",
+                        color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B),
+                        fontSize = 11.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Selector de 1, 3, 4 y 5 minutos
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val minuteOptions = listOf(1, 3, 4, 5)
+                        minuteOptions.forEach { min ->
+                            val isSelected = callTimeoutMinutes == min
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) Color(0xFF10B981) else if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { viewModel.setCallTimeoutMinutes(min) }
+                                    .testTag("btn_timeout_${min}min")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(vertical = 10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "$min min",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = if (isSelected) Color.White else if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155)
+                                    )
+                                    if (min == 5) {
+                                        Text(
+                                            text = "Predeterminado",
+                                            fontSize = 8.sp,
+                                            color = if (isSelected) Color.White.copy(alpha = 0.8f) else Color(0xFF94A3B8)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Botón para probar la notificación de llamada entrante en vivo
+                    Button(
+                        onClick = {
+                            viewModel.simulateIncomingCall(
+                                peerName = "Sofia Martínez",
+                                peerEmail = "sofia.m@cloud.io",
+                                isVideo = true,
+                                groupName = "Equipo Diseño UI/UX"
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("btn_test_incoming_call"),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Notifications, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Probar Notificación de Llamada Entrante", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
                     }
                 }
             }

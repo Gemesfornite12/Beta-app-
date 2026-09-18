@@ -41,6 +41,7 @@ import com.example.ui.navigation.HashRouterDock
 import com.example.ui.navigation.LocalHashRouter
 import com.example.ui.navigation.rememberHashRouter
 import com.example.ui.screens.auth.AuthScreen
+import com.example.ui.screens.chat.CallSessionScreen
 import com.example.ui.screens.chat.ChatScreen
 import com.example.ui.screens.docs.DocEditorScreen
 import com.example.ui.screens.home.HomeScreen
@@ -74,6 +75,16 @@ class MainActivity : ComponentActivity() {
       pendingPushChannelId = chId
     }
 
+    // Manejar acciones rápidas de respuesta / rechazo desde la notificación de llamada entrante
+    when (intent?.action) {
+      ChatNotificationManager.ACTION_ANSWER_CALL -> {
+        viewModel.answerIncomingCall()
+      }
+      ChatNotificationManager.ACTION_REJECT_CALL -> {
+        viewModel.rejectIncomingCall()
+      }
+    }
+
     // Solicitar permiso POST_NOTIFICATIONS en Android 13+ (API 33+)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -104,6 +115,15 @@ class MainActivity : ComponentActivity() {
 
     intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
       pendingPushChannelId = chId
+    }
+
+    when (intent.action) {
+      ChatNotificationManager.ACTION_ANSWER_CALL -> {
+        viewModel.answerIncomingCall()
+      }
+      ChatNotificationManager.ACTION_REJECT_CALL -> {
+        viewModel.rejectIncomingCall()
+      }
     }
   }
 
@@ -136,6 +156,7 @@ fun OmniStudioApp(
   onClearPendingPushChannel: () -> Unit = {}
 ) {
   val authState by viewModel.authUiState.collectAsState()
+  val activeCall by viewModel.activeCall.collectAsState()
   val initialRoute = if (authState.isLoggedIn) HashRoute.HOME else HashRoute.AUTH
   val hashRouter = rememberHashRouter(initialRoute = initialRoute)
   val currentRoute by hashRouter.currentRoute.collectAsState()
@@ -171,18 +192,19 @@ fun OmniStudioApp(
   }
 
   CompositionLocalProvider(LocalHashRouter provides hashRouter) {
-    Scaffold(
-      modifier = Modifier.fillMaxSize(),
-      containerColor = Color(0xFF0F172A),
-      bottomBar = {
-        if (authState.isLoggedIn && currentRoute != HashRoute.AUTH) {
-          HashRouterDock(
-            hashRouter = hashRouter,
-            viewModel = viewModel
-          )
+    Box(modifier = Modifier.fillMaxSize()) {
+      Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = Color(0xFF0F172A),
+        bottomBar = {
+          if (authState.isLoggedIn && currentRoute != HashRoute.AUTH) {
+            HashRouterDock(
+              hashRouter = hashRouter,
+              viewModel = viewModel
+            )
+          }
         }
-      }
-    ) { innerPadding ->
+      ) { innerPadding ->
       Box(
         modifier = Modifier
           .fillMaxSize()
@@ -282,6 +304,21 @@ fun OmniStudioApp(
             }
           }
         }
+      }
+      }
+
+      // Superposición de llamada entrante o activa sobre cualquier pantalla
+      if (activeCall != null) {
+        CallSessionScreen(
+          callSession = activeCall!!,
+          onAnswerCall = { viewModel.answerIncomingCall() },
+          onRejectCall = { viewModel.rejectIncomingCall() },
+          onToggleMute = { viewModel.toggleCallMute() },
+          onToggleCamera = { viewModel.toggleCallCamera() },
+          onToggleSpeaker = { viewModel.toggleCallSpeaker() },
+          onSwitchCamera = { viewModel.switchCallCamera() },
+          onEndCall = { viewModel.endActiveCall() }
+        )
       }
     }
   }

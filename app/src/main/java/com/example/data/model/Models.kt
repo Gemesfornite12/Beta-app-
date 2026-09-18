@@ -111,5 +111,12 @@ data class CallSession(
     val isMuted: Boolean = false,
     val isCameraOn: Boolean = true,
     val isSpeakerOn: Boolean = true,
-    val isFrontCamera: Boolean = true
+    val isFrontCamera: Boolean = true,
+    val isIncoming: Boolean = false,
+    val callerName: String = "",
+    val callerEmail: String = "",
+    val groupName: String? = null,
+    val ringSecondsLeft: Int = 300,
+    val maxRingSeconds: Int = 300,
+    val isTimedOut: Boolean = false
 )

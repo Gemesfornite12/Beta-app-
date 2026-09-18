@@ -226,6 +226,8 @@ fun ChatScreen(
     if (activeCall != null) {
         CallSessionScreen(
             callSession = activeCall!!,
+            onAnswerCall = { viewModel.answerIncomingCall() },
+            onRejectCall = { viewModel.rejectIncomingCall() },
             onToggleMute = { viewModel.toggleCallMute() },
             onToggleCamera = { viewModel.toggleCallCamera() },
             onToggleSpeaker = { viewModel.toggleCallSpeaker() },

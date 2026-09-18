@@ -248,6 +248,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeCall = MutableStateFlow<CallSession?>(null)
     val activeCall: StateFlow<CallSession?> = _activeCall.asStateFlow()
     private var callTimerJob: Job? = null
+    private var ringCountdownJob: Job? = null
+
+    // Tiempo de espera para responder llamadas (1, 3, 4 o 5 minutos)
+    private val _callTimeoutMinutes = MutableStateFlow(5)
+    val callTimeoutMinutes: StateFlow<Int> = _callTimeoutMinutes.asStateFlow()
 
     init {
         val db = AppDatabase.getInstance(application)
@@ -276,6 +281,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             SharingStarted.WhileSubscribed(5000),
             emptyList()
         )
+
+        // Cargar preferencia de tiempo de respuesta de llamadas
+        try {
+            val prefs = application.getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            val savedTimeout = prefs.getInt("call_timeout_minutes", 5)
+            _callTimeoutMinutes.value = if (savedTimeout in listOf(1, 3, 4, 5)) savedTimeout else 5
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error loading call timeout preference: ${e.message}")
+        }
 
         viewModelScope.launch {
             repo.seedInitialDataIfEmpty()
@@ -2081,49 +2095,253 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // CALLING SYSTEM (Audio & Video Calling)
+    // CALLING SYSTEM (Audio & Video Calling, Timeouts & Notifications)
+    fun setCallTimeoutMinutes(minutes: Int) {
+        val validMin = if (minutes in listOf(1, 3, 4, 5)) minutes else 5
+        _callTimeoutMinutes.value = validMin
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putInt("call_timeout_minutes", validMin).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving call timeout: ${e.message}")
+        }
+    }
+
     fun startVoiceCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
         val chId = channelId ?: _currentChannel.value
         val callId = "call_${System.currentTimeMillis()}"
+        val timeoutSec = _callTimeoutMinutes.value * 60
+        val isGroup = chId != "general" && !chId.startsWith("directo-")
+        val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
+        val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
+
         val session = CallSession(
             callId = callId,
             channelId = chId,
             peerName = peerName,
             peerEmail = peerEmail,
             isVideo = false,
-            status = CallStatus.RINGING
+            status = CallStatus.RINGING,
+            isIncoming = false,
+            callerName = _authUiState.value.currentUser?.displayName ?: "Alex González",
+            callerEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com",
+            groupName = grpName,
+            ringSecondsLeft = timeoutSec,
+            maxRingSeconds = timeoutSec
         )
         _activeCall.value = session
 
         viewModelScope.launch {
             firestoreChatService.startCallSignal(session)
-            delay(1500)
-            if (_activeCall.value?.callId == callId) {
-                _activeCall.value = _activeCall.value?.copy(status = CallStatus.CONNECTED)
-                startCallTimer()
-            }
+            startRingingCountdown(callId, timeoutSec, isIncoming = false)
         }
     }
 
     fun startVideoCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
         val chId = channelId ?: _currentChannel.value
         val callId = "call_${System.currentTimeMillis()}"
+        val timeoutSec = _callTimeoutMinutes.value * 60
+        val isGroup = chId != "general" && !chId.startsWith("directo-")
+        val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
+        val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
+
         val session = CallSession(
             callId = callId,
             channelId = chId,
             peerName = peerName,
             peerEmail = peerEmail,
             isVideo = true,
-            status = CallStatus.RINGING
+            status = CallStatus.RINGING,
+            isIncoming = false,
+            callerName = _authUiState.value.currentUser?.displayName ?: "Alex González",
+            callerEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com",
+            groupName = grpName,
+            ringSecondsLeft = timeoutSec,
+            maxRingSeconds = timeoutSec
         )
         _activeCall.value = session
 
         viewModelScope.launch {
             firestoreChatService.startCallSignal(session)
-            delay(1800)
-            if (_activeCall.value?.callId == callId) {
-                _activeCall.value = _activeCall.value?.copy(status = CallStatus.CONNECTED)
-                startCallTimer()
+            startRingingCountdown(callId, timeoutSec, isIncoming = false)
+        }
+    }
+
+    /**
+     * Simula o recibe una llamada entrante (de voz o video) desde otro usuario o grupo
+     */
+    fun simulateIncomingCall(
+        peerName: String = "Sofia Martínez",
+        peerEmail: String = "sofia.m@cloud.io",
+        isVideo: Boolean = true,
+        groupName: String? = null,
+        channelId: String? = null
+    ) {
+        val chId = channelId ?: _currentChannel.value
+        val callId = "call_${System.currentTimeMillis()}"
+        val timeoutSec = _callTimeoutMinutes.value * 60
+
+        val session = CallSession(
+            callId = callId,
+            channelId = chId,
+            peerName = peerName,
+            peerEmail = peerEmail,
+            isVideo = isVideo,
+            status = CallStatus.RINGING,
+            isIncoming = true,
+            callerName = peerName,
+            callerEmail = peerEmail,
+            groupName = groupName,
+            ringSecondsLeft = timeoutSec,
+            maxRingSeconds = timeoutSec
+        )
+        _activeCall.value = session
+
+        // Notificación push enriquecida con botones Responder y Rechazar
+        ChatNotificationManager.showIncomingCallNotification(
+            context = getApplication(),
+            callId = callId,
+            channelId = chId,
+            callerName = peerName,
+            groupName = groupName,
+            isVideo = isVideo,
+            timeoutMinutes = _callTimeoutMinutes.value
+        )
+
+        startRingingCountdown(callId, timeoutSec, isIncoming = true)
+    }
+
+    /**
+     * El usuario presiona el Botón Verde (Responder)
+     */
+    fun answerIncomingCall() {
+        val call = _activeCall.value ?: return
+        ringCountdownJob?.cancel()
+        ringCountdownJob = null
+        ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+
+        _activeCall.value = call.copy(
+            status = CallStatus.CONNECTED,
+            durationSeconds = 0,
+            isTimedOut = false
+        )
+        startCallTimer()
+    }
+
+    /**
+     * El usuario presiona el Botón Rojo (No responder / Rechazar)
+     */
+    fun rejectIncomingCall() {
+        val call = _activeCall.value ?: return
+        ringCountdownJob?.cancel()
+        ringCountdownJob = null
+        ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+
+        val chId = call.channelId
+        val callId = call.callId
+        val peer = call.callerName.ifBlank { call.peerName }
+        val isVideo = call.isVideo
+        _activeCall.value = null
+
+        viewModelScope.launch {
+            firestoreChatService.endCallSignal(chId, callId)
+            val summaryText = if (isVideo) {
+                "📵 Videollamada rechazada de $peer"
+            } else {
+                "📵 Llamada de voz rechazada de $peer"
+            }
+            val user = _authUiState.value.currentUser
+            val msg = ChatMessage(
+                channelId = chId,
+                senderName = user?.displayName ?: "Alex González",
+                senderEmail = user?.email ?: "gonzalez24029@gmail.com",
+                text = summaryText,
+                mediaType = if (isVideo) "call_video" else "call_voice",
+                callDurationSec = 0,
+                isSyncedFirestore = true
+            )
+            val localId = repo.insertChatMessage(msg)
+            firestoreChatService.sendMessage(msg.copy(id = localId))
+        }
+    }
+
+    private fun startRingingCountdown(callId: String, totalSeconds: Int, isIncoming: Boolean) {
+        ringCountdownJob?.cancel()
+        ringCountdownJob = viewModelScope.launch {
+            var remaining = totalSeconds
+            while (isActive && remaining > 0) {
+                delay(1000)
+                remaining--
+                val current = _activeCall.value
+                if (current == null || current.callId != callId || current.status != CallStatus.RINGING) {
+                    break
+                }
+                _activeCall.value = current.copy(ringSecondsLeft = remaining)
+            }
+
+            // Si se agotó el tiempo y nadie respondió:
+            val current = _activeCall.value
+            if (current != null && current.callId == callId && current.status == CallStatus.RINGING) {
+                handleCallTimedOut(current)
+            }
+        }
+    }
+
+    private fun handleCallTimedOut(call: CallSession) {
+        ringCountdownJob?.cancel()
+        ringCountdownJob = null
+
+        // Congelar y marcar llamada como expirada / sin respuesta
+        _activeCall.value = call.copy(
+            status = CallStatus.ENDED,
+            isTimedOut = true,
+            ringSecondsLeft = 0
+        )
+
+        val chId = call.channelId
+        val callId = call.callId
+        val caller = if (call.isIncoming) call.callerName.ifBlank { call.peerName } else call.peerName
+        val group = call.groupName
+        val isVideo = call.isVideo
+        val timeoutMins = _callTimeoutMinutes.value
+
+        // Cancelar notificación de llamada entrante y lanzar Notificación de Llamada Perdida
+        ChatNotificationManager.cancelCallNotification(getApplication(), callId)
+        ChatNotificationManager.showMissedCallNotification(
+            context = getApplication(),
+            callerName = caller,
+            groupName = group,
+            isVideo = isVideo,
+            timeoutMinutes = timeoutMins
+        )
+
+        viewModelScope.launch {
+            firestoreChatService.endCallSignal(chId, callId)
+
+            val callerDisplay = if (!group.isNullOrBlank()) "$caller en \"$group\"" else caller
+            val summaryText = if (isVideo) {
+                "📵 Videollamada perdida de $callerDisplay • Nadie respondió tras $timeoutMins min"
+            } else {
+                "📵 Llamada de voz perdida de $callerDisplay • Nadie respondió tras $timeoutMins min"
+            }
+
+            val user = _authUiState.value.currentUser
+            val msg = ChatMessage(
+                channelId = chId,
+                senderName = user?.displayName ?: "Alex González",
+                senderEmail = user?.email ?: "gonzalez24029@gmail.com",
+                text = summaryText,
+                mediaType = if (isVideo) "call_video" else "call_voice",
+                callDurationSec = 0,
+                isSyncedFirestore = true
+            )
+            val localId = repo.insertChatMessage(msg)
+            firestoreChatService.sendMessage(msg.copy(id = localId))
+
+            // Esperar 3 segundos para que el usuario aprecie el estado congelado y luego cerrar overlay
+            delay(3000)
+            if (_activeCall.value?.callId == callId && _activeCall.value?.isTimedOut == true) {
+                _activeCall.value = null
             }
         }
     }
@@ -2158,6 +2376,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val call = _activeCall.value ?: return
         callTimerJob?.cancel()
         callTimerJob = null
+        ringCountdownJob?.cancel()
+        ringCountdownJob = null
+        ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+
         val duration = call.durationSeconds
         val chId = call.channelId
         val callId = call.callId

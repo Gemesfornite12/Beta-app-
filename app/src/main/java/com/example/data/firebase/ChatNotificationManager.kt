@@ -25,11 +25,17 @@ object ChatNotificationManager {
 
     const val CHANNEL_ID_CHAT = "chat_messages_channel"
     const val CHANNEL_ID_GROUPS = "group_messages_channel"
+    const val CHANNEL_ID_CALLS = "calls_channel"
+    const val CHANNEL_ID_MISSED_CALLS = "missed_calls_channel"
 
     const val EXTRA_CHANNEL_ID = "extra_target_channel_id"
     const val EXTRA_ROUTE = "extra_target_route"
     const val EXTRA_SENDER_NAME = "extra_sender_name"
+    const val EXTRA_CALL_ID = "extra_call_id"
+    const val EXTRA_CALL_ACTION = "extra_call_action"
     const val ACTION_OPEN_CHAT = "com.example.action.OPEN_CHAT"
+    const val ACTION_ANSWER_CALL = "com.example.action.ANSWER_CALL"
+    const val ACTION_REJECT_CALL = "com.example.action.REJECT_CALL"
 
     private const val PREFS_NAME = "fcm_push_prefs"
     private const val KEY_FCM_TOKEN = "cached_fcm_token"
@@ -85,8 +91,39 @@ object ChatNotificationManager {
                 lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
             }
 
+            // Canal para llamadas de voz y videollamadas entrantes
+            val callsChannel = NotificationChannel(
+                CHANNEL_ID_CALLS,
+                "Llamadas y Videollamadas",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notificaciones y alertas de llamadas y videollamadas entrantes"
+                enableLights(true)
+                lightColor = 0xFF10B981.toInt()
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 800, 500, 800, 500, 800)
+                setShowBadge(true)
+                lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+            }
+
+            // Canal para llamadas perdidas
+            val missedCallsChannel = NotificationChannel(
+                CHANNEL_ID_MISSED_CALLS,
+                "Llamadas Perdidas",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Avisos de llamadas no contestadas o expiradas"
+                enableLights(true)
+                lightColor = 0xFFEF4444.toInt()
+                enableVibration(true)
+                setShowBadge(true)
+                lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+            }
+
             notificationManager.createNotificationChannel(chatChannel)
             notificationManager.createNotificationChannel(groupsChannel)
+            notificationManager.createNotificationChannel(callsChannel)
+            notificationManager.createNotificationChannel(missedCallsChannel)
             Log.d(TAG, "Notification channels initialized successfully")
         }
 
@@ -208,6 +245,179 @@ object ChatNotificationManager {
             NotificationManagerCompat.from(context).cancel(notificationId)
         } catch (e: Exception) {
             Log.w(TAG, "Error cancelling notification: ${e.message}")
+        }
+    }
+
+    /**
+     * Muestra una notificación de llamada entrante (voz o video) con acciones Responder (verde) y Rechazar (rojo).
+     */
+    fun showIncomingCallNotification(
+        context: Context,
+        callId: String,
+        channelId: String,
+        callerName: String,
+        groupName: String?,
+        isVideo: Boolean,
+        timeoutMinutes: Int = 5
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permissionCheck = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+            if (permissionCheck != PackageManager.PERMISSION_GRANTED) return
+        }
+
+        createNotificationChannels(context)
+
+        // Intent de Responder
+        val answerIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_ANSWER_CALL
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_CALL_ID, callId)
+            putExtra(EXTRA_CHANNEL_ID, channelId)
+            putExtra(EXTRA_CALL_ACTION, "ANSWER")
+            putExtra(EXTRA_ROUTE, "chat")
+        }
+        val answerPendingIntent = PendingIntent.getActivity(
+            context,
+            (callId.hashCode() and 0x3FFF) + 1,
+            answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Intent de Rechazar / No responder
+        val rejectIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_REJECT_CALL
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_CALL_ID, callId)
+            putExtra(EXTRA_CHANNEL_ID, channelId)
+            putExtra(EXTRA_CALL_ACTION, "REJECT")
+        }
+        val rejectPendingIntent = PendingIntent.getActivity(
+            context,
+            (callId.hashCode() and 0x3FFF) + 2,
+            rejectIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = if (isVideo) "📹 Videollamada entrante" else "📞 Llamada de voz entrante"
+        val subtitle = if (!groupName.isNullOrBlank()) {
+            "$callerName en $groupName"
+        } else {
+            callerName
+        }
+        val contentText = "$subtitle te está llamando • Tiempo para responder: $timeoutMinutes min"
+
+        val defaultRingtone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_CALLS)
+            .setSmallIcon(R.drawable.ic_stat_chat)
+            .setContentTitle(title)
+            .setContentText(contentText)
+            .setSubText(if (!groupName.isNullOrBlank()) groupName else "Llamada entrante")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .setBigContentTitle(title)
+                    .bigText(contentText)
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setOngoing(true)
+            .setSound(defaultRingtone)
+            .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
+            .setContentIntent(answerPendingIntent)
+            .addAction(
+                R.drawable.ic_stat_chat,
+                "✓ Responder",
+                answerPendingIntent
+            )
+            .addAction(
+                R.drawable.ic_stat_chat,
+                "✕ Rechazar",
+                rejectPendingIntent
+            )
+
+        val notificationId = (callId.hashCode() and 0x7FFFFFFF)
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+            Log.d(TAG, "Incoming call notification displayed for call $callId from $callerName")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to display incoming call notification: ${e.message}")
+        }
+    }
+
+    /**
+     * Muestra notificación de llamada perdida cuando se agota el tiempo de espera o no se contesta.
+     */
+    fun showMissedCallNotification(
+        context: Context,
+        callerName: String,
+        groupName: String?,
+        isVideo: Boolean,
+        timeoutMinutes: Int
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permissionCheck = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+            if (permissionCheck != PackageManager.PERMISSION_GRANTED) return
+        }
+
+        createNotificationChannels(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_CHAT
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_ROUTE, "chat")
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            System.currentTimeMillis().toInt() and 0xFFFF,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val callerDisplay = if (!groupName.isNullOrBlank()) "$callerName en $groupName" else callerName
+        val title = if (isVideo) "📹 Videollamada perdida" else "📵 Llamada de voz perdida"
+        val message = "Llamada de $callerDisplay sin respuesta tras $timeoutMinutes min."
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_MISSED_CALLS)
+            .setSmallIcon(R.drawable.ic_stat_chat)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setSubText("Llamada no contestada")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .setBigContentTitle(title)
+                    .bigText(message)
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+
+        val notificationId = (System.currentTimeMillis().toInt() and 0x7FFFFFFF)
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+            Log.d(TAG, "Missed call notification displayed for $callerName")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to display missed call notification: ${e.message}")
+        }
+    }
+
+    /**
+     * Cancela la notificación de llamada activa.
+     */
+    fun cancelCallNotification(context: Context, callId: String) {
+        val notificationId = (callId.hashCode() and 0x7FFFFFFF)
+        try {
+            NotificationManagerCompat.from(context).cancel(notificationId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error cancelling call notification: ${e.message}")
         }
     }
 
