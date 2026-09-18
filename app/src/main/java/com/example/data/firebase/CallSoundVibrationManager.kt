@@ -52,8 +52,14 @@ object CallSoundVibrationManager {
 
     /**
      * Inicia el sonido de timbre y la vibración en bucle para una llamada entrante.
+     * @param ringtoneMode 0 = Tono Melódico Rítmico (Raw Audio), 1 = Sistema Android, 2 = Frecuencia Digital Sintetizada
      */
-    fun startIncomingCallAlert(context: Context, soundEnabled: Boolean = true, vibrationEnabled: Boolean = true) {
+    fun startIncomingCallAlert(
+        context: Context,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true,
+        ringtoneMode: Int = 0
+    ) {
         stopAll(context)
         isPlayingIncoming = true
 
@@ -62,32 +68,80 @@ object CallSoundVibrationManager {
             startRepeatingVibration(context)
         }
 
-        // 2. Reproducción de Sonido de Timbre en bucle
+        // 2. Reproducción de Sonido de Timbre en bucle según modo
         if (soundEnabled) {
-            try {
-                val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
-                if (ringtoneUri != null) {
-                    mediaPlayer = MediaPlayer().apply {
-                        setDataSource(context, ringtoneUri)
-                        setAudioAttributes(
-                            AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                .build()
-                        )
-                        isLooping = true
-                        prepare()
-                        start()
+            when (ringtoneMode) {
+                0 -> {
+                    // Modo 0: Tono Rítmico Melódico Custom (res/raw/incoming_call_ringtone.wav)
+                    try {
+                        val rawId = com.example.R.raw.incoming_call_ringtone
+                        mediaPlayer = MediaPlayer.create(context, rawId)?.apply {
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                    .build()
+                            )
+                            isLooping = true
+                            start()
+                        }
+                        Log.d(TAG, "Custom raw incoming ringtone started")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed playing raw ringtone, falling back to system: ${e.message}")
+                        playSystemRingtone(context)
                     }
-                    Log.d(TAG, "Incoming call ringtone started via MediaPlayer")
-                } else {
-                    startFallbackRingtone(context)
+                }
+                2 -> {
+                    // Modo 2: Tono de Frecuencia Digital Sintetizado
+                    playSyntheticDigitalRingtone(context)
+                }
+                else -> {
+                    // Modo 1 (default): Tono de Sistema Android
+                    playSystemRingtone(context)
+                }
+            }
+        }
+    }
+
+    private fun playSystemRingtone(context: Context) {
+        try {
+            val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+            if (ringtoneUri != null) {
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(context, ringtoneUri)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    isLooping = true
+                    prepare()
+                    start()
+                }
+                Log.d(TAG, "System incoming call ringtone started via MediaPlayer")
+            } else {
+                startFallbackRingtone(context)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaPlayer system ringtone failed, falling back: ${e.message}")
+            startFallbackRingtone(context)
+        }
+    }
+
+    private fun playSyntheticDigitalRingtone(context: Context) {
+        dialToneJob = CoroutineScope(Dispatchers.Default).launch {
+            try {
+                val toneGen = ToneGenerator(AudioManager.STREAM_RING, 85)
+                toneGenerator = toneGen
+                while (isActive && isPlayingIncoming) {
+                    toneGen.startTone(ToneGenerator.TONE_CDMA_CALL_SIGNAL_ISDN_NORMAL, 1000)
+                    delay(1200)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "MediaPlayer failed, falling back to RingtoneManager: ${e.message}")
-                startFallbackRingtone(context)
+                Log.w(TAG, "Synthetic digital ringtone exception: ${e.message}")
             }
         }
     }

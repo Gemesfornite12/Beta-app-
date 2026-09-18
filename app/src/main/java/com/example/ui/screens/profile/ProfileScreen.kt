@@ -1,5 +1,7 @@
 package com.example.ui.screens.profile
 
+import com.example.data.model.ChannelNotificationPreference
+
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -50,6 +52,13 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -97,12 +106,18 @@ fun ProfileScreen(
     val callTimeoutMinutes by viewModel.callTimeoutMinutes.collectAsState()
     val callSoundEnabled by viewModel.callSoundEnabled.collectAsState()
     val callVibrationEnabled by viewModel.callVibrationEnabled.collectAsState()
+    val callRingtoneMode by viewModel.callRingtoneMode.collectAsState()
+    val availableChannels by viewModel.availableChannels.collectAsState()
+    val channelNotificationPrefs by viewModel.channelNotificationPrefs.collectAsState()
     val user = authState.currentUser
 
     var isEditingProfile by remember { mutableStateOf(false) }
     var editNameInput by remember(user?.displayName) { mutableStateOf(user?.displayName ?: "Alex González") }
     var editAvatarInput by remember(user?.avatarUrl) { mutableStateOf(user?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80") }
     var profileSavedFeedback by remember { mutableStateOf(false) }
+
+    var notificationFilterTab by remember { mutableStateOf(0) }
+    var channelSearchQuery by remember { mutableStateOf("") }
 
     // Launcher del selector de fotos del sistema / galería local de Android
     val profilePhotoPickerLauncher = rememberLauncherForActivityResult(
@@ -826,6 +841,49 @@ fun ProfileScreen(
                         )
                     }
 
+                    HorizontalDivider(color = if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 6.dp))
+
+                    // Selector de Tono de Llamada Entrante
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Tono de Llamada Entrante:",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.sp,
+                            color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val options = listOf(
+                                0 to "🎵 Melódico (Beat)",
+                                1 to "🔔 Sistema Android",
+                                2 to "⚡ Frecuencia Digital"
+                            )
+                            options.forEach { (mode, label) ->
+                                val isSelected = callRingtoneMode == mode
+                                Surface(
+                                    onClick = { viewModel.setCallRingtoneMode(mode) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) Color(0xFF6366F1) else (if (isDarkTheme) Color(0xFF334155) else Color(0xFFF1F5F9)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("ringtone_option_$mode")
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) Color.White else (if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF475569)),
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
@@ -864,9 +922,271 @@ fun ProfileScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Icon(Icons.Default.Notifications, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Simular Llamada", fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = Color.White)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // CARD: Preferencias de Notificaciones por Grupo y Chat Privado
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .testTag("card_channel_notification_settings"),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDarkTheme) Color(0xFF1E293B) else Color.White
+                ),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NotificationsActive,
+                            contentDescription = null,
+                            tint = Color(0xFF8B5CF6),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Notificaciones por Chat y Grupo",
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDarkTheme) Color.White else Color(0xFF0F172A),
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                text = "Activa o desactiva alertas de mensajes, voz y video para cada chat",
+                                color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Selector de filtro: Todos / Grupos / Chats Privados
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("Todos (${availableChannels.size})", "Grupos", "Privados").forEachIndexed { idx, label ->
+                            val isSel = notificationFilterTab == idx
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) Color(0xFF8B5CF6) else if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { notificationFilterTab = idx }
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isSel) Color.White else if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Buscador rápido
+                    OutlinedTextField(
+                        value = channelSearchQuery,
+                        onValueChange = { channelSearchQuery = it },
+                        placeholder = { Text("Buscar chat o grupo...", fontSize = 12.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF8B5CF6),
+                            unfocusedBorderColor = if (isDarkTheme) Color(0xFF475569) else Color(0xFFCBD5E1)
+                        ),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val filteredChannels = availableChannels.filter { chan ->
+                        val matchesFilter = when (notificationFilterTab) {
+                            1 -> chan.isGroup
+                            2 -> !chan.isGroup
+                            else -> true
+                        }
+                        val matchesSearch = channelSearchQuery.isBlank() || chan.name.contains(channelSearchQuery, ignoreCase = true)
+                        matchesFilter && matchesSearch
+                    }
+
+                    if (filteredChannels.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No se encontraron chats o grupos",
+                                fontSize = 12.sp,
+                                color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            filteredChannels.forEach { channel ->
+                                val pref = channelNotificationPrefs[channel.id] ?: ChannelNotificationPreference(channel.id)
+
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        // Cabecera del chat
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = channel.iconEmoji.ifBlank { if (channel.isGroup) "👥" else "💬" },
+                                                fontSize = 15.sp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = channel.name,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = if (isDarkTheme) Color.White else Color(0xFF0F172A),
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (channel.isGroup) Color(0xFF7C3AED).copy(alpha = 0.2f) else Color(0xFF0284C7).copy(alpha = 0.2f)
+                                            ) {
+                                                Text(
+                                                    text = if (channel.isGroup) "Grupo" else "Privado",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (channel.isGroup) Color(0xFFC4B5FD) else Color(0xFF38BDF8),
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        // Controles para Mensajes, Llamadas de Voz, Videollamadas
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Chip / Toggle Mensajes
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (pref.notifyMessages) Color(0xFF10B981).copy(alpha = 0.15f) else if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { viewModel.toggleChannelNotifyMessages(channel.id) }
+                                                    .testTag("chip_notify_msg_${channel.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Chat,
+                                                        contentDescription = null,
+                                                        tint = if (pref.notifyMessages) Color(0xFF10B981) else Color.Gray,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = if (pref.notifyMessages) "Msgs: On" else "Msgs: Off",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (pref.notifyMessages) Color(0xFF10B981) else Color.Gray
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.width(4.dp))
+
+                                            // Chip / Toggle Llamadas Voz
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (pref.notifyVoiceCalls) Color(0xFF3B82F6).copy(alpha = 0.15f) else if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { viewModel.toggleChannelNotifyVoiceCalls(channel.id) }
+                                                    .testTag("chip_notify_voice_${channel.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Call,
+                                                        contentDescription = null,
+                                                        tint = if (pref.notifyVoiceCalls) Color(0xFF3B82F6) else Color.Gray,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = if (pref.notifyVoiceCalls) "Voz: On" else "Voz: Off",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (pref.notifyVoiceCalls) Color(0xFF3B82F6) else Color.Gray
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.width(4.dp))
+
+                                            // Chip / Toggle Videollamadas
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (pref.notifyVideoCalls) Color(0xFF8B5CF6).copy(alpha = 0.15f) else if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { viewModel.toggleChannelNotifyVideoCalls(channel.id) }
+                                                    .testTag("chip_notify_video_${channel.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Videocam,
+                                                        contentDescription = null,
+                                                        tint = if (pref.notifyVideoCalls) Color(0xFF8B5CF6) else Color.Gray,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = if (pref.notifyVideoCalls) "Video: On" else "Video: Off",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (pref.notifyVideoCalls) Color(0xFF8B5CF6) else Color.Gray
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

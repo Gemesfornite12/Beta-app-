@@ -142,6 +142,21 @@ object ChatNotificationManager {
         }
     }
 
+    fun isMessageNotificationEnabled(context: Context, channelId: String): Boolean {
+        val prefs = context.getSharedPreferences("channel_notification_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean("notify_msg_$channelId", true)
+    }
+
+    fun isVoiceCallNotificationEnabled(context: Context, channelId: String): Boolean {
+        val prefs = context.getSharedPreferences("channel_notification_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean("notify_voice_$channelId", true)
+    }
+
+    fun isVideoCallNotificationEnabled(context: Context, channelId: String): Boolean {
+        val prefs = context.getSharedPreferences("channel_notification_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean("notify_video_$channelId", true)
+    }
+
     /**
      * Determina si debe dispararse una notificación de sistema al recibir un mensaje:
      * Dispara si la app está en segundo plano o si el usuario no está en ese chat actualmente.
@@ -164,6 +179,11 @@ object ChatNotificationManager {
         isGroup: Boolean = false,
         timestamp: Long = System.currentTimeMillis()
     ) {
+        // Verificar preferencia del canal para mensajes
+        if (!isMessageNotificationEnabled(context, channelId)) {
+            Log.d(TAG, "Notificaciones de mensaje desactivadas para canal: $channelId")
+            return
+        }
         // Verificar permisos en Android 13+ (TIRAMISU)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val permissionCheck = ContextCompat.checkSelfPermission(
@@ -268,6 +288,11 @@ object ChatNotificationManager {
         isVideo: Boolean,
         timeoutMinutes: Int = 5
     ) {
+        val allowed = if (isVideo) isVideoCallNotificationEnabled(context, channelId) else isVoiceCallNotificationEnabled(context, channelId)
+        if (!allowed) {
+            Log.d(TAG, "Notificación de ${if (isVideo) "videollamada" else "llamada de voz"} desactivada para el canal $channelId")
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val permissionCheck = ContextCompat.checkSelfPermission(
                 context,
@@ -358,7 +383,16 @@ object ChatNotificationManager {
 
         // Reproducir timbre en loop y vibración continua mientras timbra
         try {
-            CallSoundVibrationManager.startIncomingCallAlert(context)
+            val appPrefs = context.getSharedPreferences("app_settings_prefs", Context.MODE_PRIVATE)
+            val soundEnabled = appPrefs.getBoolean("call_sound_enabled", true)
+            val vibEnabled = appPrefs.getBoolean("call_vibration_enabled", true)
+            val ringtoneMode = appPrefs.getInt("call_ringtone_mode", 0)
+            CallSoundVibrationManager.startIncomingCallAlert(
+                context = context,
+                soundEnabled = soundEnabled,
+                vibrationEnabled = vibEnabled,
+                ringtoneMode = ringtoneMode
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start call sound & vibration: ${e.message}")
         }

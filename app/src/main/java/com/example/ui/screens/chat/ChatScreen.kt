@@ -79,6 +79,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -117,6 +118,11 @@ import coil.compose.AsyncImage
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
+import com.example.data.model.ChannelNotificationPreference
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentItem
@@ -151,11 +157,13 @@ fun ChatScreen(
     val archivedChannelIds by viewModel.archivedChannelIds.collectAsState()
     val groupDeletionCountdowns by viewModel.groupDeletionCountdownSeconds.collectAsState()
     val allUsers by viewModel.allUsers.collectAsState()
+    val channelNotificationPrefs by viewModel.channelNotificationPrefs.collectAsState()
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var showAttachDialog by remember { mutableStateOf(false) }
+    var showChatNotificationPrefsDialog by remember { mutableStateOf(false) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var previewMediaUrl by remember { mutableStateOf<String?>(null) }
     var previewMediaType by remember { mutableStateOf<String?>(null) }
@@ -441,6 +449,21 @@ fun ChatScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
+                        }
+
+                        // Botón para Preferencias de Notificaciones de este Chat
+                        IconButton(
+                            onClick = { showChatNotificationPrefsDialog = true },
+                            modifier = Modifier.testTag("btn_chat_notification_prefs")
+                        ) {
+                            val currentPref = channelNotificationPrefs[currentChannel] ?: ChannelNotificationPreference(currentChannel)
+                            val hasAllDisabled = !currentPref.notifyMessages && !currentPref.notifyVoiceCalls && !currentPref.notifyVideoCalls
+                            Icon(
+                                imageVector = if (hasAllDisabled) Icons.Default.NotificationsOff else Icons.Default.NotificationsActive,
+                                contentDescription = "Ajustes de Notificaciones",
+                                tint = if (hasAllDisabled) Color(0xFFEF4444) else Color(0xFF8B5CF6),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
 
                         // Botón de Llamada de Voz (con verificación de permisos)
@@ -1366,6 +1389,104 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showChatNotificationPrefsDialog) {
+        val currentPref = channelNotificationPrefs[currentChannel] ?: ChannelNotificationPreference(currentChannel)
+        AlertDialog(
+            onDismissRequest = { showChatNotificationPrefsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = null,
+                        tint = Color(0xFF8B5CF6),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Preferencias de Notificación",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Ajusta las alertas para ${activeChannelInfo?.name ?: currentChannel}:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8)
+                    )
+
+                    // Switch Mensajes
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Chat, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Notificaciones de Mensajes", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Switch(
+                            checked = currentPref.notifyMessages,
+                            onCheckedChange = { viewModel.toggleChannelNotifyMessages(currentChannel) },
+                            modifier = Modifier.testTag("switch_chat_notify_msg")
+                        )
+                    }
+
+                    HorizontalDivider(color = Color(0xFF334155))
+
+                    // Switch Llamadas de Voz
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Call, contentDescription = null, tint = Color(0xFF3B82F6), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Alertas de Llamadas de Voz", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Switch(
+                            checked = currentPref.notifyVoiceCalls,
+                            onCheckedChange = { viewModel.toggleChannelNotifyVoiceCalls(currentChannel) },
+                            modifier = Modifier.testTag("switch_chat_notify_voice")
+                        )
+                    }
+
+                    HorizontalDivider(color = Color(0xFF334155))
+
+                    // Switch Videollamadas
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Videocam, contentDescription = null, tint = Color(0xFF8B5CF6), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Alertas de Videollamadas", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Switch(
+                            checked = currentPref.notifyVideoCalls,
+                            onCheckedChange = { viewModel.toggleChannelNotifyVideoCalls(currentChannel) },
+                            modifier = Modifier.testTag("switch_chat_notify_video")
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChatNotificationPrefsDialog = false }) {
+                    Text("Guardar y Cerrar", fontWeight = FontWeight.Bold, color = Color(0xFF8B5CF6))
+                }
+            },
+            containerColor = Color(0xFF1E293B),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
     }
 }
 

@@ -120,3 +120,10 @@ data class CallSession(
     val maxRingSeconds: Int = 300,
     val isTimedOut: Boolean = false
 )
+
+data class ChannelNotificationPreference(
+    val channelId: String,
+    val notifyMessages: Boolean = true,
+    val notifyVoiceCalls: Boolean = true,
+    val notifyVideoCalls: Boolean = true
+)

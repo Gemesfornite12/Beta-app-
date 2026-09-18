@@ -19,6 +19,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
 import com.example.data.model.CallStatus
+import com.example.data.model.ChannelNotificationPreference
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
@@ -262,6 +263,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _callVibrationEnabled = MutableStateFlow(true)
     val callVibrationEnabled: StateFlow<Boolean> = _callVibrationEnabled.asStateFlow()
 
+    // Modo de Tono de Llamada Entrante (0 = Melódico Rítmico, 1 = Estándar Sistema, 2 = Sintetizado Digital)
+    private val _callRingtoneMode = MutableStateFlow(0)
+    val callRingtoneMode: StateFlow<Int> = _callRingtoneMode.asStateFlow()
+
+    // Preferencias de Notificaciones por Canal/Grupo (Mensajes, Llamadas de Voz, Videollamadas)
+    private val _channelNotificationPrefs = MutableStateFlow<Map<String, ChannelNotificationPreference>>(emptyMap())
+    val channelNotificationPrefs: StateFlow<Map<String, ChannelNotificationPreference>> = _channelNotificationPrefs.asStateFlow()
+
     init {
         val db = AppDatabase.getInstance(application)
         repo = OmniRepository(db)
@@ -297,8 +306,27 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             _callTimeoutMinutes.value = if (savedTimeout in listOf(1, 3, 4, 5)) savedTimeout else 5
             _callSoundEnabled.value = prefs.getBoolean("call_sound_enabled", true)
             _callVibrationEnabled.value = prefs.getBoolean("call_vibration_enabled", true)
+            _callRingtoneMode.value = prefs.getInt("call_ringtone_mode", 0)
         } catch (e: Exception) {
             Log.e("OmniViewModel", "Error loading call settings preferences: ${e.message}")
+        }
+
+        // Cargar preferencias de notificaciones por canal
+        try {
+            val chanPrefs = application.getSharedPreferences("channel_notification_prefs", android.content.Context.MODE_PRIVATE)
+            val map = mutableMapOf<String, ChannelNotificationPreference>()
+            for (key in chanPrefs.all.keys) {
+                if (key.startsWith("notify_msg_")) {
+                    val chId = key.substringAfter("notify_msg_")
+                    val msg = chanPrefs.getBoolean("notify_msg_$chId", true)
+                    val voice = chanPrefs.getBoolean("notify_voice_$chId", true)
+                    val video = chanPrefs.getBoolean("notify_video_$chId", true)
+                    map[chId] = ChannelNotificationPreference(chId, msg, voice, video)
+                }
+            }
+            _channelNotificationPrefs.value = map
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error loading channel notification prefs: ${e.message}")
         }
 
         viewModelScope.launch {
@@ -2137,16 +2165,71 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setCallRingtoneMode(mode: Int) {
+        _callRingtoneMode.value = mode
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putInt("call_ringtone_mode", mode).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving call ringtone mode preference: ${e.message}")
+        }
+    }
+
     fun testCallSoundAndVibration() {
         CallSoundVibrationManager.startIncomingCallAlert(
             context = getApplication(),
             soundEnabled = _callSoundEnabled.value,
-            vibrationEnabled = _callVibrationEnabled.value
+            vibrationEnabled = _callVibrationEnabled.value,
+            ringtoneMode = _callRingtoneMode.value
         )
         viewModelScope.launch {
             delay(3500)
             CallSoundVibrationManager.stopAll(getApplication())
         }
+    }
+
+    // GESTIÓN DE NOTIFICACIONES POR CANAL / CHAT INDIVIDUAL O GRUPAL
+    fun getChannelNotificationPref(channelId: String): ChannelNotificationPreference {
+        return _channelNotificationPrefs.value[channelId] ?: ChannelNotificationPreference(channelId)
+    }
+
+    fun updateChannelNotificationPref(
+        channelId: String,
+        notifyMessages: Boolean,
+        notifyVoiceCalls: Boolean,
+        notifyVideoCalls: Boolean
+    ) {
+        val newPref = ChannelNotificationPreference(channelId, notifyMessages, notifyVoiceCalls, notifyVideoCalls)
+        val updatedMap = _channelNotificationPrefs.value.toMutableMap()
+        updatedMap[channelId] = newPref
+        _channelNotificationPrefs.value = updatedMap
+
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("channel_notification_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putBoolean("notify_msg_$channelId", notifyMessages)
+                putBoolean("notify_voice_$channelId", notifyVoiceCalls)
+                putBoolean("notify_video_$channelId", notifyVideoCalls)
+                apply()
+            }
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving channel notification pref: ${e.message}")
+        }
+    }
+
+    fun toggleChannelNotifyMessages(channelId: String) {
+        val current = getChannelNotificationPref(channelId)
+        updateChannelNotificationPref(channelId, !current.notifyMessages, current.notifyVoiceCalls, current.notifyVideoCalls)
+    }
+
+    fun toggleChannelNotifyVoiceCalls(channelId: String) {
+        val current = getChannelNotificationPref(channelId)
+        updateChannelNotificationPref(channelId, current.notifyMessages, !current.notifyVoiceCalls, current.notifyVideoCalls)
+    }
+
+    fun toggleChannelNotifyVideoCalls(channelId: String) {
+        val current = getChannelNotificationPref(channelId)
+        updateChannelNotificationPref(channelId, current.notifyMessages, current.notifyVoiceCalls, !current.notifyVideoCalls)
     }
 
     fun startVoiceCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
@@ -2249,7 +2332,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         CallSoundVibrationManager.startIncomingCallAlert(
             context = getApplication(),
             soundEnabled = _callSoundEnabled.value,
-            vibrationEnabled = _callVibrationEnabled.value
+            vibrationEnabled = _callVibrationEnabled.value,
+            ringtoneMode = _callRingtoneMode.value
         )
 
         // Notificación push enriquecida con botones Responder y Rechazar
