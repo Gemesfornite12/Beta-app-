@@ -9,6 +9,7 @@ import com.example.ai.AiSongResult
 import com.example.audio.AudioSynthEngine
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.ChatNotificationManager
+import com.example.data.firebase.CallSoundVibrationManager
 import com.example.data.firebase.FcmTokenManager
 import com.example.data.firebase.FirestoreChatService
 import com.example.data.firebase.FirestoreConnectionStatus
@@ -254,6 +255,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _callTimeoutMinutes = MutableStateFlow(5)
     val callTimeoutMinutes: StateFlow<Int> = _callTimeoutMinutes.asStateFlow()
 
+    // Configuración de Sonido y Vibración de Llamadas
+    private val _callSoundEnabled = MutableStateFlow(true)
+    val callSoundEnabled: StateFlow<Boolean> = _callSoundEnabled.asStateFlow()
+
+    private val _callVibrationEnabled = MutableStateFlow(true)
+    val callVibrationEnabled: StateFlow<Boolean> = _callVibrationEnabled.asStateFlow()
+
     init {
         val db = AppDatabase.getInstance(application)
         repo = OmniRepository(db)
@@ -282,13 +290,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         )
 
-        // Cargar preferencia de tiempo de respuesta de llamadas
+        // Cargar preferencias de llamadas, sonido y vibración
         try {
             val prefs = application.getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
             val savedTimeout = prefs.getInt("call_timeout_minutes", 5)
             _callTimeoutMinutes.value = if (savedTimeout in listOf(1, 3, 4, 5)) savedTimeout else 5
+            _callSoundEnabled.value = prefs.getBoolean("call_sound_enabled", true)
+            _callVibrationEnabled.value = prefs.getBoolean("call_vibration_enabled", true)
         } catch (e: Exception) {
-            Log.e("OmniViewModel", "Error loading call timeout preference: ${e.message}")
+            Log.e("OmniViewModel", "Error loading call settings preferences: ${e.message}")
         }
 
         viewModelScope.launch {
@@ -2095,7 +2105,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // CALLING SYSTEM (Audio & Video Calling, Timeouts & Notifications)
+    // CALLING SYSTEM (Audio & Video Calling, Timeouts, Sounds, Vibrations & Notifications)
     fun setCallTimeoutMinutes(minutes: Int) {
         val validMin = if (minutes in listOf(1, 3, 4, 5)) minutes else 5
         _callTimeoutMinutes.value = validMin
@@ -2104,6 +2114,38 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             prefs.edit().putInt("call_timeout_minutes", validMin).apply()
         } catch (e: Exception) {
             Log.e("OmniViewModel", "Error saving call timeout: ${e.message}")
+        }
+    }
+
+    fun toggleCallSound(enabled: Boolean) {
+        _callSoundEnabled.value = enabled
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("call_sound_enabled", enabled).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving call sound preference: ${e.message}")
+        }
+    }
+
+    fun toggleCallVibration(enabled: Boolean) {
+        _callVibrationEnabled.value = enabled
+        try {
+            val prefs = getApplication<Application>().getSharedPreferences("app_settings_prefs", android.content.Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("call_vibration_enabled", enabled).apply()
+        } catch (e: Exception) {
+            Log.e("OmniViewModel", "Error saving call vibration preference: ${e.message}")
+        }
+    }
+
+    fun testCallSoundAndVibration() {
+        CallSoundVibrationManager.startIncomingCallAlert(
+            context = getApplication(),
+            soundEnabled = _callSoundEnabled.value,
+            vibrationEnabled = _callVibrationEnabled.value
+        )
+        viewModelScope.launch {
+            delay(3500)
+            CallSoundVibrationManager.stopAll(getApplication())
         }
     }
 
@@ -2130,6 +2172,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             maxRingSeconds = timeoutSec
         )
         _activeCall.value = session
+
+        // Iniciar tono de marcación / llamada saliente
+        CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
 
         viewModelScope.launch {
             firestoreChatService.startCallSignal(session)
@@ -2160,6 +2205,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             maxRingSeconds = timeoutSec
         )
         _activeCall.value = session
+
+        // Iniciar tono de marcación / llamada saliente
+        CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
 
         viewModelScope.launch {
             firestoreChatService.startCallSignal(session)
@@ -2197,6 +2245,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
         _activeCall.value = session
 
+        // Iniciar sonido de timbre y vibración continua
+        CallSoundVibrationManager.startIncomingCallAlert(
+            context = getApplication(),
+            soundEnabled = _callSoundEnabled.value,
+            vibrationEnabled = _callVibrationEnabled.value
+        )
+
         // Notificación push enriquecida con botones Responder y Rechazar
         ChatNotificationManager.showIncomingCallNotification(
             context = getApplication(),
@@ -2219,6 +2274,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.playCallConnected(getApplication())
 
         _activeCall.value = call.copy(
             status = CallStatus.CONNECTED,
@@ -2236,6 +2292,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.playCallEnded(getApplication())
 
         val chId = call.channelId
         val callId = call.callId
@@ -2379,6 +2436,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.playCallEnded(getApplication())
 
         val duration = call.durationSeconds
         val chId = call.channelId

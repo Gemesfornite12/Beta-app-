@@ -48,11 +48,14 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -92,6 +95,8 @@ fun ProfileScreen(
     val authState by viewModel.authUiState.collectAsState()
     val isDarkTheme by viewModel.isDarkTheme.collectAsState()
     val callTimeoutMinutes by viewModel.callTimeoutMinutes.collectAsState()
+    val callSoundEnabled by viewModel.callSoundEnabled.collectAsState()
+    val callVibrationEnabled by viewModel.callVibrationEnabled.collectAsState()
     val user = authState.currentUser
 
     var isEditingProfile by remember { mutableStateOf(false) }
@@ -736,26 +741,133 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Botón para probar la notificación de llamada entrante en vivo
-                    Button(
-                        onClick = {
-                            viewModel.simulateIncomingCall(
-                                peerName = "Sofia Martínez",
-                                peerEmail = "sofia.m@cloud.io",
-                                isVideo = true,
-                                groupName = "Equipo Diseño UI/UX"
-                            )
-                        },
+                    HorizontalDivider(color = if (isDarkTheme) Color(0xFF334155) else Color(0xFFE2E8F0))
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "Sonido y Vibración de Llamada:",
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isDarkTheme) Color(0xFFCBD5E1) else Color(0xFF334155),
+                        fontSize = 13.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Switch Sonido
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp)
-                            .testTag("btn_test_incoming_call"),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        shape = RoundedCornerShape(10.dp)
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(Icons.Default.Notifications, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Probar Notificación de Llamada Entrante", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFF6366F1), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    "Sonido de timbre",
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 13.sp,
+                                    color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                                )
+                                Text(
+                                    "Reproducir tono y timbre continuo en llamadas",
+                                    fontSize = 11.sp,
+                                    color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = callSoundEnabled,
+                            onCheckedChange = { viewModel.toggleCallSound(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF6366F1)
+                            ),
+                            modifier = Modifier.testTag("switch_call_sound")
+                        )
+                    }
+
+                    // Switch Vibración
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Vibration, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    "Vibración continua",
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 13.sp,
+                                    color = if (isDarkTheme) Color.White else Color(0xFF0F172A)
+                                )
+                                Text(
+                                    "Vibrar en bucle continuo mientras suena la llamada",
+                                    fontSize = 11.sp,
+                                    color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = callVibrationEnabled,
+                            onCheckedChange = { viewModel.toggleCallVibration(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF10B981)
+                            ),
+                            modifier = Modifier.testTag("switch_call_vibration")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Botón probar sonido y vibración rápido (3s)
+                        Button(
+                            onClick = { viewModel.testCallSoundAndVibration() },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .testTag("btn_test_sound_vib"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Probar Audio/Vib", fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = Color.White)
+                        }
+
+                        // Botón para probar la notificación de llamada entrante en vivo
+                        Button(
+                            onClick = {
+                                viewModel.simulateIncomingCall(
+                                    peerName = "Sofia Martínez",
+                                    peerEmail = "sofia.m@cloud.io",
+                                    isVideo = true,
+                                    groupName = "Equipo Diseño UI/UX"
+                                )
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .testTag("btn_test_incoming_call"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Notifications, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Simular Llamada", fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = Color.White)
+                        }
                     }
                 }
             }

@@ -92,6 +92,13 @@ object ChatNotificationManager {
             }
 
             // Canal para llamadas de voz y videollamadas entrantes
+            val defaultRingtone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val callAudioAttributes = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             val callsChannel = NotificationChannel(
                 CHANNEL_ID_CALLS,
                 "Llamadas y Videollamadas",
@@ -101,7 +108,8 @@ object ChatNotificationManager {
                 enableLights(true)
                 lightColor = 0xFF10B981.toInt()
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 800, 500, 800, 500, 800)
+                vibrationPattern = longArrayOf(0, 1000, 1000, 1000, 1000)
+                setSound(defaultRingtone, callAudioAttributes)
                 setShowBadge(true)
                 lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
             }
@@ -347,6 +355,13 @@ object ChatNotificationManager {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to display incoming call notification: ${e.message}")
         }
+
+        // Reproducir timbre en loop y vibración continua mientras timbra
+        try {
+            CallSoundVibrationManager.startIncomingCallAlert(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start call sound & vibration: ${e.message}")
+        }
     }
 
     /**
@@ -359,6 +374,8 @@ object ChatNotificationManager {
         isVideo: Boolean,
         timeoutMinutes: Int
     ) {
+        CallSoundVibrationManager.playCallMissed(context)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val permissionCheck = ContextCompat.checkSelfPermission(
                 context,
@@ -410,9 +427,10 @@ object ChatNotificationManager {
     }
 
     /**
-     * Cancela la notificación de llamada activa.
+     * Cancela la notificación de llamada activa y detiene sonidos y vibraciones.
      */
     fun cancelCallNotification(context: Context, callId: String) {
+        CallSoundVibrationManager.stopAll(context)
         val notificationId = (callId.hashCode() and 0x7FFFFFFF)
         try {
             NotificationManagerCompat.from(context).cancel(notificationId)
