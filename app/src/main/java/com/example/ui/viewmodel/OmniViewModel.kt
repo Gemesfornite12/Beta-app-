@@ -365,18 +365,34 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             )
             loadChannelMessages("general")
             initDefaultSequencerTracks()
+
+            // Sincronizar el perfil del usuario activo desde la nube para restaurar nombre/apellidos
+            user?.let { u ->
+                val cloudProfile = firestoreChatService.getUserProfileFromCloud(u.email)
+                if (cloudProfile != null) {
+                    val cloudName = cloudProfile["displayName"] as? String
+                    val cloudAvatar = cloudProfile["avatarUrl"] as? String
+                    if (!cloudName.isNullOrBlank() || !cloudAvatar.isNullOrBlank()) {
+                        val updated = u.copy(
+                            displayName = cloudName ?: u.displayName,
+                            avatarUrl = cloudAvatar ?: u.avatarUrl
+                        )
+                        repo.updateUser(updated)
+                        _authUiState.value = _authUiState.value.copy(currentUser = updated)
+                        Log.d("OmniViewModel", "Restored active user profile from cloud: ${updated.displayName}")
+                    }
+                }
+            }
         }
 
         // Escuchar canales y grupos personalizados creados y guardados en Firestore
         viewModelScope.launch {
             firestoreChatService.listenToCustomChannels().collect { customChannels ->
-                if (customChannels.isNotEmpty()) {
-                    val defaultChannels = firestoreChatService.availableChannels
-                    val mergedMap = LinkedHashMap<String, ChannelInfo>()
-                    defaultChannels.forEach { mergedMap[it.id] = it }
-                    customChannels.forEach { mergedMap[it.id] = it }
-                    _availableChannels.value = mergedMap.values.toList()
-                }
+                val defaultChannels = firestoreChatService.availableChannels
+                val mergedMap = LinkedHashMap<String, ChannelInfo>()
+                defaultChannels.forEach { mergedMap[it.id] = it }
+                customChannels.forEach { mergedMap[it.id] = it }
+                _availableChannels.value = mergedMap.values.toList()
             }
         }
 
@@ -476,21 +492,31 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncUserFromFirebaseAuth(email: String?, displayName: String?, photoUrl: String? = null) {
         val userEmail = email ?: "user@omnistudio.cloud"
-        val userName = displayName ?: userEmail.substringBefore("@")
-        val account = UserAccount(
-            email = userEmail,
-            username = userEmail.substringBefore("@"),
-            displayName = userName,
-            passwordHash = "firebase_auth_session",
-            isGoogleAccount = true
-        )
         viewModelScope.launch {
+            val cloudProfile = firestoreChatService.getUserProfileFromCloud(userEmail)
+            val userName = cloudProfile?.get("displayName") as? String ?: displayName ?: userEmail.substringBefore("@")
+            val finalAvatar = cloudProfile?.get("avatarUrl") as? String ?: photoUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
+
+            if (cloudProfile == null) {
+                firestoreChatService.saveUserProfileToCloud(userEmail, userName, finalAvatar)
+            }
+
+            val account = UserAccount(
+                email = userEmail,
+                username = userEmail.substringBefore("@"),
+                displayName = userName,
+                passwordHash = "firebase_auth_session",
+                isGoogleAccount = true,
+                avatarUrl = finalAvatar
+            )
+
             repo.saveUser(account)
             _authUiState.value = _authUiState.value.copy(
                 currentUser = account,
                 isLoggedIn = true,
                 authFeedbackMessage = "¡Bienvenido, $userName!"
             )
+            loadChannelMessages("general")
         }
     }
 

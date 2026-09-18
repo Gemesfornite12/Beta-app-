@@ -822,4 +822,26 @@ class FirestoreChatService(private val context: Context) {
             false
         }
     }
+
+    /**
+     * Obtiene el perfil de un usuario desde la nube de Firestore.
+     */
+    suspend fun getUserProfileFromCloud(email: String): Map<String, Any>? {
+        val db = firestore ?: return null
+        val cleanEmail = email.replace(".", "_").replace("@", "_at_")
+        return try {
+            val doc = db.collection("user_profiles")
+                .document(cleanEmail)
+                .get()
+                .await()
+            if (doc.exists()) {
+                doc.data
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching user profile from Firestore: ${e.message}")
+            null
+        }
+    }
 }
