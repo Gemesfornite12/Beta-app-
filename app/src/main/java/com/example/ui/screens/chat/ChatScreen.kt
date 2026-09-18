@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,8 +25,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -40,14 +43,33 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +78,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,24 +88,31 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.FirestoreConnectionStatus
+import com.example.data.firebase.GroupMember
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentItem
+import com.example.data.model.UserAccount
 import com.example.ui.viewmodel.OmniViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -106,13 +137,27 @@ fun ChatScreen(
     val onlineUsers by viewModel.onlineUsers.collectAsState()
     val playingAudioId by viewModel.chatPlayingAudioId.collectAsState()
     val activeCall by viewModel.activeCall.collectAsState()
-    val channels = viewModel.availableChannels
+    val channels by viewModel.availableChannels.collectAsState()
+    val groupDeletionCountdowns by viewModel.groupDeletionCountdownSeconds.collectAsState()
+    val allUsers by viewModel.allUsers.collectAsState()
 
+    val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var showAttachDialog by remember { mutableStateOf(false) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var previewMediaUrl by remember { mutableStateOf<String?>(null) }
     var previewMediaType by remember { mutableStateOf<String?>(null) }
+    var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
+
+    // Estados de búsqueda por palabra clave
+    var isSearching by remember { mutableStateOf(false) }
+    var searchKeyword by remember { mutableStateOf("") }
+    var currentMatchPointer by remember { mutableStateOf(0) }
+
+    // Diálogos de grupos y chats privados
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var showStartDirectChatDialog by remember { mutableStateOf(false) }
+    var showGroupManageDialog by remember { mutableStateOf(false) }
 
     // Si hay una llamada activa de voz o video, mostrar pantalla de llamada inmersiva
     if (activeCall != null) {
@@ -135,6 +180,26 @@ fun ChatScreen(
     }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
+    val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
+    val isOwner = activeChannelInfo?.isGroup == true && activeChannelInfo.creatorEmail == currentUserEmail
+    val myGroupMember = activeChannelInfo?.members?.firstOrNull { it.email == currentUserEmail }
+    val canSendMessages = if (activeChannelInfo?.isGroup == true && myGroupMember != null) myGroupMember.canSendMessages else true
+    val canSendMedia = if (activeChannelInfo?.isGroup == true && myGroupMember != null) myGroupMember.canSendMedia else true
+    val currentCountdown = groupDeletionCountdowns[currentChannel]
+
+    // Índices de mensajes que coinciden con la búsqueda por palabra clave
+    val matchingIndices = remember(messages, searchKeyword) {
+        if (searchKeyword.isBlank()) emptyList()
+        else {
+            messages.mapIndexedNotNull { index, msg ->
+                val matchesText = msg.text.contains(searchKeyword, ignoreCase = true)
+                val matchesSender = msg.senderName.contains(searchKeyword, ignoreCase = true)
+                val matchesDoc = msg.attachedDocTitle?.contains(searchKeyword, ignoreCase = true) == true
+                val matchesAudio = msg.attachedAudioTitle?.contains(searchKeyword, ignoreCase = true) == true
+                if (matchesText || matchesSender || matchesDoc || matchesAudio) index else null
+            }
+        }
+    }
 
     Scaffold(
         modifier = Modifier
@@ -163,29 +228,62 @@ fun ChatScreen(
                             )
                         }
 
+                        // Avatar del canal, grupo o chat directo
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xFF334155),
+                            color = if (activeChannelInfo?.isGroup == true) Color(0xFF7C3AED) else Color(0xFF334155),
                             modifier = Modifier.size(36.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = activeChannelInfo?.iconEmoji ?: "#",
-                                    fontSize = 16.sp
-                                )
+                                if (activeChannelInfo?.groupPhotoUrl?.isNotBlank() == true) {
+                                    AsyncImage(
+                                        model = activeChannelInfo.groupPhotoUrl,
+                                        contentDescription = activeChannelInfo.name,
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Text(
+                                        text = activeChannelInfo?.iconEmoji ?: if (activeChannelInfo?.isGroup == true) "👥" else "#",
+                                        fontSize = 16.sp
+                                    )
+                                }
                             }
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = activeChannelInfo?.isGroup == true) {
+                                    if (activeChannelInfo?.isGroup == true) showGroupManageDialog = true
+                                }
+                        ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = activeChannelInfo?.name ?: currentChannel,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
-                                    fontSize = 16.sp
+                                    fontSize = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                                if (activeChannelInfo?.isGroup == true) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFF7C3AED).copy(alpha = 0.3f)
+                                    ) {
+                                        Text(
+                                            text = "Grupo",
+                                            color = Color(0xFFC4B5FD),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.width(6.dp))
                                 // Indicador de estado en tiempo real de Firestore
                                 Surface(
@@ -197,7 +295,7 @@ fun ChatScreen(
                                     }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
@@ -208,11 +306,11 @@ fun ChatScreen(
                                                 FirestoreConnectionStatus.OFFLINE_SYNCED -> Color(0xFFFBBF24)
                                                 else -> Color(0xFF60A5FA)
                                             },
-                                            modifier = Modifier.size(8.dp)
+                                            modifier = Modifier.size(7.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
                                         Text(
-                                            text = if (firestoreStatus == FirestoreConnectionStatus.CONNECTED_REALTIME) "Firestore En Vivo" else firestoreStatus.label,
+                                            text = if (firestoreStatus == FirestoreConnectionStatus.CONNECTED_REALTIME) "En Vivo" else firestoreStatus.label,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = Color.White
@@ -222,7 +320,11 @@ fun ChatScreen(
                             }
 
                             Text(
-                                text = activeChannelInfo?.description ?: "Mensajería en tiempo real con Firebase Firestore",
+                                text = if (activeChannelInfo?.isGroup == true) {
+                                    "${activeChannelInfo.members.size} participantes • Toca para gestionar"
+                                } else {
+                                    activeChannelInfo?.description ?: "Mensajería en tiempo real"
+                                },
                                 color = Color(0xFF94A3B8),
                                 fontSize = 11.sp,
                                 maxLines = 1,
@@ -230,27 +332,36 @@ fun ChatScreen(
                             )
                         }
 
-                        // Contador de colaboradores activos
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF334155),
-                            modifier = Modifier.padding(end = 4.dp)
+                        // Botón de Búsqueda por palabra clave dentro de la conversación
+                        IconButton(
+                            onClick = {
+                                isSearching = !isSearching
+                                if (!isSearching) {
+                                    searchKeyword = ""
+                                    currentMatchPointer = 0
+                                }
+                            },
+                            modifier = Modifier.testTag("btn_toggle_search_chat")
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Icon(
+                                imageVector = if (isSearching) Icons.Default.Close else Icons.Default.Search,
+                                contentDescription = "Buscar mensajes",
+                                tint = if (isSearching) Color(0xFFF59E0B) else Color(0xFFCBD5E1),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Botón de Administración de Grupo (si es grupo)
+                        if (activeChannelInfo?.isGroup == true) {
+                            IconButton(
+                                onClick = { showGroupManageDialog = true },
+                                modifier = Modifier.testTag("btn_open_group_info")
                             ) {
                                 Icon(
-                                    Icons.Default.Group,
-                                    contentDescription = "En línea",
-                                    tint = Color(0xFF34D399),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "${maxOf(onlineUsers.size, 1)} online",
-                                    fontSize = 11.sp,
-                                    color = Color.White
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Administrar Grupo",
+                                    tint = Color(0xFFA855F7),
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -288,18 +399,269 @@ fun ChatScreen(
                         }
                     }
 
-                    // Selector horizontal de canales y chats directos
+                    // Barra de Búsqueda de Mensajes integrada
+                    AnimatedVisibility(visible = isSearching) {
+                        Surface(
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                BasicTextField(
+                                    value = searchKeyword,
+                                    onValueChange = {
+                                        searchKeyword = it
+                                        currentMatchPointer = 0
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("input_search_chat"),
+                                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                                    singleLine = true,
+                                    cursorBrush = SolidColor(Color(0xFFF59E0B)),
+                                    decorationBox = { innerTextField ->
+                                        if (searchKeyword.isEmpty()) {
+                                            Text(
+                                                "Buscar mensajes en este chat...",
+                                                color = Color(0xFF64748B),
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                )
+
+                                if (searchKeyword.isNotBlank()) {
+                                    Text(
+                                        text = if (matchingIndices.isNotEmpty()) "${matchingIndices.size} coincidencias" else "Sin resultados",
+                                        color = if (matchingIndices.isNotEmpty()) Color(0xFF34D399) else Color(0xFFEF4444),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+
+                                    if (matchingIndices.isNotEmpty()) {
+                                        IconButton(
+                                            onClick = {
+                                                if (matchingIndices.isNotEmpty()) {
+                                                    currentMatchPointer = (currentMatchPointer - 1 + matchingIndices.size) % matchingIndices.size
+                                                    coroutineScope.launch {
+                                                        listState.animateScrollToItem(matchingIndices[currentMatchPointer])
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .size(26.dp)
+                                                .testTag("btn_search_prev")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.KeyboardArrowUp,
+                                                contentDescription = "Anterior",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                if (matchingIndices.isNotEmpty()) {
+                                                    currentMatchPointer = (currentMatchPointer + 1) % matchingIndices.size
+                                                    coroutineScope.launch {
+                                                        listState.animateScrollToItem(matchingIndices[currentMatchPointer])
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .size(26.dp)
+                                                .testTag("btn_search_next")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Siguiente",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            searchKeyword = ""
+                                            currentMatchPointer = 0
+                                        },
+                                        modifier = Modifier.size(26.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Clear,
+                                            contentDescription = "Limpiar búsqueda",
+                                            tint = Color(0xFF94A3B8),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Banner de Advertencia de Eliminación de Grupo (3 minutos)
+                    if (activeChannelInfo?.isDeleting == true) {
+                        Surface(
+                            color = Color(0xFF7F1D1D),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("banner_group_deletion_warning")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFCA5A5),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    val secsTotal = currentCountdown ?: 180
+                                    val mins = secsTotal / 60
+                                    val secs = secsTotal % 60
+                                    val timeStr = String.format("%02d:%02d", mins, secs)
+
+                                    Text(
+                                        text = "⚠️ ELIMINACIÓN PERMANENTE EN: $timeStr",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = if (isOwner) "Puedes cancelar el borrado en cualquier momento." else "El dueño del grupo programó su eliminación permanente.",
+                                        color = Color(0xFFFECACA),
+                                        fontSize = 10.sp
+                                    )
+                                }
+
+                                if (isOwner) {
+                                    TextButton(
+                                        onClick = { viewModel.cancelGroupDeletion(activeChannelInfo.id) },
+                                        modifier = Modifier.testTag("btn_cancel_delete_group")
+                                    ) {
+                                        Text(
+                                            "Deshacer",
+                                            color = Color(0xFF34D399),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { viewModel.deleteGroupPermanently(activeChannelInfo.id) },
+                                        modifier = Modifier.testTag("btn_confirm_delete_group_now")
+                                    ) {
+                                        Text(
+                                            "Borrar ya",
+                                            color = Color(0xFFF87171),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Selector horizontal de canales, chats directos y grupos con acciones de creación
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        // Botón rápido para Crear Nuevo Grupo
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color(0xFF7C3AED),
+                                modifier = Modifier
+                                    .clickable { showCreateGroupDialog = true }
+                                    .testTag("btn_open_create_group")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Crear Grupo",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        // Botón rápido para Iniciar Chat Privado
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color(0xFF0284C7),
+                                modifier = Modifier
+                                    .clickable { showStartDirectChatDialog = true }
+                                    .testTag("btn_open_new_direct_chat")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.PersonAdd,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Chat Privado",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+
                         items(channels) { ch ->
                             val isSelected = ch.id == currentChannel
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
-                                color = if (isSelected) Color(0xFF4F46E5) else Color(0xFF334155),
+                                color = when {
+                                    isSelected -> Color(0xFF4F46E5)
+                                    ch.isDeleting -> Color(0xFF991B1B)
+                                    ch.isGroup -> Color(0xFF4338CA)
+                                    else -> Color(0xFF334155)
+                                },
                                 modifier = Modifier
                                     .clickable { viewModel.loadChannelMessages(ch.id) }
                                     .testTag("channel_tab_${ch.id}")
@@ -308,7 +670,11 @@ fun ChatScreen(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(text = ch.iconEmoji, fontSize = 12.sp)
+                                    if (ch.isDeleting) {
+                                        Text(text = "⚠️", fontSize = 12.sp)
+                                    } else {
+                                        Text(text = ch.iconEmoji, fontSize = 12.sp)
+                                    }
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = ch.name,
@@ -316,6 +682,23 @@ fun ChatScreen(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         fontSize = 12.sp
                                     )
+                                    if (ch.isGroup) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.White.copy(alpha = 0.2f),
+                                            modifier = Modifier.size(14.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = "${ch.members.size}",
+                                                    fontSize = 8.sp,
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -377,6 +760,35 @@ fun ChatScreen(
                     }
                 }
 
+                // Aviso de restricción de permisos si el usuario no puede enviar mensajes
+                if (!canSendMessages) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        color = Color(0xFF7F1D1D).copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                tint = Color(0xFFFCA5A5),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Solo lectura: El creador del grupo ha restringido tus permisos para enviar mensajes en este canal.",
+                                color = Color(0xFFFECACA),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
                 // Barra de entrada de texto
                 Row(
                     modifier = Modifier
@@ -385,24 +797,26 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = { showAttachDialog = true },
+                        onClick = { if (canSendMedia) showAttachDialog = true },
+                        enabled = canSendMedia,
                         modifier = Modifier.testTag("btn_attach_cloud_file")
                     ) {
                         Icon(
                             imageVector = Icons.Default.AttachFile,
                             contentDescription = "Adjuntar multimedia o archivo",
-                            tint = Color(0xFF818CF8)
+                            tint = if (canSendMedia) Color(0xFF818CF8) else Color(0xFF475569)
                         )
                     }
 
                     IconButton(
-                        onClick = { showAttachDialog = true },
+                        onClick = { if (canSendMedia) showAttachDialog = true },
+                        enabled = canSendMedia,
                         modifier = Modifier.testTag("btn_quick_gif")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Gif,
                             contentDescription = "Enviar GIF",
-                            tint = Color(0xFFF43F5E),
+                            tint = if (canSendMedia) Color(0xFFF43F5E) else Color(0xFF475569),
                             modifier = Modifier.size(28.dp)
                         )
                     }
@@ -410,9 +824,11 @@ fun ChatScreen(
                     OutlinedTextField(
                         value = chatInput,
                         onValueChange = { viewModel.onChatInputChanged(it) },
+                        enabled = canSendMessages,
                         placeholder = {
                             Text(
-                                "Escribe en #${activeChannelInfo?.name ?: currentChannel}...",
+                                if (!canSendMessages) "Permiso restringido por el creador"
+                                else "Escribe en #${activeChannelInfo?.name ?: currentChannel}...",
                                 color = Color(0xFF64748B),
                                 fontSize = 13.sp
                             )
@@ -426,7 +842,9 @@ fun ChatScreen(
                             focusedBorderColor = Color(0xFF4F46E5),
                             unfocusedBorderColor = Color(0xFF334155),
                             focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            unfocusedTextColor = Color.White,
+                            disabledContainerColor = Color(0xFF1E293B),
+                            disabledTextColor = Color(0xFF64748B)
                         ),
                         shape = RoundedCornerShape(24.dp),
                         maxLines = 3
@@ -438,15 +856,17 @@ fun ChatScreen(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .clickable { viewModel.sendChatMessage() }
+                            .clickable(enabled = canSendMessages && chatInput.isNotBlank()) {
+                                if (canSendMessages) viewModel.sendChatMessage()
+                            }
                             .testTag("btn_send_chat"),
-                        color = Color(0xFF4F46E5)
+                        color = if (canSendMessages && chatInput.isNotBlank()) Color(0xFF4F46E5) else Color(0xFF334155)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Enviar",
-                                tint = Color.White,
+                                tint = if (canSendMessages && chatInput.isNotBlank()) Color.White else Color(0xFF94A3B8),
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -510,13 +930,23 @@ fun ChatScreen(
             ) {
                 items(messages, key = { it.firestoreId.ifBlank { it.id.toString() } }) { msg ->
                     val isMe = msg.senderEmail == (authState.currentUser?.email ?: "gonzalez24029@gmail.com")
+                    val isMatch = searchKeyword.isNotBlank() && (
+                        msg.text.contains(searchKeyword, ignoreCase = true) ||
+                        msg.senderName.contains(searchKeyword, ignoreCase = true) ||
+                        (msg.attachedDocTitle?.contains(searchKeyword, ignoreCase = true) == true) ||
+                        (msg.attachedAudioTitle?.contains(searchKeyword, ignoreCase = true) == true)
+                    )
+
                     MessageBubble(
                         message = msg,
                         isMe = isMe,
                         isPlayingAudio = playingAudioId != null && playingAudioId == msg.attachedAudioId,
+                        isSearchMatch = isMatch,
+                        searchKeyword = searchKeyword,
                         onTogglePlayAudio = { audioId -> viewModel.togglePlayChatAudio(audioId) },
                         onReact = { emoji -> viewModel.addReactionToMessage(msg, emoji) },
                         onDelete = { messageToDelete = msg },
+                        onShowDeliveryStatus = { selectedMessageForStatus = it },
                         onOpenAttachedDoc = { docId ->
                             val doc = allDocs.firstOrNull { it.id == docId }
                             if (doc != null) onOpenDoc(doc)
@@ -539,6 +969,15 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // Modal de Detalle de Estado de Entrega (Enviado, Entregado, Visto en Firestore)
+    if (selectedMessageForStatus != null) {
+        val msg = selectedMessageForStatus!!
+        MessageDeliveryStatusDialog(
+            message = msg,
+            onDismiss = { selectedMessageForStatus = null }
+        )
     }
 
     // Modal de confirmación para eliminar mensaje
@@ -587,86 +1026,180 @@ fun ChatScreen(
         )
     }
 
-    // Modal de visualización ampliada de Multimedia
+    // Diálogo para Crear Grupo
+    if (showCreateGroupDialog) {
+        CreateGroupDialog(
+            allUsers = allUsers,
+            currentUserEmail = currentUserEmail,
+            onDismiss = { showCreateGroupDialog = false },
+            onConfirm = { name, desc, photoUrl, members ->
+                viewModel.createGroupChannel(
+                    name = name,
+                    description = desc,
+                    photoUrl = photoUrl,
+                    memberEmails = members
+                )
+                showCreateGroupDialog = false
+            }
+        )
+    }
+
+    // Diálogo para Iniciar Chat Privado Directo
+    if (showStartDirectChatDialog) {
+        StartDirectChatDialog(
+            allUsers = allUsers,
+            currentUserEmail = currentUserEmail,
+            onDismiss = { showStartDirectChatDialog = false },
+            onSelectUser = { email, name ->
+                viewModel.startDirectChat(peerEmail = email, peerName = name)
+                showStartDirectChatDialog = false
+            }
+        )
+    }
+
+    // Diálogo para Administrar Grupo Actual
+    if (showGroupManageDialog && activeChannelInfo?.isGroup == true) {
+        GroupManageDialog(
+            channel = activeChannelInfo,
+            currentUserEmail = currentUserEmail,
+            allUsers = allUsers,
+            deletionCountdown = currentCountdown,
+            onDismiss = { showGroupManageDialog = false },
+            onAddMember = { email -> viewModel.addMemberToGroup(activeChannelInfo.id, email) },
+            onRemoveMember = { email -> viewModel.removeMemberFromGroup(activeChannelInfo.id, email) },
+            onUpdatePermissions = { email, canMsg, canMedia ->
+                viewModel.updateMemberPermissions(activeChannelInfo.id, email, canMsg, canMedia)
+            },
+            onResetPermissions = { email ->
+                viewModel.undoOrResetMemberPermissions(activeChannelInfo.id, email)
+            },
+            onScheduleDeletion = {
+                viewModel.scheduleGroupDeletion(activeChannelInfo.id)
+            },
+            onCancelDeletion = {
+                viewModel.cancelGroupDeletion(activeChannelInfo.id)
+            },
+            onDeletePermanently = {
+                viewModel.deleteGroupPermanently(activeChannelInfo.id)
+                showGroupManageDialog = false
+            },
+            onLeaveGroup = {
+                viewModel.leaveGroup(activeChannelInfo.id)
+                showGroupManageDialog = false
+            }
+        )
+    }
+
+    // Modal de visualización ampliada de Multimedia (Fotos, Videos, GIFs)
     if (previewMediaUrl != null) {
-        AlertDialog(
+        androidx.compose.ui.window.Dialog(
             onDismissRequest = {
                 previewMediaUrl = null
                 previewMediaType = null
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp)
-                .testTag("dialog_media_preview"),
-            content = {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color(0xFF0F172A),
-                    modifier = Modifier.fillMaxWidth()
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF0F172A),
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .padding(16.dp)
+                    .testTag("dialog_media_preview")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = when (previewMediaType) {
-                                    "image" -> "📷 Imagen en Alta Definición"
-                                    "video" -> "🎥 Reproducción de Video"
-                                    "gif" -> "🎭 Animación GIF"
-                                    else -> "Multimedia"
-                                },
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
-                            )
-                            IconButton(onClick = {
+                        Text(
+                            text = when (previewMediaType) {
+                                "image" -> "📷 Imagen Ampliada"
+                                "video" -> "🎥 Video en Reproducción"
+                                "gif" -> "🎭 Animación GIF"
+                                else -> "Multimedia"
+                            },
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        IconButton(
+                            onClick = {
                                 previewMediaUrl = null
                                 previewMediaType = null
-                            }) {
-                                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
-                            }
+                            },
+                            modifier = Modifier.testTag("btn_close_preview_x")
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
                         }
+                    }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                        AsyncImage(
-                            model = previewMediaUrl,
-                            contentDescription = "Vista previa",
-                            contentScale = ContentScale.Fit,
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF1E293B),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 220.dp, max = 380.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            AsyncImage(
+                                model = previewMediaUrl,
+                                contentDescription = "Vista previa multimedia",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 220.dp, max = 380.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (previewMediaType == "video") {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF4F46E5),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(250.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        if (previewMediaType == "video") {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFF4F46E5),
-                                modifier = Modifier.fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(10.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Reproduciendo streaming en vivo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Reproduciendo streaming en vivo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
+
+                    // Botón para cerrar la vista previa de la imagen
+                    Button(
+                        onClick = {
+                            previewMediaUrl = null
+                            previewMediaType = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_close_media_preview")
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Cerrar Vista Previa", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
-        )
+        }
     }
 }
 
@@ -675,9 +1208,12 @@ private fun MessageBubble(
     message: ChatMessage,
     isMe: Boolean,
     isPlayingAudio: Boolean,
+    isSearchMatch: Boolean = false,
+    searchKeyword: String = "",
     onTogglePlayAudio: (Long) -> Unit,
     onReact: (String) -> Unit,
     onDelete: () -> Unit,
+    onShowDeliveryStatus: (ChatMessage) -> Unit = {},
     onOpenAttachedDoc: (Long) -> Unit,
     onOpenAttachedAudio: (Long) -> Unit,
     onPreviewMedia: (url: String, type: String) -> Unit,
@@ -735,6 +1271,34 @@ private fun MessageBubble(
             horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
             modifier = Modifier.widthIn(max = 310.dp)
         ) {
+            // Etiqueta visual si este mensaje coincide con la búsqueda
+            if (isSearchMatch) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFFF59E0B).copy(alpha = 0.25f),
+                    modifier = Modifier.padding(bottom = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Color(0xFFF59E0B),
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Coincidencia: \"$searchKeyword\"",
+                            color = Color(0xFFFDE68A),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
             // Nombre del remitente si no soy yo
             if (!isMe) {
                 Text(
@@ -746,16 +1310,23 @@ private fun MessageBubble(
                 )
             }
 
-            // Cuerpo del mensaje
+            // Cuerpo del mensaje con borde dorado si coincide con la búsqueda
+            val bubbleShape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (isMe) 16.dp else 4.dp,
+                bottomEnd = if (isMe) 4.dp else 16.dp
+            )
+
             Surface(
-                shape = RoundedCornerShape(
-                    topStart = 16.dp,
-                    topEnd = 16.dp,
-                    bottomStart = if (isMe) 16.dp else 4.dp,
-                    bottomEnd = if (isMe) 4.dp else 16.dp
-                ),
+                shape = bubbleShape,
                 color = if (isMe) Color(0xFF4F46E5) else Color(0xFF1E293B),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (isSearchMatch) Modifier.border(2.dp, Color(0xFFF59E0B), bubbleShape)
+                        else Modifier
+                    )
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(
@@ -872,31 +1443,70 @@ private fun MessageBubble(
                     // Renderizado de FOTOS adjuntas
                     if (message.mediaType == "image" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Box(
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF0F172A),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable { onPreviewMedia(message.mediaUrl, "image") }
+                                .testTag("msg_image_${message.id}")
                         ) {
-                            AsyncImage(
-                                model = message.mediaUrl,
-                                contentDescription = "Foto compartida",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp)
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(bottomStart = 8.dp, topEnd = 8.dp),
-                                color = Color.Black.copy(alpha = 0.65f),
-                                modifier = Modifier.align(Alignment.BottomEnd)
-                            ) {
-                                Text(
-                                    text = "📷 Toca para ampliar",
-                                    color = Color.White,
-                                    fontSize = 10.sp,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                            Column {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = message.mediaUrl,
+                                        contentDescription = "Foto compartida",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(bottomStart = 8.dp),
+                                        color = Color.Black.copy(alpha = 0.65f),
+                                        modifier = Modifier.align(Alignment.TopEnd)
+                                    ) {
+                                        Text(
+                                            text = "📷 Toca para ampliar",
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                // Botón explícito e interactivo para abrir la imagen
+                                Surface(
+                                    color = Color(0xFF1E293B),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Imagen adjunta",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 11.sp
+                                        )
+                                        TextButton(
+                                            onClick = { onPreviewMedia(message.mediaUrl, "image") },
+                                            modifier = Modifier.testTag("btn_view_full_image_${message.id}")
+                                        ) {
+                                            Text(
+                                                "Ver imagen",
+                                                color = Color(0xFF38BDF8),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1072,9 +1682,13 @@ private fun MessageBubble(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Pie de mensaje: Hora y estado de sincronización en tiempo real
+                    // Pie de mensaje: Hora y estado de entrega en Firestore ('enviado', 'entregado', 'visto')
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onShowDeliveryStatus(message) }
+                            .padding(horizontal = 2.dp, vertical = 2.dp),
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1084,12 +1698,73 @@ private fun MessageBubble(
                             color = if (isMe) Color(0xFFC7D2FE) else Color(0xFF64748B)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Default.DoneAll,
-                            contentDescription = "Sincronizado en Firestore",
-                            tint = if (isMe) Color(0xFF86EFAC) else Color(0xFF34D399),
-                            modifier = Modifier.size(13.dp)
-                        )
+
+                        // Indicador de entrega en tiempo real ('enviado', 'entregado', 'visto')
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color.Black.copy(alpha = 0.22f),
+                            modifier = Modifier
+                                .clickable { onShowDeliveryStatus(message) }
+                                .testTag("msg_delivery_status_${message.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                when (message.deliveryStatus.lowercase()) {
+                                    "enviando" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.Schedule,
+                                            contentDescription = "Enviando",
+                                            tint = if (isMe) Color(0xFFE2E8F0).copy(alpha = 0.7f) else Color(0xFF94A3B8),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Enviando", fontSize = 9.sp, color = if (isMe) Color(0xFFC7D2FE) else Color(0xFF94A3B8))
+                                    }
+                                    "enviado" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Enviado a Firestore",
+                                            tint = if (isMe) Color(0xFFE2E8F0) else Color(0xFF94A3B8),
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Enviado", fontSize = 9.sp, color = if (isMe) Color(0xFFC7D2FE) else Color(0xFF94A3B8))
+                                    }
+                                    "entregado" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.DoneAll,
+                                            contentDescription = "Entregado a destinatarios",
+                                            tint = if (isMe) Color(0xFFE2E8F0) else Color(0xFF94A3B8),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Entregado", fontSize = 9.sp, color = if (isMe) Color(0xFFC7D2FE) else Color(0xFF94A3B8))
+                                    }
+                                    "visto" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.DoneAll,
+                                            contentDescription = "Visto por destinatarios",
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Visto", fontSize = 9.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                                    }
+                                    else -> {
+                                        Icon(
+                                            imageVector = Icons.Default.DoneAll,
+                                            contentDescription = "Sincronizado",
+                                            tint = if (isMe) Color(0xFF86EFAC) else Color(0xFF34D399),
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Sincronizado", fontSize = 9.sp, color = if (isMe) Color(0xFF86EFAC) else Color(0xFF34D399))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1186,6 +1861,242 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MessageDeliveryStatusDialog(
+    message: ChatMessage,
+    onDismiss: () -> Unit
+) {
+    val sdf = remember { SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()) }
+    val timeSdf = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+
+    val sentFormatted = remember(message.sentTimestamp, message.timestamp) {
+        val t = if (message.sentTimestamp > 0) message.sentTimestamp else message.timestamp
+        sdf.format(Date(t))
+    }
+
+    val deliveredFormatted = remember(message.deliveredTimestamp) {
+        if (message.deliveredTimestamp > 0) timeSdf.format(Date(message.deliveredTimestamp))
+        else "Confirmado en red Firestore"
+    }
+
+    val seenFormatted = remember(message.seenTimestamp, message.deliveryStatus) {
+        if (message.seenTimestamp > 0) timeSdf.format(Date(message.seenTimestamp))
+        else if (message.deliveryStatus == "visto") "Leído"
+        else "Pendiente de lectura"
+    }
+
+    val isSeen = message.deliveryStatus.lowercase() == "visto"
+    val isDelivered = isSeen || message.deliveryStatus.lowercase() == "entregado"
+    val isSent = isDelivered || message.deliveryStatus.lowercase() == "enviado"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = Color(0xFF38BDF8),
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Estado de Entrega (Firestore)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Estado General Badge
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when (message.deliveryStatus.lowercase()) {
+                        "visto" -> Color(0xFF0369A1).copy(alpha = 0.25f)
+                        "entregado" -> Color(0xFF334155)
+                        "enviado" -> Color(0xFF1E293B)
+                        else -> Color(0xFF1E293B)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            1.dp,
+                            when (message.deliveryStatus.lowercase()) {
+                                "visto" -> Color(0xFF38BDF8)
+                                "entregado" -> Color(0xFF64748B)
+                                else -> Color(0xFF475569)
+                            },
+                            RoundedCornerShape(8.dp)
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        when (message.deliveryStatus.lowercase()) {
+                            "visto" -> {
+                                Icon(Icons.Default.DoneAll, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("Visto por destinatarios", fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), fontSize = 13.sp)
+                                    Text("Leído y confirmado en tiempo real por el equipo", fontSize = 11.sp, color = Color(0xFFBAE6FD))
+                                }
+                            }
+                            "entregado" -> {
+                                Icon(Icons.Default.DoneAll, contentDescription = null, tint = Color(0xFFCBD5E1), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("Entregado a destinatarios", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                    Text("Mensaje transferido y cacheado en los clientes", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                }
+                            }
+                            "enviado" -> {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFCBD5E1), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("Enviado al servidor", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                    Text("Almacenado con éxito en Firebase Firestore", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                }
+                            }
+                            else -> {
+                                Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFFCBD5E1), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("Enviando...", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                    Text("Esperando confirmación de escritura en Firestore", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Mensaje inspeccionado
+                Text("Contenido:", fontSize = 11.sp, color = Color(0xFF94A3B8), fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF1E293B),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = message.text.ifBlank { "[Archivo adjunto: ${message.mediaType.ifBlank { "multimedia" }}]" },
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(8.dp),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Línea de Tiempo de Estados en Firestore
+                Text("Línea de tiempo de entrega:", fontSize = 11.sp, color = Color(0xFF94A3B8), fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // 1. Enviado
+                TimelineItem(
+                    title = "1. Enviado a Firestore",
+                    statusText = sentFormatted,
+                    isActive = isSent,
+                    isHighlight = false,
+                    icon = Icons.Default.Check
+                )
+
+                // 2. Entregado
+                TimelineItem(
+                    title = "2. Entregado a dispositivos",
+                    statusText = deliveredFormatted,
+                    isActive = isDelivered,
+                    isHighlight = false,
+                    icon = Icons.Default.DoneAll
+                )
+
+                // 3. Visto
+                TimelineItem(
+                    title = "3. Visto por los miembros",
+                    statusText = if (isSeen) "$seenFormatted ${if (message.seenBy.isNotBlank()) "(${message.seenBy})" else ""}" else "Pendiente",
+                    isActive = isSeen,
+                    isHighlight = isSeen,
+                    icon = Icons.Default.DoneAll
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Metadatos Técnicos de Firestore
+                Text("Metadatos de Firebase Firestore:", fontSize = 11.sp, color = Color(0xFF94A3B8), fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0F172A), RoundedCornerShape(6.dp))
+                        .padding(8.dp)
+                ) {
+                    Text("• Colección: chat_channels/${message.channelId}/messages", fontSize = 10.sp, color = Color(0xFFCBD5E1), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    Text("• Document ID: ${message.firestoreId.ifBlank { "local_${message.id}" }}", fontSize = 10.sp, color = Color(0xFFCBD5E1), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    Text("• Remitente: ${message.senderName} <${message.senderEmail}>", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                    if (message.seenBy.isNotBlank()) {
+                        Text("• Visto por: ${message.seenBy}", fontSize = 10.sp, color = Color(0xFF38BDF8))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Entendido", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+@Composable
+private fun TimelineItem(
+    title: String,
+    statusText: String,
+    isActive: Boolean,
+    isHighlight: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = when {
+                isHighlight -> Color(0xFF38BDF8)
+                isActive -> Color(0xFF34D399)
+                else -> Color(0xFF64748B)
+            },
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 11.sp,
+                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isActive) Color.White else Color(0xFF64748B)
+            )
+            Text(
+                text = statusText,
+                fontSize = 10.sp,
+                color = if (isHighlight) Color(0xFF38BDF8) else if (isActive) Color(0xFFCBD5E1) else Color(0xFF64748B)
+            )
         }
     }
 }

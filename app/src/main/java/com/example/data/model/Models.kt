@@ -86,7 +86,12 @@ data class ChatMessage(
     val mediaThumbnail: String? = null,
     val callDurationSec: Int = 0,
     val reactions: String = "", // e.g. "🔥,👍"
-    val isSyncedFirestore: Boolean = true
+    val isSyncedFirestore: Boolean = true,
+    val deliveryStatus: String = "enviado", // "enviando", "enviado", "entregado", "visto"
+    val sentTimestamp: Long = 0L,
+    val deliveredTimestamp: Long = 0L,
+    val seenTimestamp: Long = 0L,
+    val seenBy: String = "" // e.g. "carlos.m@cloud.io, sofia.m@cloud.io"
 )
 
 enum class CallStatus {

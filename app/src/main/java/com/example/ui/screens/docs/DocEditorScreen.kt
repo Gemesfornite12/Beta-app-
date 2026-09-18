@@ -34,6 +34,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
@@ -75,17 +78,27 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.DocumentType
 import com.example.ui.screens.converter.FormatConverterDialog
 import com.example.ui.viewmodel.OmniViewModel
 import org.json.JSONArray
 import org.json.JSONObject
+
+data class SlideModel(
+    val title: String,
+    val subtitle: String,
+    val bg: String = "#1E293B",
+    val imageUrl: String = "",
+    val tableData: String = ""
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,9 +130,13 @@ fun DocEditorScreen(
     var slideEditTitle by remember { mutableStateOf("") }
     var slideEditSubtitle by remember { mutableStateOf("") }
 
+    // Dialogs for inserting Image and Table into slides
+    var showInsertImageModal by remember { mutableStateOf(false) }
+    var showInsertTableModal by remember { mutableStateOf(false) }
+
     // Parse slides if slide document
     val slidesList = remember(doc.slidesJson) {
-        val list = mutableListOf<Triple<String, String, String>>()
+        val list = mutableListOf<SlideModel>()
         try {
             val jsonArr = JSONArray(doc.slidesJson)
             for (i in 0 until jsonArr.length()) {
@@ -127,13 +144,15 @@ fun DocEditorScreen(
                 val title = obj.optString("title", "Double-tap to add title")
                 val subtitle = obj.optString("subtitle", "Double-tap to add subtitle")
                 val bg = obj.optString("bg", "#1E293B")
-                list.add(Triple(title, subtitle, bg))
+                val imageUrl = obj.optString("imageUrl", "")
+                val tableData = obj.optString("tableData", "")
+                list.add(SlideModel(title, subtitle, bg, imageUrl, tableData))
             }
         } catch (_: Exception) {
-            list.add(Triple("Double-tap to add title", "Double-tap to add subtitle", "#1E293B"))
+            list.add(SlideModel("Double-tap to add title", "Double-tap to add subtitle", "#1E293B"))
         }
         if (list.isEmpty()) {
-            list.add(Triple("Double-tap to add title", "Double-tap to add subtitle", "#1E293B"))
+            list.add(SlideModel("Double-tap to add title", "Double-tap to add subtitle", "#1E293B"))
         }
         list
     }
@@ -294,6 +313,8 @@ fun DocEditorScreen(
                         slideEditSubtitle = sub
                         editingSlideTitleModal = true
                     },
+                    onInsertImage = { showInsertImageModal = true },
+                    onInsertTable = { showInsertTableModal = true },
                     onPlayPresentation = { isPresentationPlaying = true }
                 )
             } else {
@@ -379,6 +400,214 @@ fun DocEditorScreen(
         )
     }
 
+    // Insert Image Modal (Fixing user report: "toco imagen boton no sirve")
+    if (showInsertImageModal) {
+        val currentImg = slidesList.getOrNull(activeSlideIndex)?.imageUrl ?: ""
+        var selectedPresetUrl by remember { mutableStateOf(currentImg) }
+        var customUrlText by remember { mutableStateOf(currentImg) }
+
+        val imagePresets = listOf(
+            Triple("📊 Crecimiento & KPIs", "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&q=80", "Finanzas y Métricas"),
+            Triple("💡 Innovación & IA", "https://images.unsplash.com/photo-1677442136019-21780efad99a?w=800&q=80", "Tecnología y Futuro"),
+            Triple("🚀 Estrategia & Negocio", "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&q=80", "Planes Corporativos"),
+            Triple("👥 Colaboración de Equipo", "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&q=80", "Liderazgo y Personas"),
+            Triple("🎨 Creatividad & Diseño", "https://images.unsplash.com/photo-1542744094-3a31f272c490?w=800&q=80", "Artes y Prototipos"),
+            Triple("🌍 Impacto Global", "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&q=80", "Visión Internacional")
+        )
+
+        AlertDialog(
+            onDismissRequest = { showInsertImageModal = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Insertar Imagen en Diapositiva", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "Selecciona una imagen profesional para la diapositiva #${activeSlideIndex + 1}:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    imagePresets.forEach { (name, url, desc) ->
+                        val isSelected = selectedPresetUrl == url
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) Color(0xFF334155) else Color(0xFF1E293B),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) Color(0xFFEA580C) else Color(0xFF334155),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable {
+                                    selectedPresetUrl = url
+                                    customUrlText = url
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(52.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                ) {
+                                    AsyncImage(
+                                        model = url,
+                                        contentDescription = name,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                                    Text(desc, fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                }
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("O ingresa una URL personalizada:", fontSize = 12.sp, color = Color(0xFFCBD5E1), fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = customUrlText,
+                        onValueChange = {
+                            customUrlText = it
+                            selectedPresetUrl = it
+                        },
+                        label = { Text("URL de la imagen (https://...)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("input_slide_image_url")
+                    )
+
+                    if (currentImg.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        TextButton(
+                            onClick = {
+                                viewModel.updateSlideImage(activeSlideIndex, null)
+                                showInsertImageModal = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Quitar imagen de esta diapositiva", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetUrl = customUrlText.trim().ifEmpty { selectedPresetUrl.trim() }
+                        if (targetUrl.isNotBlank()) {
+                            viewModel.updateSlideImage(activeSlideIndex, targetUrl)
+                        }
+                        showInsertImageModal = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                ) {
+                    Text("Insertar Imagen")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInsertImageModal = false }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    // Insert Table Modal
+    if (showInsertTableModal) {
+        val tablePresets = listOf(
+            Pair(
+                "📊 Métricas Clave (KPIs)",
+                "| Métrica | Meta | Real |\n| Usuarios | 50,000 | 64,200 |\n| Retención | 80% | 88% |"
+            ),
+            Pair(
+                "📋 Cronograma de Entregas",
+                "| Hito | Responsable | Estado |\n| Prototipo | Alex | ✓ Listo |\n| Backend | Carlos | En curso |\n| Audio | Sofia | ✓ Listo |"
+            ),
+            Pair(
+                "⚖️ Comparativa de Opciones",
+                "| Solución | Ventaja | Desventaja |\n| Cloud Sync | Tiempo Real | Requiere Red |\n| Local Cache | Offline | No colaborativo |"
+            )
+        )
+
+        AlertDialog(
+            onDismissRequest = { showInsertTableModal = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.TableChart, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Insertar Tabla en Diapositiva", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Selecciona una plantilla de tabla estructurada para la diapositiva #${activeSlideIndex + 1}:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    tablePresets.forEach { (title, data) ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF1E293B),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable {
+                                    viewModel.updateSlideTable(activeSlideIndex, data)
+                                    showInsertTableModal = false
+                                }
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(title, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(data, fontSize = 11.sp, color = Color(0xFF94A3B8), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                            }
+                        }
+                    }
+
+                    if (slidesList.getOrNull(activeSlideIndex)?.tableData?.isNotBlank() == true) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(
+                            onClick = {
+                                viewModel.updateSlideTable(activeSlideIndex, null)
+                                showInsertTableModal = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Quitar tabla de esta diapositiva", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showInsertTableModal = false }) { Text("Cerrar") }
+            }
+        )
+    }
+
     // Full Screen Slide Presentation Player
     if (isPresentationPlaying) {
         AlertDialog(
@@ -392,21 +621,37 @@ fun DocEditorScreen(
                         .aspectRatio(16f / 9f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0xFF0F172A))
-                        .padding(20.dp),
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = current.first,
-                        fontSize = 22.sp,
+                        text = current.title,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    if (current.imageUrl.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(90.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                        ) {
+                            AsyncImage(
+                                model = current.imageUrl,
+                                contentDescription = "Imagen de diapositiva",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = current.second,
-                        fontSize = 15.sp,
+                        text = current.subtitle,
+                        fontSize = 13.sp,
                         color = Color(0xFFCBD5E1),
                         textAlign = TextAlign.Center
                     )
@@ -436,14 +681,16 @@ fun DocEditorScreen(
 
 @Composable
 private fun SlideEditorView(
-    slides: List<Triple<String, String, String>>,
+    slides: List<SlideModel>,
     activeSlideIndex: Int,
     onSelectSlide: (Int) -> Unit,
     onAddNewSlide: () -> Unit,
     onEditSlideContent: (String, String) -> Unit,
+    onInsertImage: () -> Unit,
+    onInsertTable: () -> Unit,
     onPlayPresentation: () -> Unit
 ) {
-    val currentSlide = slides.getOrNull(activeSlideIndex) ?: slides.firstOrNull() ?: Triple("Title", "Subtitle", "#1E293B")
+    val currentSlide = slides.getOrNull(activeSlideIndex) ?: slides.firstOrNull() ?: SlideModel("Title", "Subtitle", "#1E293B")
 
     Column(
         modifier = Modifier.fillMaxSize()
@@ -463,7 +710,6 @@ private fun SlideEditorView(
                     .fillMaxWidth()
                     .aspectRatio(0.85f)
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { onEditSlideContent(currentSlide.first, currentSlide.second) }
                     .testTag("slide_active_canvas"),
                 color = Color.White,
                 shadowElevation = 8.dp
@@ -471,7 +717,7 @@ private fun SlideEditorView(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -484,38 +730,117 @@ private fun SlideEditorView(
                                 color = Color(0xFFB0B0B0),
                                 shape = RoundedCornerShape(2.dp)
                             )
-                            .padding(horizontal = 16.dp, vertical = 20.dp),
+                            .clickable { onEditSlideContent(currentSlide.title, currentSlide.subtitle) }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = currentSlide.first,
-                            fontSize = 24.sp,
+                            text = currentSlide.title,
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1E293B),
                             textAlign = TextAlign.Center
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Render Imagen de Diapositiva if present
+                    if (currentSlide.imageUrl.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
+                                .clickable { onInsertImage() }
+                        ) {
+                            AsyncImage(
+                                model = currentSlide.imageUrl,
+                                contentDescription = "Imagen de la diapositiva",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(bottomStart = 6.dp),
+                                color = Color.Black.copy(alpha = 0.7f),
+                                modifier = Modifier.align(Alignment.TopEnd)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Cambiar", color = Color.White, fontSize = 9.sp)
+                                }
+                            }
+                        }
+                    } else {
+                        // Image affordance shortcut
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFFF8FAFC),
+                            modifier = Modifier
+                                .fillMaxWidth(0.92f)
+                                .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(6.dp))
+                                .clickable { onInsertImage() }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Toca 'Image' o aquí para añadir foto", fontSize = 10.sp, color = Color(0xFF64748B))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Dashed subtitle box (matching user's WPS screenshot: "Double-tap to add subtitle")
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(0.9f)
+                            .fillMaxWidth(0.95f)
                             .border(
                                 width = 1.dp,
                                 color = Color(0xFFB0B0B0),
                                 shape = RoundedCornerShape(2.dp)
                             )
-                            .padding(horizontal = 16.dp, vertical = 24.dp),
+                            .clickable { onEditSlideContent(currentSlide.title, currentSlide.subtitle) }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = currentSlide.second,
-                            fontSize = 15.sp,
+                            text = currentSlide.subtitle,
+                            fontSize = 13.sp,
                             color = Color(0xFF475569),
                             textAlign = TextAlign.Center
                         )
+                    }
+
+                    // Render Tabla if present
+                    if (currentSlide.tableData.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFFF1F5F9),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onInsertTable() }
+                                .padding(4.dp)
+                        ) {
+                            Text(
+                                text = currentSlide.tableData,
+                                fontSize = 10.sp,
+                                color = Color(0xFF334155),
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                modifier = Modifier.padding(6.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -550,22 +875,31 @@ private fun SlideEditorView(
                                 .clickable { onSelectSlide(idx) }
                                 .testTag("slide_thumbnail_$idx")
                         ) {
-                            // Mini title preview
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(4.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Text(
-                                    text = slide.first,
-                                    fontSize = 7.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.Black,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
+                            // Mini title preview or Image preview
+                            if (slide.imageUrl.isNotBlank()) {
+                                AsyncImage(
+                                    model = slide.imageUrl,
+                                    contentDescription = slide.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
                                 )
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = slide.title,
+                                        fontSize = 7.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.Black,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
 
                             // Orange Badge Index at bottom right (matching screenshot)
@@ -619,9 +953,9 @@ private fun SlideEditorView(
                 ) {
                     ToolbarActionItem(icon = Icons.Default.PlayArrow, label = "Play", onClick = onPlayPresentation)
                     ToolbarActionItem(icon = Icons.Default.Add, label = "New Slide", onClick = onAddNewSlide)
-                    ToolbarActionItem(icon = Icons.Default.TextFields, label = "Text Box", onClick = { onEditSlideContent(currentSlide.first, currentSlide.second) })
-                    ToolbarActionItem(icon = Icons.Default.Image, label = "Image", onClick = {})
-                    ToolbarActionItem(icon = Icons.Default.TableChart, label = "Table", onClick = {})
+                    ToolbarActionItem(icon = Icons.Default.TextFields, label = "Text Box", onClick = { onEditSlideContent(currentSlide.title, currentSlide.subtitle) })
+                    ToolbarActionItem(icon = Icons.Default.Image, label = "Image", onClick = onInsertImage)
+                    ToolbarActionItem(icon = Icons.Default.TableChart, label = "Table", onClick = onInsertTable)
                 }
             }
         }

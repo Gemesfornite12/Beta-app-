@@ -93,4 +93,7 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE firestoreId = :firestoreId")
     suspend fun deleteMessageByFirestoreId(firestoreId: String)
+
+    @Query("DELETE FROM chat_messages WHERE channelId = :channelId")
+    suspend fun deleteMessagesForChannel(channelId: String)
 }

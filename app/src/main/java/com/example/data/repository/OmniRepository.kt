@@ -38,6 +38,7 @@ class OmniRepository(private val db: AppDatabase) {
     suspend fun updateChatMessage(msg: ChatMessage) = db.chatMessageDao().updateMessage(msg)
     suspend fun deleteChatMessage(id: Long) = db.chatMessageDao().deleteMessage(id)
     suspend fun deleteChatMessageByFirestoreId(firestoreId: String) = db.chatMessageDao().deleteMessageByFirestoreId(firestoreId)
+    suspend fun deleteMessagesForChannel(channelId: String) = db.chatMessageDao().deleteMessagesForChannel(channelId)
 
     suspend fun getUserByEmail(email: String): UserAccount? = db.userDao().getUserByEmail(email)
     suspend fun saveUser(user: UserAccount) = db.userDao().insertUser(user)
@@ -51,10 +52,60 @@ class OmniRepository(private val db: AppDatabase) {
                 displayName = "Alex González",
                 passwordHash = "demo1234",
                 isGoogleAccount = true,
+                avatarUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80",
                 cloudStorageUsedMb = 3450,
                 cloudStorageTotalMb = 15360
             )
             db.userDao().insertUser(defaultUser)
+
+            val teammates = listOf(
+                UserAccount(
+                    email = "sofia.m@cloud.io",
+                    username = "sofia_audio",
+                    displayName = "Sofia Martinez",
+                    passwordHash = "demo1234",
+                    avatarUrl = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&q=80",
+                    cloudStorageUsedMb = 2100,
+                    cloudStorageTotalMb = 15360
+                ),
+                UserAccount(
+                    email = "carlos.m@cloud.io",
+                    username = "carlos_docs",
+                    displayName = "Carlos Mendoza",
+                    passwordHash = "demo1234",
+                    avatarUrl = "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&q=80",
+                    cloudStorageUsedMb = 1890,
+                    cloudStorageTotalMb = 15360
+                ),
+                UserAccount(
+                    email = "alex.r@cloud.io",
+                    username = "alex_beats",
+                    displayName = "Alex Riva",
+                    passwordHash = "demo1234",
+                    avatarUrl = "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&q=80",
+                    cloudStorageUsedMb = 3120,
+                    cloudStorageTotalMb = 15360
+                ),
+                UserAccount(
+                    email = "elena.t@cloud.io",
+                    username = "elena_design",
+                    displayName = "Elena Torres",
+                    passwordHash = "demo1234",
+                    avatarUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&q=80",
+                    cloudStorageUsedMb = 940,
+                    cloudStorageTotalMb = 15360
+                ),
+                UserAccount(
+                    email = "mateo.s@cloud.io",
+                    username = "mateo_sound",
+                    displayName = "Mateo Silva",
+                    passwordHash = "demo1234",
+                    avatarUrl = "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=200&q=80",
+                    cloudStorageUsedMb = 1450,
+                    cloudStorageTotalMb = 15360
+                )
+            )
+            teammates.forEach { db.userDao().insertUser(it) }
 
             // Seed initial document inspired by user screenshots (Presentación y Docs)
             val initialSlide = DocumentItem(

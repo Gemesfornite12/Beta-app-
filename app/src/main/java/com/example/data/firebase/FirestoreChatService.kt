@@ -35,12 +35,29 @@ data class PresenceUser(
     val lastActive: Long = System.currentTimeMillis()
 )
 
+data class GroupMember(
+    val email: String,
+    val name: String,
+    val role: String = "member", // "owner", "admin", "member"
+    val canSendMessages: Boolean = true,
+    val canSendMedia: Boolean = true,
+    val canInviteMembers: Boolean = true,
+    val avatarUrl: String = ""
+)
+
 data class ChannelInfo(
     val id: String,
     val name: String,
     val description: String,
     val iconEmoji: String,
-    val isDirect: Boolean = false
+    val isDirect: Boolean = false,
+    val isGroup: Boolean = false,
+    val groupPhotoUrl: String = "",
+    val creatorEmail: String = "",
+    val creatorName: String = "",
+    val members: List<GroupMember> = emptyList(),
+    val pendingDeletionTimestamp: Long? = null,
+    val isDeleting: Boolean = false
 )
 
 class FirestoreChatService(private val context: Context) {
@@ -192,7 +209,12 @@ class FirestoreChatService(private val context: Context) {
                 "mediaUrl" to message.mediaUrl,
                 "mediaThumbnail" to message.mediaThumbnail,
                 "callDurationSec" to message.callDurationSec,
-                "reactions" to message.reactions
+                "reactions" to message.reactions,
+                "deliveryStatus" to message.deliveryStatus,
+                "sentTimestamp" to (if (message.sentTimestamp > 0) message.sentTimestamp else message.timestamp),
+                "deliveredTimestamp" to message.deliveredTimestamp,
+                "seenTimestamp" to message.seenTimestamp,
+                "seenBy" to message.seenBy
             )
 
             docRef.set(data).await()
@@ -401,6 +423,11 @@ class FirestoreChatService(private val context: Context) {
         val mediaThumbnail = doc.getString("mediaThumbnail")
         val callDurationSec = doc.getLong("callDurationSec")?.toInt() ?: 0
         val reactions = doc.getString("reactions") ?: ""
+        val deliveryStatus = doc.getString("deliveryStatus") ?: "enviado"
+        val sentTimestamp = doc.getLong("sentTimestamp") ?: timestamp
+        val deliveredTimestamp = doc.getLong("deliveredTimestamp") ?: 0L
+        val seenTimestamp = doc.getLong("seenTimestamp") ?: 0L
+        val seenBy = doc.getString("seenBy") ?: ""
 
         return ChatMessage(
             id = doc.id.hashCode().toLong(),
@@ -419,8 +446,115 @@ class FirestoreChatService(private val context: Context) {
             mediaThumbnail = mediaThumbnail,
             callDurationSec = callDurationSec,
             reactions = reactions,
-            isSyncedFirestore = true
+            isSyncedFirestore = true,
+            deliveryStatus = deliveryStatus,
+            sentTimestamp = sentTimestamp,
+            deliveredTimestamp = deliveredTimestamp,
+            seenTimestamp = seenTimestamp,
+            seenBy = seenBy
         )
+    }
+
+    /**
+     * Marca mensajes de un canal en Firestore como 'entregado' cuando un cliente los recibe.
+     */
+    suspend fun markChannelMessagesAsDelivered(channelId: String, currentRecipientEmail: String) {
+        val db = firestore ?: return
+        try {
+            val snapshot = db.collection("chat_channels")
+                .document(channelId)
+                .collection("messages")
+                .whereEqualTo("deliveryStatus", "enviado")
+                .get()
+                .await()
+
+            val now = System.currentTimeMillis()
+            for (doc in snapshot.documents) {
+                val sender = doc.getString("senderEmail") ?: ""
+                if (sender != currentRecipientEmail) {
+                    doc.reference.update(
+                        mapOf(
+                            "deliveryStatus" to "entregado",
+                            "deliveredTimestamp" to now
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error marking messages as delivered: ${e.message}")
+        }
+    }
+
+    /**
+     * Marca mensajes de un canal en Firestore como 'visto' (leído) con fecha y usuario.
+     */
+    suspend fun markChannelMessagesAsSeen(channelId: String, currentRecipientEmail: String) {
+        val db = firestore ?: return
+        try {
+            val snapshot = db.collection("chat_channels")
+                .document(channelId)
+                .collection("messages")
+                .get()
+                .await()
+
+            val now = System.currentTimeMillis()
+            for (doc in snapshot.documents) {
+                val sender = doc.getString("senderEmail") ?: ""
+                val status = doc.getString("deliveryStatus") ?: "enviado"
+                if (sender != currentRecipientEmail && status != "visto") {
+                    val currentSeenBy = doc.getString("seenBy") ?: ""
+                    val updatedSeenBy = if (currentSeenBy.isBlank()) currentRecipientEmail
+                    else if (!currentSeenBy.contains(currentRecipientEmail)) "$currentSeenBy, $currentRecipientEmail"
+                    else currentSeenBy
+
+                    doc.reference.update(
+                        mapOf(
+                            "deliveryStatus" to "visto",
+                            "seenTimestamp" to now,
+                            "seenBy" to updatedSeenBy
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error marking messages as seen: ${e.message}")
+        }
+    }
+
+    /**
+     * Actualiza directamente el estado de entrega en Firestore para un mensaje específico.
+     */
+    suspend fun updateMessageDeliveryStatus(
+        channelId: String,
+        firestoreId: String,
+        status: String,
+        seenByEmail: String? = null
+    ) {
+        val db = firestore ?: return
+        if (firestoreId.isBlank()) return
+        try {
+            val updates = mutableMapOf<String, Any>(
+                "deliveryStatus" to status
+            )
+            val now = System.currentTimeMillis()
+            when (status) {
+                "entregado" -> updates["deliveredTimestamp"] = now
+                "visto" -> {
+                    updates["seenTimestamp"] = now
+                    if (!seenByEmail.isNullOrBlank()) {
+                        updates["seenBy"] = seenByEmail
+                    }
+                }
+            }
+            db.collection("chat_channels")
+                .document(channelId)
+                .collection("messages")
+                .document(firestoreId)
+                .update(updates)
+                .await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating delivery status in Firestore: ${e.message}")
+        }
     }
 
     /**

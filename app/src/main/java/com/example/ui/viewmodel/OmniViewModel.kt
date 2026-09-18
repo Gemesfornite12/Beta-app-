@@ -10,6 +10,7 @@ import com.example.audio.AudioSynthEngine
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.FirestoreChatService
 import com.example.data.firebase.FirestoreConnectionStatus
+import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
@@ -87,6 +88,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val documents: StateFlow<List<DocumentItem>>
     val audioProjects: StateFlow<List<AudioProject>>
     val publicAudioProjects: StateFlow<List<AudioProject>>
+    val allUsers: StateFlow<List<UserAccount>>
 
     // AI Song Creator State
     private val _isGeneratingSong = MutableStateFlow(false)
@@ -145,7 +147,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // Chat & Messaging State (Firebase Firestore Real-Time)
     val firestoreChatService = FirestoreChatService(application)
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
-    val availableChannels: List<ChannelInfo> = firestoreChatService.availableChannels
+    private val _availableChannels = MutableStateFlow<List<ChannelInfo>>(firestoreChatService.availableChannels)
+    val availableChannels: StateFlow<List<ChannelInfo>> = _availableChannels.asStateFlow()
+
+    private val _groupDeletionCountdownSeconds = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val groupDeletionCountdownSeconds: StateFlow<Map<String, Int>> = _groupDeletionCountdownSeconds.asStateFlow()
+    private val deletionJobs = mutableMapOf<String, Job>()
+    private val _permissionsBackup = mutableMapOf<String, Map<String, GroupMember>>()
 
     private val _currentChannel = MutableStateFlow("general")
     val currentChannel: StateFlow<String> = _currentChannel.asStateFlow()
@@ -222,6 +230,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         publicAudioProjects = repo.publicAudioProjects.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            emptyList()
+        )
+
+        allUsers = repo.allUsers.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
@@ -603,6 +617,42 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val slideObj = jsonArray.getJSONObject(slideIndex)
                 slideObj.put("title", title)
                 slideObj.put("subtitle", subtitle)
+                val updatedDoc = doc.copy(slidesJson = jsonArray.toString(), lastModified = System.currentTimeMillis())
+                _currentEditingDoc.value = updatedDoc
+                scheduleDocAutoSave()
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun updateSlideImage(slideIndex: Int, imageUrl: String?) {
+        val doc = _currentEditingDoc.value ?: return
+        try {
+            val jsonArray = JSONArray(doc.slidesJson)
+            if (slideIndex in 0 until jsonArray.length()) {
+                val slideObj = jsonArray.getJSONObject(slideIndex)
+                if (imageUrl.isNullOrBlank()) {
+                    slideObj.remove("imageUrl")
+                } else {
+                    slideObj.put("imageUrl", imageUrl)
+                }
+                val updatedDoc = doc.copy(slidesJson = jsonArray.toString(), lastModified = System.currentTimeMillis())
+                _currentEditingDoc.value = updatedDoc
+                scheduleDocAutoSave()
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun updateSlideTable(slideIndex: Int, tableData: String?) {
+        val doc = _currentEditingDoc.value ?: return
+        try {
+            val jsonArray = JSONArray(doc.slidesJson)
+            if (slideIndex in 0 until jsonArray.length()) {
+                val slideObj = jsonArray.getJSONObject(slideIndex)
+                if (tableData.isNullOrBlank()) {
+                    slideObj.remove("tableData")
+                } else {
+                    slideObj.put("tableData", tableData)
+                }
                 val updatedDoc = doc.copy(slidesJson = jsonArray.toString(), lastModified = System.currentTimeMillis())
                 _currentEditingDoc.value = updatedDoc
                 scheduleDocAutoSave()
@@ -1242,6 +1292,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     _chatMessages.value = firestoreMsgs
                     // Guardar en Room para persistencia local offline
                     repo.insertChatMessages(firestoreMsgs)
+                    // Marcar mensajes recibidos como vistos en Firestore
+                    viewModelScope.launch {
+                        firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
+                    }
                 }
             }
         }
@@ -1294,12 +1348,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
         val channelId = _currentChannel.value
 
+        // Validación de permisos de grupo
+        val currentCh = _availableChannels.value.firstOrNull { it.id == channelId }
+        if (currentCh != null && currentCh.isGroup) {
+            val member = currentCh.members.firstOrNull { it.email == senderEmail }
+            if (member != null) {
+                if (!member.canSendMessages) {
+                    Log.w("OmniViewModel", "User $senderEmail cannot send messages in $channelId")
+                    return
+                }
+                if ((attachedDoc != null || attachedAudio != null) && !member.canSendMedia) {
+                    Log.w("OmniViewModel", "User $senderEmail cannot send media attachments in $channelId")
+                    return
+                }
+            }
+        }
+
         // Cancelar estado de escritura
         typingDebounceJob?.cancel()
         viewModelScope.launch {
             firestoreChatService.setTypingStatus(channelId, senderEmail, senderName, false)
         }
 
+        val now = System.currentTimeMillis()
         val msg = ChatMessage(
             channelId = channelId,
             senderName = senderName,
@@ -1308,11 +1379,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 if (attachedDoc != null) "Compartí un documento: ${attachedDoc.title}"
                 else "Compartí una pista musical: ${attachedAudio?.title}"
             },
+            timestamp = now,
             attachedDocId = attachedDoc?.id,
             attachedDocTitle = attachedDoc?.title,
             attachedAudioId = attachedAudio?.id,
             attachedAudioTitle = attachedAudio?.title,
-            isSyncedFirestore = true
+            isSyncedFirestore = false,
+            deliveryStatus = "enviando",
+            sentTimestamp = now
         )
 
         _chatInputText.value = ""
@@ -1320,11 +1394,30 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             // Guardar localmente en Room primero para cero latencia
             val localId = repo.insertChatMessage(msg)
+            val initialMsg = msg.copy(id = localId)
+            _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
 
-            // Publicar en Firebase Firestore en tiempo real
-            val firestoreId = firestoreChatService.sendMessage(msg.copy(id = localId))
-            if (!firestoreId.isNullOrBlank()) {
-                repo.updateChatMessage(msg.copy(id = localId, firestoreId = firestoreId))
+            // Publicar en Firebase Firestore en tiempo real (Estado: Enviado)
+            val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            val sentMsg = initialMsg.copy(
+                firestoreId = firestoreId ?: "",
+                isSyncedFirestore = !firestoreId.isNullOrBlank(),
+                deliveryStatus = "enviado"
+            )
+            repo.updateChatMessage(sentMsg)
+            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+
+            // Transición a 'entregado' cuando llega al servidor y otros nodos
+            delay(600)
+            val deliveredTime = System.currentTimeMillis()
+            val deliveredMsg = sentMsg.copy(
+                deliveryStatus = "entregado",
+                deliveredTimestamp = deliveredTime
+            )
+            repo.updateChatMessage(deliveredMsg)
+            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            if (deliveredMsg.firestoreId.isNotBlank()) {
+                firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
             }
 
             // Colaboración en vivo de compañeros en canales directos o demostraciones
@@ -1333,6 +1426,21 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val isCarlos = channelId == "directo-carlos"
                 val teammateName = if (isCarlos) "Carlos Mendoza" else "Sofia Martinez"
                 val teammateEmail = if (isCarlos) "carlos.m@cloud.io" else "sofia.m@cloud.io"
+
+                // El compañero lee el mensaje: transición a 'visto' (doble check azul)
+                val seenTime = System.currentTimeMillis()
+                val seenMsg = deliveredMsg.copy(
+                    deliveryStatus = "visto",
+                    seenTimestamp = seenTime,
+                    seenBy = teammateEmail
+                )
+                repo.updateChatMessage(seenMsg)
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                if (seenMsg.firestoreId.isNotBlank()) {
+                    firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
+                }
+
+                delay(900)
                 val replyText = when {
                     attachedDoc != null -> "¡Recibido! Revisando '${attachedDoc.title}' en tiempo real."
                     attachedAudio != null -> "¡Qué buen ritmo! Escuché '${attachedAudio.title}', suena excelente."
@@ -1347,7 +1455,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     senderEmail = teammateEmail,
                     text = replyText,
                     reactions = "👍,✨",
-                    isSyncedFirestore = true
+                    isSyncedFirestore = true,
+                    deliveryStatus = "visto",
+                    sentTimestamp = System.currentTimeMillis(),
+                    deliveredTimestamp = System.currentTimeMillis(),
+                    seenTimestamp = System.currentTimeMillis()
                 )
                 val replyLocalId = repo.insertChatMessage(replyMsg)
                 firestoreChatService.sendMessage(replyMsg.copy(id = replyLocalId))
@@ -1378,6 +1490,268 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             _chatMessages.value = _chatMessages.value.filter {
                 it.id != msg.id && (it.firestoreId.isBlank() || it.firestoreId != msg.firestoreId)
             }
+        }
+    }
+
+    // GESTIÓN AVANZADA DE CANALES, CHAT PRIVADO, GRUPOS Y PERMISOS
+
+    fun startDirectChat(peerEmail: String, peerName: String, peerAvatar: String = "") {
+        val cleanId = "directo-" + peerEmail.replace("@", "-at-").replace(".", "-")
+        val existing = _availableChannels.value.firstOrNull {
+            it.id == cleanId || (it.isDirect && it.name.equals(peerName, ignoreCase = true))
+        }
+        if (existing != null) {
+            loadChannelMessages(existing.id)
+            return
+        }
+
+        val newDirect = ChannelInfo(
+            id = cleanId,
+            name = peerName,
+            description = "Chat privado con $peerName",
+            iconEmoji = "💬",
+            isDirect = true,
+            groupPhotoUrl = peerAvatar
+        )
+        _availableChannels.value = _availableChannels.value + newDirect
+        loadChannelMessages(cleanId)
+    }
+
+    fun createGroupChannel(
+        name: String,
+        description: String,
+        photoUrl: String,
+        memberEmails: List<String>
+    ) {
+        val user = _authUiState.value.currentUser
+        val ownerEmail = user?.email ?: "gonzalez24029@gmail.com"
+        val ownerName = user?.displayName ?: "Alex González"
+        val ownerAvatar = user?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
+
+        val ownerMember = GroupMember(
+            email = ownerEmail,
+            name = ownerName,
+            role = "owner",
+            canSendMessages = true,
+            canSendMedia = true,
+            canInviteMembers = true,
+            avatarUrl = ownerAvatar
+        )
+
+        val allAvailableUsers = allUsers.value
+        val otherMembers = memberEmails.filter { it != ownerEmail }.map { email ->
+            val u = allAvailableUsers.firstOrNull { it.email == email }
+            GroupMember(
+                email = email,
+                name = u?.displayName ?: email.substringBefore("@"),
+                role = "member",
+                canSendMessages = true,
+                canSendMedia = true,
+                canInviteMembers = true,
+                avatarUrl = u?.avatarUrl ?: ""
+            )
+        }
+
+        val allGroupMembers = listOf(ownerMember) + otherMembers
+        val newGroupId = "grupo_" + System.currentTimeMillis()
+        val newGroup = ChannelInfo(
+            id = newGroupId,
+            name = name.trim(),
+            description = description.ifBlank { "Grupo de trabajo: ${name.trim()}" },
+            iconEmoji = "👥",
+            isGroup = true,
+            groupPhotoUrl = photoUrl,
+            creatorEmail = ownerEmail,
+            creatorName = ownerName,
+            members = allGroupMembers
+        )
+
+        _availableChannels.value = _availableChannels.value + newGroup
+        sendSystemChatMessage(newGroupId, "$ownerName creó el grupo '$name' con ${allGroupMembers.size} participantes.")
+        loadChannelMessages(newGroupId)
+    }
+
+    fun addMemberToGroup(channelId: String, userEmail: String, userName: String = "", userAvatar: String = "") {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        if (ch.members.any { it.email == userEmail }) return
+        val finalName = if (userName.isNotBlank()) userName else (allUsers.value.firstOrNull { it.email == userEmail }?.displayName ?: userEmail.substringBefore("@"))
+        val finalAvatar = if (userAvatar.isNotBlank()) userAvatar else (allUsers.value.firstOrNull { it.email == userEmail }?.avatarUrl ?: "")
+
+        val newMember = GroupMember(
+            email = userEmail,
+            name = finalName,
+            role = "member",
+            canSendMessages = true,
+            canSendMedia = true,
+            canInviteMembers = true,
+            avatarUrl = finalAvatar
+        )
+        val updatedMembers = ch.members + newMember
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(members = updatedMembers) else it
+        }
+        sendSystemChatMessage(channelId, "$finalName fue añadido al grupo.")
+    }
+
+    fun removeMemberFromGroup(channelId: String, memberEmail: String) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val currentEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (ch.creatorEmail != currentEmail) return
+        if (memberEmail == ch.creatorEmail) return
+
+        val member = ch.members.firstOrNull { it.email == memberEmail }
+        val updatedMembers = ch.members.filter { it.email != memberEmail }
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(members = updatedMembers) else it
+        }
+        sendSystemChatMessage(channelId, "${member?.name ?: memberEmail} fue retirado del grupo por el creador.")
+    }
+
+    fun updateMemberPermissions(
+        channelId: String,
+        memberEmail: String,
+        canSendMessages: Boolean,
+        canSendMedia: Boolean,
+        canInviteMembers: Boolean = true
+    ) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val currentEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (ch.creatorEmail != currentEmail) return
+
+        val existingMember = ch.members.firstOrNull { it.email == memberEmail } ?: return
+
+        // Guardar copia previa para opción de deshacer en cualquier momento
+        val backupMap = _permissionsBackup.getOrPut(channelId) { mutableMapOf() }.toMutableMap()
+        backupMap[memberEmail] = existingMember
+        _permissionsBackup[channelId] = backupMap
+
+        val updatedMembers = ch.members.map {
+            if (it.email == memberEmail) {
+                it.copy(
+                    canSendMessages = canSendMessages,
+                    canSendMedia = canSendMedia,
+                    canInviteMembers = canInviteMembers
+                )
+            } else it
+        }
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(members = updatedMembers) else it
+        }
+        sendSystemChatMessage(channelId, "El creador actualizó los permisos de ${existingMember.name}.")
+    }
+
+    fun undoOrResetMemberPermissions(channelId: String, memberEmail: String) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val currentEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (ch.creatorEmail != currentEmail) return
+
+        val existingMember = ch.members.firstOrNull { it.email == memberEmail } ?: return
+        val previous = _permissionsBackup[channelId]?.get(memberEmail)
+
+        val restored = previous ?: existingMember.copy(
+            canSendMessages = true,
+            canSendMedia = true,
+            canInviteMembers = true
+        )
+
+        val updatedMembers = ch.members.map {
+            if (it.email == memberEmail) restored else it
+        }
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(members = updatedMembers) else it
+        }
+        sendSystemChatMessage(channelId, "El creador deshizo las restricciones y restauró los permisos de ${existingMember.name}.")
+    }
+
+    fun leaveGroup(channelId: String) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val user = _authUiState.value.currentUser
+        val userEmail = user?.email ?: "gonzalez24029@gmail.com"
+        val userName = user?.displayName ?: "Alex González"
+
+        val updatedMembers = ch.members.filter { it.email != userEmail }
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(members = updatedMembers) else it
+        }
+        sendSystemChatMessage(channelId, "$userName abandonó el grupo.")
+        loadChannelMessages("general")
+    }
+
+    fun scheduleGroupDeletion(channelId: String) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val userEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (ch.creatorEmail != userEmail) return
+
+        val totalSeconds = 180 // 3 minutos de advertencia
+        val targetTimestamp = System.currentTimeMillis() + (totalSeconds * 1000L)
+
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(isDeleting = true, pendingDeletionTimestamp = targetTimestamp) else it
+        }
+        _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value + (channelId to totalSeconds)
+
+        sendSystemChatMessage(
+            channelId,
+            "⚠️ ADVERTENCIA: El creador ha programado la eliminación permanente de este grupo en 3 minutos. Todos los datos y mensajes se destruirán."
+        )
+
+        deletionJobs[channelId]?.cancel()
+        deletionJobs[channelId] = viewModelScope.launch {
+            var remaining = totalSeconds
+            while (remaining > 0) {
+                delay(1000L)
+                remaining--
+                _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value + (channelId to remaining)
+            }
+            deleteGroupPermanently(channelId)
+        }
+    }
+
+    fun cancelGroupDeletion(channelId: String) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val userEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        if (ch.creatorEmail != userEmail) return
+
+        deletionJobs[channelId]?.cancel()
+        deletionJobs.remove(channelId)
+        _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value - channelId
+
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) it.copy(isDeleting = false, pendingDeletionTimestamp = null) else it
+        }
+        sendSystemChatMessage(channelId, "✅ Eliminación cancelada: El dueño ha cancelado la cuenta regresiva y conservado el grupo.")
+    }
+
+    fun deleteGroupPermanently(channelId: String) {
+        deletionJobs[channelId]?.cancel()
+        deletionJobs.remove(channelId)
+        _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value - channelId
+
+        _availableChannels.value = _availableChannels.value.filter { it.id != channelId }
+
+        viewModelScope.launch {
+            repo.deleteMessagesForChannel(channelId)
+        }
+
+        if (_currentChannel.value == channelId) {
+            loadChannelMessages("general")
+        }
+    }
+
+    fun sendSystemChatMessage(channelId: String, text: String) {
+        val msg = ChatMessage(
+            channelId = channelId,
+            senderName = "Sistema OmniStudio",
+            senderEmail = "system@omnistudio.io",
+            text = text,
+            timestamp = System.currentTimeMillis(),
+            isSyncedFirestore = true,
+            deliveryStatus = "visto"
+        )
+        viewModelScope.launch {
+            val localId = repo.insertChatMessage(msg)
+            _chatMessages.value = _chatMessages.value + msg.copy(id = localId)
+            firestoreChatService.sendMessage(msg.copy(id = localId))
         }
     }
 
@@ -1456,28 +1830,67 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             else -> caption
         }
 
+        val now = System.currentTimeMillis()
         val msg = ChatMessage(
             channelId = channelId,
             senderName = senderName,
             senderEmail = senderEmail,
             text = fallbackText,
+            timestamp = now,
             mediaType = mediaType,
             mediaUrl = mediaUrl,
-            isSyncedFirestore = true
+            isSyncedFirestore = false,
+            deliveryStatus = "enviando",
+            sentTimestamp = now
         )
 
         viewModelScope.launch {
             val localId = repo.insertChatMessage(msg)
-            val firestoreId = firestoreChatService.sendMessage(msg.copy(id = localId))
-            if (!firestoreId.isNullOrBlank()) {
-                repo.updateChatMessage(msg.copy(id = localId, firestoreId = firestoreId))
+            val initialMsg = msg.copy(id = localId)
+            _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+
+            val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            val sentMsg = initialMsg.copy(
+                firestoreId = firestoreId ?: "",
+                isSyncedFirestore = !firestoreId.isNullOrBlank(),
+                deliveryStatus = "enviado"
+            )
+            repo.updateChatMessage(sentMsg)
+            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+
+            // Transición a entregado
+            delay(500)
+            val deliveredTime = System.currentTimeMillis()
+            val deliveredMsg = sentMsg.copy(
+                deliveryStatus = "entregado",
+                deliveredTimestamp = deliveredTime
+            )
+            repo.updateChatMessage(deliveredMsg)
+            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            if (deliveredMsg.firestoreId.isNotBlank()) {
+                firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
             }
 
             // Simular respuesta de compañero en canales directos o general
             if (channelId.startsWith("directo-") || channelId == "general") {
-                delay(1200)
+                delay(1000)
                 val teammateName = if (channelId == "directo-carlos") "Carlos Mendoza" else "Sofia Martinez"
                 val teammateEmail = if (channelId == "directo-carlos") "carlos.m@cloud.io" else "sofia.m@cloud.io"
+
+                // Visto por el compañero
+                val seenTime = System.currentTimeMillis()
+                val seenMsg = deliveredMsg.copy(
+                    deliveryStatus = "visto",
+                    seenTimestamp = seenTime,
+                    seenBy = teammateEmail
+                )
+                repo.updateChatMessage(seenMsg)
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                if (seenMsg.firestoreId.isNotBlank()) {
+                    firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
+                }
+
+                delay(900)
                 val replyReaction = when (mediaType) {
                     "image" -> "¡Excelente captura! Se ve muy bien."
                     "video" -> "¡Genial el clip de video! Lo estoy reproduciendo."
@@ -1489,7 +1902,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     senderName = teammateName,
                     senderEmail = teammateEmail,
                     text = replyReaction,
-                    isSyncedFirestore = true
+                    isSyncedFirestore = true,
+                    deliveryStatus = "visto",
+                    sentTimestamp = System.currentTimeMillis(),
+                    deliveredTimestamp = System.currentTimeMillis(),
+                    seenTimestamp = System.currentTimeMillis()
                 )
                 val repId = repo.insertChatMessage(reply)
                 firestoreChatService.sendMessage(reply.copy(id = repId))
