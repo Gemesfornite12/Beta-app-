@@ -85,7 +85,8 @@ class MainActivity : ComponentActivity() {
     FcmTokenManager.initialize(applicationContext, "gonzalez24029@gmail.com")
 
     setContent {
-      MyApplicationTheme(darkTheme = true) {
+      val isDarkTheme by viewModel.isDarkTheme.collectAsState()
+      MyApplicationTheme(darkTheme = isDarkTheme) {
         OmniStudioApp(
           viewModel = viewModel,
           initialUri = currentIntentUri,

@@ -146,11 +146,45 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     private var sequencerJob: Job? = null
 
+    // Global Theme State
+    private val _isDarkTheme = MutableStateFlow(true)
+    val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
+
+    fun toggleTheme() {
+        _isDarkTheme.value = !_isDarkTheme.value
+    }
+
+    fun setDarkTheme(isDark: Boolean) {
+        _isDarkTheme.value = isDark
+    }
+
     // Chat & Messaging State (Firebase Firestore Real-Time)
     val firestoreChatService = FirestoreChatService(application)
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
     private val _availableChannels = MutableStateFlow<List<ChannelInfo>>(firestoreChatService.availableChannels)
     val availableChannels: StateFlow<List<ChannelInfo>> = _availableChannels.asStateFlow()
+
+    // Archived Channels State (Ocultar chats sin eliminarlos de Firestore)
+    private val _archivedChannelIds = MutableStateFlow<Set<String>>(emptySet())
+    val archivedChannelIds: StateFlow<Set<String>> = _archivedChannelIds.asStateFlow()
+
+    fun toggleArchiveChannel(channelId: String) {
+        if (_archivedChannelIds.value.contains(channelId)) {
+            unarchiveChannel(channelId)
+        } else {
+            archiveChannel(channelId)
+        }
+    }
+
+    fun archiveChannel(channelId: String) {
+        _archivedChannelIds.value = _archivedChannelIds.value + channelId
+    }
+
+    fun unarchiveChannel(channelId: String) {
+        _archivedChannelIds.value = _archivedChannelIds.value - channelId
+    }
+
+    fun isChannelArchived(channelId: String): Boolean = _archivedChannelIds.value.contains(channelId)
 
     private val _groupDeletionCountdownSeconds = MutableStateFlow<Map<String, Int>>(emptyMap())
     val groupDeletionCountdownSeconds: StateFlow<Map<String, Int>> = _groupDeletionCountdownSeconds.asStateFlow()
@@ -252,6 +286,19 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             )
             loadChannelMessages("general")
             initDefaultSequencerTracks()
+        }
+
+        // Escuchar canales y grupos personalizados creados y guardados en Firestore
+        viewModelScope.launch {
+            firestoreChatService.listenToCustomChannels().collect { customChannels ->
+                if (customChannels.isNotEmpty()) {
+                    val defaultChannels = firestoreChatService.availableChannels
+                    val mergedMap = LinkedHashMap<String, ChannelInfo>()
+                    defaultChannels.forEach { mergedMap[it.id] = it }
+                    customChannels.forEach { mergedMap[it.id] = it }
+                    _availableChannels.value = mergedMap.values.toList()
+                }
+            }
         }
 
         // Bucle periódico de sincronización automática con Firestore (cada 8 segundos si hay cambios pendientes)
@@ -364,6 +411,53 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 isLoggedIn = true,
                 authFeedbackMessage = "¡Bienvenido, $userName!"
             )
+        }
+    }
+
+    /**
+     * Permite al usuario cambiar su nombre y foto de perfil en cualquier momento,
+     * persistiendo en la base de datos local y sincronizando en la nube de Firestore
+     * para que todos los usuarios y miembros de grupos vean el cambio.
+     */
+    fun updateUserProfile(displayName: String, avatarUrl: String) {
+        val current = _authUiState.value.currentUser ?: return
+        val finalDisplayName = displayName.trim().ifBlank { current.displayName }
+        val finalAvatar = avatarUrl.trim()
+        val updatedUser = current.copy(
+            displayName = finalDisplayName,
+            avatarUrl = finalAvatar
+        )
+
+        _authUiState.value = _authUiState.value.copy(
+            currentUser = updatedUser,
+            authFeedbackMessage = "Perfil actualizado con éxito en la nube"
+        )
+
+        viewModelScope.launch {
+            repo.updateUser(updatedUser)
+            firestoreChatService.saveUserProfileToCloud(
+                email = updatedUser.email,
+                displayName = finalDisplayName,
+                avatarUrl = finalAvatar
+            )
+
+            // Actualizar el nombre y avatar del usuario en los grupos creados o donde es miembro
+            val myEmail = updatedUser.email
+            val updatedChannels = _availableChannels.value.map { ch ->
+                val updatedMembers = ch.members.map { m ->
+                    if (m.email == myEmail) {
+                        m.copy(name = finalDisplayName, avatarUrl = finalAvatar)
+                    } else m
+                }
+                val updatedCreatorName = if (ch.creatorEmail == myEmail) finalDisplayName else ch.creatorName
+                ch.copy(members = updatedMembers, creatorName = updatedCreatorName)
+            }
+            _availableChannels.value = updatedChannels
+
+            // Guardar canales actualizados en Firestore
+            updatedChannels.filter { it.isGroup }.forEach { groupCh ->
+                firestoreChatService.saveOrUpdateChannel(groupCh)
+            }
         }
     }
 
@@ -1569,8 +1663,50 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         _availableChannels.value = _availableChannels.value + newGroup
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(newGroup)
+        }
         sendSystemChatMessage(newGroupId, "$ownerName creó el grupo '$name' con ${allGroupMembers.size} participantes.")
         loadChannelMessages(newGroupId)
+    }
+
+    /**
+     * Permite cambiar el nombre, foto y descripción del grupo en cualquier momento,
+     * persistiendo en Firebase Firestore para que todos los participantes lo vean al instante.
+     */
+    fun updateGroupInfo(
+        channelId: String,
+        newName: String,
+        newPhotoUrl: String,
+        newDescription: String = ""
+    ) {
+        val ch = _availableChannels.value.firstOrNull { it.id == channelId } ?: return
+        val currentEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
+        val user = _authUiState.value.currentUser
+        val userName = user?.displayName ?: currentEmail.substringBefore("@")
+
+        val finalName = newName.trim().ifBlank { ch.name }
+        val finalPhoto = newPhotoUrl.trim().ifBlank { ch.groupPhotoUrl }
+        val finalDesc = if (newDescription.isNotBlank()) newDescription.trim() else ch.description
+
+        val updatedChannel = ch.copy(
+            name = finalName,
+            groupPhotoUrl = finalPhoto,
+            description = finalDesc
+        )
+
+        _availableChannels.value = _availableChannels.value.map {
+            if (it.id == channelId) updatedChannel else it
+        }
+
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
+        }
+
+        sendSystemChatMessage(
+            channelId,
+            "✏️ $userName actualizó los datos del grupo: Nombre: '$finalName'."
+        )
     }
 
     fun addMemberToGroup(channelId: String, userEmail: String, userName: String = "", userAvatar: String = "") {
@@ -1589,8 +1725,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             avatarUrl = finalAvatar
         )
         val updatedMembers = ch.members + newMember
+        val updatedChannel = ch.copy(members = updatedMembers)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(members = updatedMembers) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "$finalName fue añadido al grupo.")
     }
@@ -1603,8 +1743,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         val member = ch.members.firstOrNull { it.email == memberEmail }
         val updatedMembers = ch.members.filter { it.email != memberEmail }
+        val updatedChannel = ch.copy(members = updatedMembers)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(members = updatedMembers) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "${member?.name ?: memberEmail} fue retirado del grupo por el creador.")
     }
@@ -1636,8 +1780,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } else it
         }
+        val updatedChannel = ch.copy(members = updatedMembers)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(members = updatedMembers) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "El creador actualizó los permisos de ${existingMember.name}.")
     }
@@ -1659,8 +1807,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val updatedMembers = ch.members.map {
             if (it.email == memberEmail) restored else it
         }
+        val updatedChannel = ch.copy(members = updatedMembers)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(members = updatedMembers) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "El creador deshizo las restricciones y restauró los permisos de ${existingMember.name}.")
     }
@@ -1672,8 +1824,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val userName = user?.displayName ?: "Alex González"
 
         val updatedMembers = ch.members.filter { it.email != userEmail }
+        val updatedChannel = ch.copy(members = updatedMembers)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(members = updatedMembers) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "$userName abandonó el grupo.")
         loadChannelMessages("general")
@@ -1687,8 +1843,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val totalSeconds = 180 // 3 minutos de advertencia
         val targetTimestamp = System.currentTimeMillis() + (totalSeconds * 1000L)
 
+        val updatedChannel = ch.copy(isDeleting = true, pendingDeletionTimestamp = targetTimestamp)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(isDeleting = true, pendingDeletionTimestamp = targetTimestamp) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value + (channelId to totalSeconds)
 
@@ -1718,8 +1878,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         deletionJobs.remove(channelId)
         _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value - channelId
 
+        val updatedChannel = ch.copy(isDeleting = false, pendingDeletionTimestamp = null)
         _availableChannels.value = _availableChannels.value.map {
-            if (it.id == channelId) it.copy(isDeleting = false, pendingDeletionTimestamp = null) else it
+            if (it.id == channelId) updatedChannel else it
+        }
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "✅ Eliminación cancelada: El dueño ha cancelado la cuenta regresiva y conservado el grupo.")
     }
@@ -1733,6 +1897,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repo.deleteMessagesForChannel(channelId)
+            firestoreChatService.deleteChannelFromFirestore(channelId)
         }
 
         if (_currentChannel.value == channelId) {

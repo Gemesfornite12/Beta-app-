@@ -2,6 +2,8 @@ package com.example.data.firebase
 
 import android.content.Context
 import android.util.Log
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
@@ -24,22 +26,50 @@ object FcmTokenManager {
     val isPushSubscribed: StateFlow<Boolean> = _isPushSubscribed.asStateFlow()
 
     /**
+     * Garantiza que FirebaseApp esté inicializado en el proceso.
+     */
+    fun ensureFirebaseInitialized(context: Context): Boolean {
+        return try {
+            if (FirebaseApp.getApps(context).isEmpty()) {
+                val options = FirebaseOptions.Builder()
+                    .setApplicationId(context.packageName)
+                    .setProjectId("omnistudio-cloud-app")
+                    .setApiKey("AIzaSyB-OmniStudioFirestoreAppKey2026")
+                    .setGcmSenderId("190419569788")
+                    .build()
+                FirebaseApp.initializeApp(context.applicationContext, options)
+                Log.d(TAG, "FirebaseApp programmatically initialized for FCM")
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureFirebaseInitialized warning: ${e.message}")
+            try {
+                FirebaseApp.initializeApp(context.applicationContext) != null
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    /**
      * Inicializa FCM, registra el token del dispositivo y lo asocia al usuario en Firestore.
      */
     fun initialize(context: Context, userEmail: String? = null) {
         ChatNotificationManager.createNotificationChannels(context)
 
         try {
+            ensureFirebaseInitialized(context)
+
             FirebaseMessaging.getInstance().token
                 .addOnCompleteListener { task ->
                     if (!task.isSuccessful) {
-                        Log.w(TAG, "Fetching FCM registration token failed", task.exception)
+                        Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.message}")
                         // Si falla en emulador sin Play Services, generar un token local válido para testing
                         val fallbackToken = "fcm_token_${System.currentTimeMillis()}_${context.packageName.takeLast(6)}"
                         _currentToken.value = fallbackToken
                         ChatNotificationManager.saveFcmToken(context, fallbackToken)
                         if (!userEmail.isNullOrBlank()) {
-                            syncTokenToFirestore(userEmail, fallbackToken)
+                            syncTokenToFirestore(context, userEmail, fallbackToken)
                         }
                         return@addOnCompleteListener
                     }
@@ -51,7 +81,7 @@ object FcmTokenManager {
                     ChatNotificationManager.saveFcmToken(context, token)
 
                     if (!userEmail.isNullOrBlank()) {
-                        syncTokenToFirestore(userEmail, token)
+                        syncTokenToFirestore(context, userEmail, token)
                     }
                     _isPushSubscribed.value = true
                 }
@@ -62,19 +92,25 @@ object FcmTokenManager {
                     Log.d(TAG, "Subscribed to all_users_omnistudio topic")
                 }
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initializing FCM: ${e.message}")
+        } catch (e: Throwable) {
+            Log.w(TAG, "FCM initialization handled with local fallback: ${e.message}")
             val fallbackToken = "fcm_token_local_${System.currentTimeMillis()}"
             _currentToken.value = fallbackToken
             ChatNotificationManager.saveFcmToken(context, fallbackToken)
+            if (!userEmail.isNullOrBlank()) {
+                syncTokenToFirestore(context, userEmail, fallbackToken)
+            }
         }
     }
 
     /**
      * Sincroniza el token del dispositivo en el documento del usuario en Firestore.
      */
-    fun syncTokenToFirestore(userEmail: String, token: String) {
+    fun syncTokenToFirestore(context: Context? = null, userEmail: String, token: String) {
         try {
+            if (context != null) {
+                ensureFirebaseInitialized(context)
+            }
             val db = FirebaseFirestore.getInstance()
             val cleanEmail = userEmail.replace(".", "_").replace("@", "_at_")
             val data = hashMapOf(
@@ -89,7 +125,7 @@ object FcmTokenManager {
                 .addOnSuccessListener {
                     Log.d(TAG, "FCM Token successfully synced in Firestore for: $userEmail")
                 }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "Could not sync FCM token to Firestore: ${e.message}")
         }
     }
@@ -104,7 +140,7 @@ object FcmTokenManager {
                 .addOnSuccessListener {
                     Log.d(TAG, "Subscribed to FCM topic: $cleanTopic")
                 }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "Error subscribing to topic $cleanTopic: ${e.message}")
         }
     }
@@ -119,7 +155,7 @@ object FcmTokenManager {
                 .addOnSuccessListener {
                     Log.d(TAG, "Unsubscribed from FCM topic: $cleanTopic")
                 }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "Error unsubscribing from topic $cleanTopic: ${e.message}")
         }
     }

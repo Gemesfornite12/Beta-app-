@@ -568,6 +568,7 @@ fun GroupManageDialog(
     onRemoveMember: (email: String) -> Unit,
     onUpdatePermissions: (email: String, canSendMessages: Boolean, canSendMedia: Boolean) -> Unit,
     onResetPermissions: (email: String) -> Unit,
+    onUpdateGroupInfo: (newName: String, newDescription: String, newPhotoUrl: String) -> Unit = { _, _, _ -> },
     onScheduleDeletion: () -> Unit,
     onCancelDeletion: () -> Unit,
     onDeletePermanently: () -> Unit,
@@ -575,8 +576,21 @@ fun GroupManageDialog(
 ) {
     val isOwner = channel.creatorEmail == currentUserEmail
     var showAddMemberSection by remember { mutableStateOf(false) }
+    var isEditingGroupInfo by remember { mutableStateOf(false) }
+    var editGroupName by remember(channel.name) { mutableStateOf(channel.name) }
+    var editGroupDescription by remember(channel.description) { mutableStateOf(channel.description) }
+    var editGroupPhotoUrl by remember(channel.groupPhotoUrl) { mutableStateOf(channel.groupPhotoUrl) }
+    var infoSavedFeedback by remember { mutableStateOf(false) }
     var confirmDeleteGroupDialog by remember { mutableStateOf(false) }
     var confirmLeaveGroupDialog by remember { mutableStateOf(false) }
+
+    val presetGroupPhotos = listOf(
+        "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150",
+        "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=150",
+        "https://images.unsplash.com/photo-1556761175-5973dc0f32e7?w=150",
+        "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150",
+        "https://images.unsplash.com/photo-1531482615713-2afd69097998?w=150"
+    )
 
     val nonMemberUsers = remember(allUsers, channel.members) {
         val currentMemberEmails = channel.members.map { it.email }.toSet()
@@ -613,9 +627,10 @@ fun GroupManageDialog(
                             color = Color(0xFF7C3AED),
                             modifier = Modifier.size(40.dp)
                         ) {
-                            if (channel.groupPhotoUrl.isNotBlank()) {
+                            val displayPhoto = if (isEditingGroupInfo && editGroupPhotoUrl.isNotBlank()) editGroupPhotoUrl else channel.groupPhotoUrl
+                            if (displayPhoto.isNotBlank()) {
                                 AsyncImage(
-                                    model = channel.groupPhotoUrl,
+                                    model = displayPhoto,
                                     contentDescription = channel.name,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
@@ -649,7 +664,157 @@ fun GroupManageDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Sección para Editar Nombre y Foto del Grupo (Dueño del grupo)
+                if (isOwner) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF0F172A),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Editar Nombre y Foto del Grupo",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                TextButton(
+                                    onClick = { isEditingGroupInfo = !isEditingGroupInfo },
+                                    modifier = Modifier.testTag("btn_toggle_edit_group_info")
+                                ) {
+                                    Text(
+                                        text = if (isEditingGroupInfo) "Ocultar" else "Editar",
+                                        color = Color(0xFF818CF8),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            AnimatedVisibility(visible = isEditingGroupInfo) {
+                                Column(modifier = Modifier.padding(top = 6.dp)) {
+                                    OutlinedTextField(
+                                        value = editGroupName,
+                                        onValueChange = { editGroupName = it },
+                                        label = { Text("Nombre del grupo") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("input_edit_group_name"),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = Color(0xFF7C3AED),
+                                            unfocusedBorderColor = Color(0xFF334155),
+                                            focusedLabelColor = Color(0xFFC4B5FD),
+                                            unfocusedLabelColor = Color(0xFF94A3B8)
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    OutlinedTextField(
+                                        value = editGroupDescription,
+                                        onValueChange = { editGroupDescription = it },
+                                        label = { Text("Descripción") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("input_edit_group_desc"),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = Color(0xFF7C3AED),
+                                            unfocusedBorderColor = Color(0xFF334155),
+                                            focusedLabelColor = Color(0xFFC4B5FD),
+                                            unfocusedLabelColor = Color(0xFF94A3B8)
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    OutlinedTextField(
+                                        value = editGroupPhotoUrl,
+                                        onValueChange = { editGroupPhotoUrl = it },
+                                        label = { Text("URL de la foto del grupo") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("input_edit_group_photo"),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = Color(0xFF7C3AED),
+                                            unfocusedBorderColor = Color(0xFF334155),
+                                            focusedLabelColor = Color(0xFFC4B5FD),
+                                            unfocusedLabelColor = Color(0xFF94A3B8)
+                                        )
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    Text("Fotos predefinidas:", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        presetGroupPhotos.forEach { url ->
+                                            val isSelected = editGroupPhotoUrl == url
+                                            Surface(
+                                                shape = CircleShape,
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .border(
+                                                        2.dp,
+                                                        if (isSelected) Color(0xFF7C3AED) else Color.Transparent,
+                                                        CircleShape
+                                                    )
+                                                    .clickable { editGroupPhotoUrl = url }
+                                            ) {
+                                                AsyncImage(
+                                                    model = url,
+                                                    contentDescription = "Avatar grupo",
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    contentScale = ContentScale.Crop
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Button(
+                                        onClick = {
+                                            if (editGroupName.isNotBlank()) {
+                                                onUpdateGroupInfo(editGroupName.trim(), editGroupDescription.trim(), editGroupPhotoUrl.trim())
+                                                infoSavedFeedback = true
+                                            }
+                                        },
+                                        enabled = editGroupName.isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("btn_save_group_info")
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(if (infoSavedFeedback) "¡Guardado en Firestore!" else "Guardar Cambios del Grupo", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Banner si el grupo está en cuenta regresiva de eliminación de 3 minutos
                 if (channel.isDeleting) {

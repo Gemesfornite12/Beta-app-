@@ -670,4 +670,152 @@ class FirestoreChatService(private val context: Context) {
             Log.e(TAG, "Error ending call signal in Firestore: ${e.message}")
         }
     }
+
+    /**
+     * Guarda o actualiza la información y metadatos de un canal o grupo en Firestore.
+     */
+    suspend fun saveOrUpdateChannel(channel: ChannelInfo): Boolean {
+        val db = firestore ?: return false
+        return try {
+            val membersData = channel.members.map { m ->
+                mapOf(
+                    "email" to m.email,
+                    "name" to m.name,
+                    "role" to m.role,
+                    "canSendMessages" to m.canSendMessages,
+                    "canSendMedia" to m.canSendMedia,
+                    "canInviteMembers" to m.canInviteMembers,
+                    "avatarUrl" to m.avatarUrl
+                )
+            }
+            val data = hashMapOf(
+                "id" to channel.id,
+                "name" to channel.name,
+                "description" to channel.description,
+                "iconEmoji" to channel.iconEmoji,
+                "isDirect" to channel.isDirect,
+                "isGroup" to channel.isGroup,
+                "groupPhotoUrl" to channel.groupPhotoUrl,
+                "creatorEmail" to channel.creatorEmail,
+                "creatorName" to channel.creatorName,
+                "members" to membersData,
+                "isDeleting" to channel.isDeleting,
+                "pendingDeletionTimestamp" to channel.pendingDeletionTimestamp,
+                "lastUpdated" to System.currentTimeMillis()
+            )
+            db.collection("chat_channels")
+                .document(channel.id)
+                .set(data, SetOptions.merge())
+                .await()
+            Log.d(TAG, "Channel metadata synced to Firestore: ${channel.name} (${channel.id})")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing channel info to Firestore: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Escucha en tiempo real todos los canales y grupos guardados en Firestore.
+     */
+    fun listenToCustomChannels(): Flow<List<ChannelInfo>> = callbackFlow {
+        val db = firestore
+        if (db == null) {
+            trySend(emptyList())
+            awaitClose { }
+            return@callbackFlow
+        }
+
+        val channelsRef = db.collection("chat_channels")
+        val listener = channelsRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) {
+                return@addSnapshotListener
+            }
+
+            val channelList = snapshot.documents.mapNotNull { doc ->
+                val id = doc.getString("id") ?: doc.id
+                val name = doc.getString("name") ?: return@mapNotNull null
+                val description = doc.getString("description") ?: ""
+                val iconEmoji = doc.getString("iconEmoji") ?: "💬"
+                val isDirect = doc.getBoolean("isDirect") ?: false
+                val isGroup = doc.getBoolean("isGroup") ?: false
+                val groupPhotoUrl = doc.getString("groupPhotoUrl") ?: ""
+                val creatorEmail = doc.getString("creatorEmail") ?: ""
+                val creatorName = doc.getString("creatorName") ?: ""
+                val isDeleting = doc.getBoolean("isDeleting") ?: false
+                val pendingDeletionTimestamp = doc.getLong("pendingDeletionTimestamp")
+
+                @Suppress("UNCHECKED_CAST")
+                val rawMembers = doc.get("members") as? List<Map<String, Any>> ?: emptyList()
+                val members = rawMembers.map { m ->
+                    GroupMember(
+                        email = m["email"] as? String ?: "",
+                        name = m["name"] as? String ?: "",
+                        role = m["role"] as? String ?: "member",
+                        canSendMessages = m["canSendMessages"] as? Boolean ?: true,
+                        canSendMedia = m["canSendMedia"] as? Boolean ?: true,
+                        canInviteMembers = m["canInviteMembers"] as? Boolean ?: true,
+                        avatarUrl = m["avatarUrl"] as? String ?: ""
+                    )
+                }
+
+                ChannelInfo(
+                    id = id,
+                    name = name,
+                    description = description,
+                    iconEmoji = iconEmoji,
+                    isDirect = isDirect,
+                    isGroup = isGroup,
+                    groupPhotoUrl = groupPhotoUrl,
+                    creatorEmail = creatorEmail,
+                    creatorName = creatorName,
+                    members = members,
+                    pendingDeletionTimestamp = pendingDeletionTimestamp,
+                    isDeleting = isDeleting
+                )
+            }
+            trySend(channelList)
+        }
+
+        awaitClose { listener.remove() }
+    }
+
+    /**
+     * Elimina el canal de Firestore.
+     */
+    suspend fun deleteChannelFromFirestore(channelId: String): Boolean {
+        val db = firestore ?: return false
+        return try {
+            db.collection("chat_channels").document(channelId).delete().await()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting channel from Firestore: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Sincroniza el perfil de usuario (nombre y avatar) en la nube de Firestore.
+     */
+    suspend fun saveUserProfileToCloud(email: String, displayName: String, avatarUrl: String): Boolean {
+        val db = firestore ?: return false
+        val cleanEmail = email.replace(".", "_").replace("@", "_at_")
+        return try {
+            val data = hashMapOf(
+                "email" to email,
+                "displayName" to displayName,
+                "avatarUrl" to avatarUrl,
+                "lastUpdated" to System.currentTimeMillis()
+            )
+            db.collection("user_profiles")
+                .document(cleanEmail)
+                .set(data, SetOptions.merge())
+                .await()
+            Log.d(TAG, "User profile synced to Firestore: $displayName ($email)")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving user profile to Firestore: ${e.message}")
+            false
+        }
+    }
 }

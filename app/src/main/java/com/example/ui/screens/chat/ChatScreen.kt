@@ -1,5 +1,9 @@
 package com.example.ui.screens.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,8 +36,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -44,11 +50,13 @@ import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -97,8 +105,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -138,9 +148,11 @@ fun ChatScreen(
     val playingAudioId by viewModel.chatPlayingAudioId.collectAsState()
     val activeCall by viewModel.activeCall.collectAsState()
     val channels by viewModel.availableChannels.collectAsState()
+    val archivedChannelIds by viewModel.archivedChannelIds.collectAsState()
     val groupDeletionCountdowns by viewModel.groupDeletionCountdownSeconds.collectAsState()
     val allUsers by viewModel.allUsers.collectAsState()
 
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var showAttachDialog by remember { mutableStateOf(false) }
@@ -149,15 +161,66 @@ fun ChatScreen(
     var previewMediaType by remember { mutableStateOf<String?>(null) }
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
-    // Estados de búsqueda por palabra clave
+    // Estados de búsqueda y archivado de canales
     var isSearching by remember { mutableStateOf(false) }
     var searchKeyword by remember { mutableStateOf("") }
     var currentMatchPointer by remember { mutableStateOf(0) }
+    var showArchivedFilter by remember { mutableStateOf(false) }
 
     // Diálogos de grupos y chats privados
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showStartDirectChatDialog by remember { mutableStateOf(false) }
     var showGroupManageDialog by remember { mutableStateOf(false) }
+    var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
+
+    val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
+    val isCurrentArchived = archivedChannelIds.contains(currentChannel)
+
+    // Launchers para solicitar permisos en tiempo de ejecución para Llamadas
+    val voiceCallPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVoiceCall(peerName = peer)
+        } else {
+            showPermissionDeniedDialog = "Se requiere permiso de Micrófono para realizar llamadas de voz."
+        }
+    }
+
+    val videoCallPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val micGranted = perms[Manifest.permission.RECORD_AUDIO] == true
+        val camGranted = perms[Manifest.permission.CAMERA] == true
+        if (micGranted && camGranted) {
+            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVideoCall(peerName = peer)
+        } else {
+            showPermissionDeniedDialog = "Se requieren permisos de Micrófono y Cámara para realizar videollamadas."
+        }
+    }
+
+    val launchVoiceCall = {
+        val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (hasMic) {
+            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVoiceCall(peerName = peer)
+        } else {
+            voiceCallPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    val launchVideoCall = {
+        val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val hasCam = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (hasMic && hasCam) {
+            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVideoCall(peerName = peer)
+        } else {
+            videoCallPermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
+        }
+    }
 
     // Si hay una llamada activa de voz o video, mostrar pantalla de llamada inmersiva
     if (activeCall != null) {
@@ -179,7 +242,6 @@ fun ChatScreen(
         }
     }
 
-    val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
     val isOwner = activeChannelInfo?.isGroup == true && activeChannelInfo.creatorEmail == currentUserEmail
     val myGroupMember = activeChannelInfo?.members?.firstOrNull { it.email == currentUserEmail }
@@ -332,6 +394,19 @@ fun ChatScreen(
                             )
                         }
 
+                        // Botón de Archivar / Desarchivar conversación actual
+                        IconButton(
+                            onClick = { viewModel.toggleArchiveChannel(currentChannel) },
+                            modifier = Modifier.testTag("btn_toggle_archive_chat")
+                        ) {
+                            Icon(
+                                imageVector = if (isCurrentArchived) Icons.Default.Unarchive else Icons.Default.Archive,
+                                contentDescription = if (isCurrentArchived) "Desarchivar conversación" else "Archivar conversación",
+                                tint = if (isCurrentArchived) Color(0xFFFBBF24) else Color(0xFFCBD5E1),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
                         // Botón de Búsqueda por palabra clave dentro de la conversación
                         IconButton(
                             onClick = {
@@ -366,12 +441,9 @@ fun ChatScreen(
                             }
                         }
 
-                        // Botón de Llamada de Voz
+                        // Botón de Llamada de Voz (con verificación de permisos)
                         IconButton(
-                            onClick = {
-                                val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-                                viewModel.startVoiceCall(peerName = peer)
-                            },
+                            onClick = launchVoiceCall,
                             modifier = Modifier.testTag("btn_start_voice_call")
                         ) {
                             Icon(
@@ -382,12 +454,9 @@ fun ChatScreen(
                             )
                         }
 
-                        // Botón de Videollamada
+                        // Botón de Videollamada (con verificación de permisos)
                         IconButton(
-                            onClick = {
-                                val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-                                viewModel.startVideoCall(peerName = peer)
-                            },
+                            onClick = launchVideoCall,
                             modifier = Modifier.testTag("btn_start_video_call")
                         ) {
                             Icon(
@@ -585,13 +654,78 @@ fun ChatScreen(
                         }
                     }
 
-                    // Selector horizontal de canales, chats directos y grupos con acciones de creación
+                    // Banner si el chat actual está archivado
+                    if (isCurrentArchived) {
+                        Surface(
+                            color = Color(0xFF78350F).copy(alpha = 0.5f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Archive, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Conversación archivada (Oculta de la lista activa)", color = Color(0xFFFDE68A), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                }
+                                TextButton(onClick = { viewModel.unarchiveChannel(currentChannel) }) {
+                                    Text("Desarchivar", color = Color(0xFFFBBF24), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    // Selector horizontal de canales, chats directos y grupos con filtro de archivados
+                    val displayedChannels = remember(channels, archivedChannelIds, showArchivedFilter) {
+                        if (showArchivedFilter) {
+                            channels.filter { archivedChannelIds.contains(it.id) }
+                        } else {
+                            channels.filter { !archivedChannelIds.contains(it.id) }
+                        }
+                    }
+
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Toggle para alternar entre Activos y Archivados
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (showArchivedFilter) Color(0xFFF59E0B) else Color(0xFF334155),
+                                modifier = Modifier
+                                    .clickable { showArchivedFilter = !showArchivedFilter }
+                                    .testTag("btn_toggle_archived_filter")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (showArchivedFilter) Icons.Default.Unarchive else Icons.Default.Archive,
+                                        contentDescription = null,
+                                        tint = if (showArchivedFilter) Color(0xFF0F172A) else Color(0xFF94A3B8),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (showArchivedFilter) "Archivados (${archivedChannelIds.size})" else if (archivedChannelIds.isNotEmpty()) "Archivados (${archivedChannelIds.size})" else "Archivos",
+                                        color = if (showArchivedFilter) Color(0xFF0F172A) else Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
                         // Botón rápido para Crear Nuevo Grupo
                         item {
                             Surface(
@@ -652,13 +786,15 @@ fun ChatScreen(
                             }
                         }
 
-                        items(channels) { ch ->
+                        items(displayedChannels) { ch ->
                             val isSelected = ch.id == currentChannel
+                            val isArchived = archivedChannelIds.contains(ch.id)
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = when {
                                     isSelected -> Color(0xFF4F46E5)
                                     ch.isDeleting -> Color(0xFF991B1B)
+                                    isArchived -> Color(0xFF78350F)
                                     ch.isGroup -> Color(0xFF4338CA)
                                     else -> Color(0xFF334155)
                                 },
@@ -1073,6 +1209,9 @@ fun ChatScreen(
             onResetPermissions = { email ->
                 viewModel.undoOrResetMemberPermissions(activeChannelInfo.id, email)
             },
+            onUpdateGroupInfo = { newName, newDesc, newPhotoUrl ->
+                viewModel.updateGroupInfo(activeChannelInfo.id, newName, newDesc, newPhotoUrl)
+            },
             onScheduleDeletion = {
                 viewModel.scheduleGroupDeletion(activeChannelInfo.id)
             },
@@ -1086,6 +1225,31 @@ fun ChatScreen(
             onLeaveGroup = {
                 viewModel.leaveGroup(activeChannelInfo.id)
                 showGroupManageDialog = false
+            }
+        )
+    }
+
+    // Diálogo de Permisos Denegados para Llamadas
+    if (showPermissionDeniedDialog != null) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDeniedDialog = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Security, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Permisos para Llamadas", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Text(showPermissionDeniedDialog ?: "")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showPermissionDeniedDialog = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
+                ) {
+                    Text("Entendido", fontWeight = FontWeight.Bold)
+                }
             }
         )
     }

@@ -42,6 +42,7 @@ class OmniRepository(private val db: AppDatabase) {
 
     suspend fun getUserByEmail(email: String): UserAccount? = db.userDao().getUserByEmail(email)
     suspend fun saveUser(user: UserAccount) = db.userDao().insertUser(user)
+    suspend fun updateUser(user: UserAccount) = db.userDao().updateUser(user)
 
     suspend fun seedInitialDataIfEmpty() {
         val userCount = db.userDao().getUserByEmail("gonzalez24029@gmail.com")
