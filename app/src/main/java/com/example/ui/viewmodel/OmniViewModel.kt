@@ -380,16 +380,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Bucle periódico de sincronización automática con Firestore (cada 8 segundos si hay cambios pendientes)
+        // Bucle periódico de sincronización automática con Firestore y mensajes pendientes offline (cada 6 segundos)
         viewModelScope.launch {
             while (isActive) {
-                delay(8000)
+                delay(6000)
                 if (docDirty) {
                     triggerAutoSaveDocument()
                 }
                 if (musicDirty) {
                     triggerAutoSaveMusic()
                 }
+                syncPendingOfflineMessages()
             }
         }
     }
@@ -1441,8 +1442,36 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // CHAT & MESSAGING (Firebase Firestore Real-Time)
+    fun syncPendingOfflineMessages() {
+        viewModelScope.launch {
+            try {
+                val unsynced = repo.getUnsyncedMessages()
+                if (unsynced.isNotEmpty()) {
+                    Log.d("OmniViewModel", "Sincronizando ${unsynced.size} mensajes creados en modo offline con Firestore...")
+                    for (msg in unsynced) {
+                        val fsId = firestoreChatService.sendMessage(msg.copy(isSyncedFirestore = true, deliveryStatus = "enviado"))
+                        if (!fsId.isNullOrBlank()) {
+                            val updated = msg.copy(
+                                firestoreId = fsId,
+                                isSyncedFirestore = true,
+                                deliveryStatus = "enviado"
+                            )
+                            repo.updateChatMessage(updated)
+                            if (_currentChannel.value == msg.channelId) {
+                                _chatMessages.value = _chatMessages.value.map { if (it.id == msg.id) updated else it }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("OmniViewModel", "Excepción al sincronizar cola offline: ${e.message}")
+            }
+        }
+    }
+
     fun loadChannelMessages(channelId: String) {
         _currentChannel.value = channelId
+        syncPendingOfflineMessages()
         roomMessagesJob?.cancel()
         channelMessagesJob?.cancel()
         typingJob?.cancel()
@@ -1613,56 +1642,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (deliveredMsg.firestoreId.isNotBlank()) {
                 firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
-            }
-
-            // Colaboración en vivo de compañeros en canales directos o demostraciones
-            if (channelId.startsWith("directo-") || text.contains("?") || attachedAudio != null || attachedDoc != null) {
-                delay(1200)
-                val isCarlos = channelId == "directo-carlos"
-                val teammateName = if (isCarlos) "Carlos Mendoza" else "Sofia Martinez"
-                val teammateEmail = if (isCarlos) "carlos.m@cloud.io" else "sofia.m@cloud.io"
-
-                // El compañero lee el mensaje: transición a 'visto' (doble check azul)
-                val seenTime = System.currentTimeMillis()
-                val seenMsg = deliveredMsg.copy(
-                    deliveryStatus = "visto",
-                    seenTimestamp = seenTime,
-                    seenBy = teammateEmail
-                )
-                repo.updateChatMessage(seenMsg)
-                if (_currentChannel.value == channelId) {
-                    _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
-                }
-                if (seenMsg.firestoreId.isNotBlank()) {
-                    firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
-                }
-
-                delay(900)
-                val replyText = when {
-                    attachedDoc != null -> "¡Recibido! Revisando '${attachedDoc.title}' en tiempo real."
-                    attachedAudio != null -> "¡Qué buen ritmo! Escuché '${attachedAudio.title}', suena excelente."
-                    text.contains("?") -> "Revisé la sincronización con Firestore y todo está activo."
-                    channelId == "directo-sofia" -> "¡Hola Alex! Estoy terminando las pistas en Music Studio."
-                    channelId == "directo-carlos" -> "¡Hola! Estoy revisando los documentos del proyecto."
-                    else -> "¡Recibido en tiempo real por el equipo!"
-                }
-                val replyMsg = ChatMessage(
-                    channelId = channelId,
-                    senderName = teammateName,
-                    senderEmail = teammateEmail,
-                    text = replyText,
-                    reactions = "👍,✨",
-                    isSyncedFirestore = true,
-                    deliveryStatus = "visto",
-                    sentTimestamp = System.currentTimeMillis(),
-                    deliveredTimestamp = System.currentTimeMillis(),
-                    seenTimestamp = System.currentTimeMillis()
-                )
-                val replyLocalId = repo.insertChatMessage(replyMsg)
-                firestoreChatService.sendMessage(replyMsg.copy(id = replyLocalId))
-                if (_currentChannel.value == channelId) {
-                    _chatMessages.value = (_chatMessages.value + replyMsg.copy(id = replyLocalId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
-                }
             }
         }
     }
@@ -2148,52 +2127,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (deliveredMsg.firestoreId.isNotBlank()) {
                 firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
-            }
-
-            // Simular respuesta de compañero en canales directos o general
-            if (channelId.startsWith("directo-") || channelId == "general") {
-                delay(1000)
-                val teammateName = if (channelId == "directo-carlos") "Carlos Mendoza" else "Sofia Martinez"
-                val teammateEmail = if (channelId == "directo-carlos") "carlos.m@cloud.io" else "sofia.m@cloud.io"
-
-                // Visto por el compañero
-                val seenTime = System.currentTimeMillis()
-                val seenMsg = deliveredMsg.copy(
-                    deliveryStatus = "visto",
-                    seenTimestamp = seenTime,
-                    seenBy = teammateEmail
-                )
-                repo.updateChatMessage(seenMsg)
-                if (_currentChannel.value == channelId) {
-                    _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
-                }
-                if (seenMsg.firestoreId.isNotBlank()) {
-                    firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
-                }
-
-                delay(900)
-                val replyReaction = when (mediaType) {
-                    "image" -> "¡Excelente captura! Se ve muy bien."
-                    "video" -> "¡Genial el clip de video! Lo estoy reproduciendo."
-                    "gif" -> "😂 ¡Buenísimo el GIF!"
-                    else -> "¡Recibido!"
-                }
-                val reply = ChatMessage(
-                    channelId = channelId,
-                    senderName = teammateName,
-                    senderEmail = teammateEmail,
-                    text = replyReaction,
-                    isSyncedFirestore = true,
-                    deliveryStatus = "visto",
-                    sentTimestamp = System.currentTimeMillis(),
-                    deliveredTimestamp = System.currentTimeMillis(),
-                    seenTimestamp = System.currentTimeMillis()
-                )
-                val repId = repo.insertChatMessage(reply)
-                firestoreChatService.sendMessage(reply.copy(id = repId))
-                if (_currentChannel.value == channelId) {
-                    _chatMessages.value = (_chatMessages.value + reply.copy(id = repId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
-                }
             }
         }
     }

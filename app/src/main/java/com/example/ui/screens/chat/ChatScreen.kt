@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
@@ -56,6 +57,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.text.BasicTextField
@@ -78,6 +82,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -174,8 +180,10 @@ fun ChatScreen(
     var searchKeyword by remember { mutableStateOf("") }
     var currentMatchPointer by remember { mutableStateOf(0) }
     var showArchivedFilter by remember { mutableStateOf(false) }
+    var showTopOverflowMenu by remember { mutableStateOf(false) }
 
     // Diálogos de grupos y chats privados
+    var showMyChatsSheet by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showStartDirectChatDialog by remember { mutableStateOf(false) }
     var showGroupManageDialog by remember { mutableStateOf(false) }
@@ -279,10 +287,7 @@ fun ChatScreen(
     }
 
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+        modifier = Modifier.fillMaxSize(),
         containerColor = Color(0xFF0F172A),
         topBar = {
             Surface(
@@ -290,11 +295,11 @@ fun ChatScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column {
-                    // Header superior con información del canal y estado de Firestore
+                    // Header superior con información del canal y acciones principales
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("btn_chat_back")) {
@@ -305,11 +310,19 @@ fun ChatScreen(
                             )
                         }
 
+                        IconButton(onClick = { showMyChatsSheet = true }, modifier = Modifier.testTag("btn_top_my_chats")) {
+                            Icon(
+                                imageVector = Icons.Default.Forum,
+                                contentDescription = "Mis Chats y Grupos",
+                                tint = Color(0xFF38BDF8)
+                            )
+                        }
+
                         // Avatar del canal, grupo o chat directo
                         Surface(
                             shape = CircleShape,
                             color = if (activeChannelInfo?.isGroup == true) Color(0xFF7C3AED) else Color(0xFF334155),
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 if (activeChannelInfo?.groupPhotoUrl?.isNotBlank() == true) {
@@ -322,13 +335,13 @@ fun ChatScreen(
                                 } else {
                                     Text(
                                         text = activeChannelInfo?.iconEmoji ?: if (activeChannelInfo?.isGroup == true) "👥" else "#",
-                                        fontSize = 16.sp
+                                        fontSize = 15.sp
                                     )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         Column(
                             modifier = Modifier
@@ -342,7 +355,7 @@ fun ChatScreen(
                                     text = activeChannelInfo?.name ?: currentChannel,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
-                                    fontSize = 15.sp,
+                                    fontSize = 14.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -361,7 +374,7 @@ fun ChatScreen(
                                         )
                                     }
                                 }
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 // Indicador de estado en tiempo real de Firestore
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -372,7 +385,7 @@ fun ChatScreen(
                                     }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
@@ -383,12 +396,12 @@ fun ChatScreen(
                                                 FirestoreConnectionStatus.OFFLINE_SYNCED -> Color(0xFFFBBF24)
                                                 else -> Color(0xFF60A5FA)
                                             },
-                                            modifier = Modifier.size(7.dp)
+                                            modifier = Modifier.size(6.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Spacer(modifier = Modifier.width(2.dp))
                                         Text(
                                             text = if (firestoreStatus == FirestoreConnectionStatus.CONNECTED_REALTIME) "En Vivo" else firestoreStatus.label,
-                                            fontSize = 9.sp,
+                                            fontSize = 8.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = Color.White
                                         )
@@ -398,76 +411,14 @@ fun ChatScreen(
 
                             Text(
                                 text = if (activeChannelInfo?.isGroup == true) {
-                                    "${activeChannelInfo.members.size} participantes • Toca para gestionar"
+                                    "${activeChannelInfo.members.size} participantes"
                                 } else {
                                     activeChannelInfo?.description ?: "Mensajería en tiempo real"
                                 },
                                 color = Color(0xFF94A3B8),
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        // Botón de Archivar / Desarchivar conversación actual
-                        IconButton(
-                            onClick = { viewModel.toggleArchiveChannel(currentChannel) },
-                            modifier = Modifier.testTag("btn_toggle_archive_chat")
-                        ) {
-                            Icon(
-                                imageVector = if (isCurrentArchived) Icons.Default.Unarchive else Icons.Default.Archive,
-                                contentDescription = if (isCurrentArchived) "Desarchivar conversación" else "Archivar conversación",
-                                tint = if (isCurrentArchived) Color(0xFFFBBF24) else Color(0xFFCBD5E1),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        // Botón de Búsqueda por palabra clave dentro de la conversación
-                        IconButton(
-                            onClick = {
-                                isSearching = !isSearching
-                                if (!isSearching) {
-                                    searchKeyword = ""
-                                    currentMatchPointer = 0
-                                }
-                            },
-                            modifier = Modifier.testTag("btn_toggle_search_chat")
-                        ) {
-                            Icon(
-                                imageVector = if (isSearching) Icons.Default.Close else Icons.Default.Search,
-                                contentDescription = "Buscar mensajes",
-                                tint = if (isSearching) Color(0xFFF59E0B) else Color(0xFFCBD5E1),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        // Botón de Administración de Grupo (si es grupo)
-                        if (activeChannelInfo?.isGroup == true) {
-                            IconButton(
-                                onClick = { showGroupManageDialog = true },
-                                modifier = Modifier.testTag("btn_open_group_info")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = "Administrar Grupo",
-                                    tint = Color(0xFFA855F7),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        // Botón para Preferencias de Notificaciones de este Chat
-                        IconButton(
-                            onClick = { showChatNotificationPrefsDialog = true },
-                            modifier = Modifier.testTag("btn_chat_notification_prefs")
-                        ) {
-                            val currentPref = channelNotificationPrefs[currentChannel] ?: ChannelNotificationPreference(currentChannel)
-                            val hasAllDisabled = !currentPref.notifyMessages && !currentPref.notifyVoiceCalls && !currentPref.notifyVideoCalls
-                            Icon(
-                                imageVector = if (hasAllDisabled) Icons.Default.NotificationsOff else Icons.Default.NotificationsActive,
-                                contentDescription = "Ajustes de Notificaciones",
-                                tint = if (hasAllDisabled) Color(0xFFEF4444) else Color(0xFF8B5CF6),
-                                modifier = Modifier.size(20.dp)
                             )
                         }
 
@@ -480,7 +431,7 @@ fun ChatScreen(
                                 imageVector = Icons.Default.Call,
                                 contentDescription = "Llamada de voz",
                                 tint = Color(0xFF34D399),
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(19.dp)
                             )
                         }
 
@@ -493,8 +444,91 @@ fun ChatScreen(
                                 imageVector = Icons.Default.Videocam,
                                 contentDescription = "Videollamada",
                                 tint = Color(0xFF38BDF8),
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
+                        }
+
+                        // Menú desplegable de opciones secundarias del chat
+                        Box {
+                            IconButton(
+                                onClick = { showTopOverflowMenu = true },
+                                modifier = Modifier.testTag("btn_chat_top_overflow_menu")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Más opciones",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showTopOverflowMenu,
+                                onDismissRequest = { showTopOverflowMenu = false },
+                                modifier = Modifier.background(Color(0xFF1E293B))
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Buscar en este chat", color = Color.White, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFFF59E0B)) },
+                                    onClick = {
+                                        showTopOverflowMenu = false
+                                        isSearching = !isSearching
+                                        if (!isSearching) {
+                                            searchKeyword = ""
+                                            currentMatchPointer = 0
+                                        }
+                                    }
+                                )
+
+                                if (activeChannelInfo?.isGroup == true) {
+                                    DropdownMenuItem(
+                                        text = { Text("Administrar grupo", color = Color.White, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                        onClick = {
+                                            showTopOverflowMenu = false
+                                            showGroupManageDialog = true
+                                        }
+                                    )
+                                }
+
+                                DropdownMenuItem(
+                                    text = { Text("Ajustes de Notificaciones", color = Color.White, fontSize = 13.sp) },
+                                    leadingIcon = {
+                                        val currentPref = channelNotificationPrefs[currentChannel] ?: ChannelNotificationPreference(currentChannel)
+                                        val hasAllDisabled = !currentPref.notifyMessages && !currentPref.notifyVoiceCalls && !currentPref.notifyVideoCalls
+                                        Icon(
+                                            imageVector = if (hasAllDisabled) Icons.Default.NotificationsOff else Icons.Default.NotificationsActive,
+                                            contentDescription = null,
+                                            tint = if (hasAllDisabled) Color(0xFFEF4444) else Color(0xFF8B5CF6)
+                                        )
+                                    },
+                                    onClick = {
+                                        showTopOverflowMenu = false
+                                        showChatNotificationPrefsDialog = true
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (isCurrentArchived) "Desarchivar conversación" else "Archivar conversación",
+                                            color = Color.White,
+                                            fontSize = 13.sp
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (isCurrentArchived) Icons.Default.Unarchive else Icons.Default.Archive,
+                                            contentDescription = null,
+                                            tint = if (isCurrentArchived) Color(0xFFFBBF24) else Color(0xFFCBD5E1)
+                                        )
+                                    },
+                                    onClick = {
+                                        showTopOverflowMenu = false
+                                        viewModel.toggleArchiveChannel(currentChannel)
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -726,6 +760,36 @@ fun ChatScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Botón principal de acceso a Mis Chats y Grupos
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color(0xFF0284C7),
+                                modifier = Modifier
+                                    .clickable { showMyChatsSheet = true }
+                                    .testTag("btn_open_my_chats_sheet")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Forum,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Mis Chats (${channels.size})",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
                         // Toggle para alternar entre Activos y Archivados
                         item {
                             Surface(
@@ -1189,6 +1253,22 @@ fun ChatScreen(
                 viewModel.sendChatMessage(attachedAudio = audio)
             },
             onDismiss = { showAttachDialog = false }
+        )
+    }
+
+    // Diálogo Sheet: Mis Chats, Grupos y Canales
+    if (showMyChatsSheet) {
+        MyChatsAndGroupsSheet(
+            channels = channels,
+            currentChannelId = currentChannel,
+            archivedChannelIds = archivedChannelIds,
+            currentUserEmail = currentUserEmail,
+            onSelectChannel = { viewModel.loadChannelMessages(it) },
+            onCreateGroup = { showCreateGroupDialog = true },
+            onStartDirectChat = { showStartDirectChatDialog = true },
+            onManageGroup = { showGroupManageDialog = true },
+            onToggleArchive = { viewModel.toggleArchiveChannel(it) },
+            onDismiss = { showMyChatsSheet = false }
         )
     }
 

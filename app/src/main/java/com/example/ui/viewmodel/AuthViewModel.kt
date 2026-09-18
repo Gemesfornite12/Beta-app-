@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
@@ -61,8 +62,26 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(AuthenticationState())
     val uiState: StateFlow<AuthenticationState> = _uiState.asStateFlow()
 
+    private fun ensureFirebaseInitialized() {
+        val context = getApplication<Application>()
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            try {
+                val options = FirebaseOptions.Builder()
+                    .setApplicationId(context.packageName)
+                    .setProjectId("omnistudio-cloud-app")
+                    .setApiKey("AIzaSyB-OmniStudioFirestoreAppKey2026")
+                    .build()
+                FirebaseApp.initializeApp(context, options)
+                Log.d(TAG, "Programmatic FirebaseApp created successfully in AuthViewModel")
+            } catch (e: Exception) {
+                Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
+            }
+        }
+    }
+
     private val auth: FirebaseAuth? by lazy {
         try {
+            ensureFirebaseInitialized()
             val app = FirebaseApp.getInstance()
             FirebaseAuth.getInstance(app)
         } catch (e: Exception) {

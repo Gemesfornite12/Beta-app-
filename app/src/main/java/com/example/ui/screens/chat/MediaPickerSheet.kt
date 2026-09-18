@@ -1,6 +1,8 @@
 package com.example.ui.screens.chat
 
+import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,9 +25,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
@@ -56,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,7 +68,34 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.AudioProject
+import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
+
+private fun getFileNameFromUri(context: Context, uri: Uri): String {
+    var result: String? = null
+    if (uri.scheme == "content") {
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (index != -1) {
+                        result = cursor.getString(index)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Fallback
+        }
+    }
+    if (result == null) {
+        result = uri.path
+        val cut = result?.lastIndexOf('/') ?: -1
+        if (cut != -1) {
+            result = result?.substring(cut + 1)
+        }
+    }
+    return result ?: "archivo_adjunto"
+}
 
 data class PresetGif(
     val title: String,
@@ -153,8 +185,9 @@ fun MediaPickerSheet(
     onSendAudio: (AudioProject) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf(0) } // 0: Fotos, 1: Videos, 2: GIFs, 3: Archivos
-    val tabs = listOf("📷 Fotos", "🎥 Videos", "🎭 GIFs", "📁 Archivos")
+    val context = LocalContext.current
+    var selectedTab by remember { mutableStateOf(0) } // 0: Fotos, 1: Videos, 2: GIFs, 3: Música/Audio, 4: Archivos
+    val tabs = listOf("📷 Fotos", "🎥 Videos", "🎭 GIFs", "🎵 Música/Audio", "📁 Archivos")
 
     // Photo Picker nativo de Android (zero permissions)
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -172,6 +205,54 @@ fun MediaPickerSheet(
     ) { uri: Uri? ->
         if (uri != null) {
             onSendMedia("video", uri.toString(), "🎥 Video seleccionado desde el dispositivo")
+            onDismiss()
+        }
+    }
+
+    // Audio/Music Picker nativo de Android
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val fileName = getFileNameFromUri(context, uri)
+            val audioProj = AudioProject(
+                id = System.currentTimeMillis(),
+                title = fileName,
+                description = "Archivo de audio seleccionado desde almacenamiento local",
+                genre = "Audio Local",
+                bpm = 120,
+                patternDataJson = "[]",
+                authorEmail = "local",
+                isPublic = true
+            )
+            onSendAudio(audioProj)
+            onDismiss()
+        }
+    }
+
+    // File/Document Picker nativo de Android (cualquier archivo del dispositivo)
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val fileName = getFileNameFromUri(context, uri)
+            val ext = fileName.substringAfterLast(".", "bin").lowercase()
+            val format = when (ext) {
+                "pdf" -> DocumentFormat.PDF
+                "docx", "doc" -> DocumentFormat.DOCX
+                "md" -> DocumentFormat.MARKDOWN
+                "html" -> DocumentFormat.HTML
+                "txt" -> DocumentFormat.TXT
+                else -> DocumentFormat.TXT
+            }
+            val docItem = DocumentItem(
+                id = System.currentTimeMillis(),
+                title = fileName,
+                content = "Archivo adjunto enviado desde el almacenamiento local: $uri",
+                currentFormat = format,
+                authorEmail = "local"
+            )
+            onSendDoc(docItem)
             onDismiss()
         }
     }
@@ -453,48 +534,46 @@ fun MediaPickerSheet(
                         }
 
                         3 -> {
-                            // PESTAÑA: ARCHIVOS (Documentos y Beats)
-                            LazyColumn(modifier = Modifier.height(280.dp)) {
-                                item {
-                                    Text("Documentos recientes:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8))
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    if (docs.isEmpty()) {
-                                        Text("No hay documentos aún.", color = Color.Gray, fontSize = 11.sp)
-                                    } else {
-                                        docs.take(4).forEach { doc ->
-                                            Card(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 4.dp)
-                                                    .clickable {
-                                                        onSendDoc(doc)
-                                                        onDismiss()
-                                                    },
-                                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
-                                            ) {
-                                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                    Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8))
-                                                    Spacer(modifier = Modifier.width(10.dp))
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(doc.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                                        Text(".${doc.currentFormat.extension.uppercase()} • ${doc.authorEmail}", color = Color(0xFF94A3B8), fontSize = 10.sp)
-                                                    }
-                                                }
-                                            }
+                            // PESTAÑA: MÚSICA / AUDIO
+                            Column {
+                                // Botón para cargar archivo de música del dispositivo
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFF334155),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            audioPickerLauncher.launch("audio/*")
+                                        }
+                                        .testTag("btn_pick_device_audio")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.AudioFile, contentDescription = null, tint = Color(0xFFA855F7))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Elegir música / audio del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("Carga archivos MP3, WAV, M4A o pistas locales", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         }
                                     }
+                                }
 
-                                    Spacer(modifier = Modifier.height(14.dp))
-                                    Text("Pistas musicales / Beats:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFA855F7))
-                                    Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text("O comparte tus maquetas / beats de OmniStudio:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFFA855F7))
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                LazyColumn(modifier = Modifier.height(200.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     if (audios.isEmpty()) {
-                                        Text("No hay pistas creadas aún.", color = Color.Gray, fontSize = 11.sp)
+                                        item {
+                                            Text("No hay pistas creadas en el estudio aún.", color = Color.Gray, fontSize = 11.sp)
+                                        }
                                     } else {
-                                        audios.take(4).forEach { audio ->
+                                        items(audios) { audio ->
                                             Card(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(vertical = 4.dp)
                                                     .clickable {
                                                         onSendAudio(audio)
                                                         onDismiss()
@@ -507,6 +586,68 @@ fun MediaPickerSheet(
                                                     Column(modifier = Modifier.weight(1f)) {
                                                         Text(audio.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                                         Text("${audio.genre} • ${audio.bpm} BPM", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        4 -> {
+                            // PESTAÑA: ARCHIVOS (Documentos y Archivos locales)
+                            Column {
+                                // Botón para cargar cualquier archivo del dispositivo
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFF334155),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            filePickerLauncher.launch("*/*")
+                                        }
+                                        .testTag("btn_pick_device_file")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = Color(0xFF38BDF8))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Elegir archivo del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("Documentos PDF, Word, ZIP, Markdown, TXT", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text("O adjunta un documento de OmniStudio:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color(0xFF38BDF8))
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                LazyColumn(modifier = Modifier.height(200.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (docs.isEmpty()) {
+                                        item {
+                                            Text("No hay documentos guardados aún.", color = Color.Gray, fontSize = 11.sp)
+                                        }
+                                    } else {
+                                        items(docs) { doc ->
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        onSendDoc(doc)
+                                                        onDismiss()
+                                                    },
+                                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
+                                            ) {
+                                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8))
+                                                    Spacer(modifier = Modifier.width(10.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(doc.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                                        Text(".${doc.currentFormat.extension.uppercase()} • ${doc.authorEmail}", color = Color(0xFF94A3B8), fontSize = 10.sp)
                                                     }
                                                 }
                                             }

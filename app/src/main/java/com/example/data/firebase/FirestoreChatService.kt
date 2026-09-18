@@ -168,7 +168,11 @@ class FirestoreChatService(private val context: Context) {
             }
 
             if (snapshot != null) {
-                _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
+                if (snapshot.metadata.isFromCache) {
+                    _connectionStatus.value = FirestoreConnectionStatus.OFFLINE_SYNCED
+                } else {
+                    _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
+                }
                 val messages = snapshot.documents.mapNotNull { doc ->
                     docToChatMessage(doc, channelId)
                 }

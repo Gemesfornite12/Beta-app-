@@ -33,6 +33,7 @@ class OmniRepository(private val db: AppDatabase) {
     suspend fun updateAudioProjectPublicStatus(id: Long, isPublic: Boolean) = db.audioProjectDao().updatePublicStatus(id, isPublic)
     suspend fun deleteAudioProject(id: Long) = db.audioProjectDao().deleteAudioProject(id)
 
+    suspend fun getUnsyncedMessages(): List<ChatMessage> = db.chatMessageDao().getUnsyncedMessages()
     suspend fun insertChatMessage(msg: ChatMessage): Long = db.chatMessageDao().insertMessage(msg)
     suspend fun insertChatMessages(msgs: List<ChatMessage>) = db.chatMessageDao().insertMessages(msgs)
     suspend fun updateChatMessage(msg: ChatMessage) = db.chatMessageDao().updateMessage(msg)

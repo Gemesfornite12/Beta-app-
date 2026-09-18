@@ -79,6 +79,9 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp ASC")
     fun getMessagesForChannel(channelId: String): Flow<List<ChatMessage>>
 
+    @Query("SELECT * FROM chat_messages WHERE isSyncedFirestore = 0 OR firestoreId = ''")
+    suspend fun getUnsyncedMessages(): List<ChatMessage>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessage): Long
 
