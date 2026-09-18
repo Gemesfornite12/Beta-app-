@@ -211,6 +211,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _chatPlayingAudioId = MutableStateFlow<Long?>(null)
     val chatPlayingAudioId: StateFlow<Long?> = _chatPlayingAudioId.asStateFlow()
 
+    private var roomMessagesJob: Job? = null
     private var channelMessagesJob: Job? = null
     private var typingJob: Job? = null
     private var presenceJob: Job? = null
@@ -1442,49 +1443,63 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // CHAT & MESSAGING (Firebase Firestore Real-Time)
     fun loadChannelMessages(channelId: String) {
         _currentChannel.value = channelId
+        roomMessagesJob?.cancel()
         channelMessagesJob?.cancel()
         typingJob?.cancel()
         presenceJob?.cancel()
 
+        // 1. Limpiar la lista de mensajes inmediatamente para NO mostrar mensajes de otro canal
+        _chatMessages.value = emptyList()
+
         val currentUserEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
         val currentUserName = _authUiState.value.currentUser?.displayName ?: "Alex González"
 
-        // 1. Cargar mensajes locales en Room para respuesta instantánea inmediata
-        viewModelScope.launch {
+        // 2. Cargar mensajes locales en Room para ESTE canal específicamente (Respuesta instantánea)
+        roomMessagesJob = viewModelScope.launch {
             repo.getMessagesForChannel(channelId).collect { localMsgs ->
-                // Si aún no tenemos mensajes de Firestore o estamos cargando, mostrar locales
-                if (_chatMessages.value.isEmpty() || firestoreStatus.value != FirestoreConnectionStatus.CONNECTED_REALTIME) {
+                if (_currentChannel.value == channelId && (_chatMessages.value.isEmpty() || firestoreStatus.value != FirestoreConnectionStatus.CONNECTED_REALTIME)) {
                     _chatMessages.value = localMsgs
                 }
             }
         }
 
-        // 2. Escuchar en tiempo real desde Firebase Firestore
+        // 3. Escuchar en tiempo real desde Firebase Firestore para ESTE canal
         channelMessagesJob = viewModelScope.launch {
             firestoreChatService.listenToChannelMessages(channelId).collect { firestoreMsgs ->
-                if (firestoreMsgs.isNotEmpty()) {
-                    _chatMessages.value = firestoreMsgs
-                    // Guardar en Room para persistencia local offline
-                    repo.insertChatMessages(firestoreMsgs)
-                    // Marcar mensajes recibidos como vistos en Firestore
-                    viewModelScope.launch {
-                        firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
+                if (_currentChannel.value == channelId) {
+                    if (firestoreMsgs.isNotEmpty()) {
+                        _chatMessages.value = firestoreMsgs
+                        repo.insertChatMessages(firestoreMsgs)
+                        viewModelScope.launch {
+                            firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
+                        }
+                    } else {
+                        // Si el canal no tiene mensajes en Firestore aún, verificar si hay mensajes locales en Room
+                        repo.getMessagesForChannel(channelId).collect { localMsgs ->
+                            if (_currentChannel.value == channelId) {
+                                _chatMessages.value = localMsgs
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // 3. Escuchar indicadores de escritura en tiempo real
+        // 4. Escuchar indicadores de escritura en tiempo real
         typingJob = viewModelScope.launch {
             firestoreChatService.listenToTyping(channelId, currentUserEmail).collect { typers ->
-                _typingUsers.value = typers
+                if (_currentChannel.value == channelId) {
+                    _typingUsers.value = typers
+                }
             }
         }
 
-        // 4. Presencia de colaboradores activos en el canal
+        // 5. Presencia de colaboradores activos en el canal
         presenceJob = viewModelScope.launch {
             firestoreChatService.listenToPresence(channelId).collect { users ->
-                _onlineUsers.value = users
+                if (_currentChannel.value == channelId) {
+                    _onlineUsers.value = users
+                }
             }
         }
 
@@ -1569,7 +1584,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             // Guardar localmente en Room primero para cero latencia
             val localId = repo.insertChatMessage(msg)
             val initialMsg = msg.copy(id = localId)
-            _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+            }
 
             // Publicar en Firebase Firestore en tiempo real (Estado: Enviado)
             val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
@@ -1579,7 +1596,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 deliveryStatus = "enviado"
             )
             repo.updateChatMessage(sentMsg)
-            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+            }
 
             // Transición a 'entregado' cuando llega al servidor y otros nodos
             delay(600)
@@ -1589,7 +1608,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 deliveredTimestamp = deliveredTime
             )
             repo.updateChatMessage(deliveredMsg)
-            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            }
             if (deliveredMsg.firestoreId.isNotBlank()) {
                 firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
             }
@@ -1609,7 +1630,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     seenBy = teammateEmail
                 )
                 repo.updateChatMessage(seenMsg)
-                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                if (_currentChannel.value == channelId) {
+                    _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                }
                 if (seenMsg.firestoreId.isNotBlank()) {
                     firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
                 }
@@ -1637,6 +1660,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val replyLocalId = repo.insertChatMessage(replyMsg)
                 firestoreChatService.sendMessage(replyMsg.copy(id = replyLocalId))
+                if (_currentChannel.value == channelId) {
+                    _chatMessages.value = (_chatMessages.value + replyMsg.copy(id = replyLocalId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+                }
             }
         }
     }
@@ -1995,7 +2021,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
         viewModelScope.launch {
             val localId = repo.insertChatMessage(msg)
-            _chatMessages.value = _chatMessages.value + msg.copy(id = localId)
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = (_chatMessages.value + msg.copy(id = localId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+            }
             firestoreChatService.sendMessage(msg.copy(id = localId))
         }
     }
@@ -2092,7 +2120,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val localId = repo.insertChatMessage(msg)
             val initialMsg = msg.copy(id = localId)
-            _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+            }
 
             val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
             val sentMsg = initialMsg.copy(
@@ -2101,7 +2131,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 deliveryStatus = "enviado"
             )
             repo.updateChatMessage(sentMsg)
-            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
+            }
 
             // Transición a entregado
             delay(500)
@@ -2111,7 +2143,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 deliveredTimestamp = deliveredTime
             )
             repo.updateChatMessage(deliveredMsg)
-            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            if (_currentChannel.value == channelId) {
+                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
+            }
             if (deliveredMsg.firestoreId.isNotBlank()) {
                 firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
             }
@@ -2130,7 +2164,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     seenBy = teammateEmail
                 )
                 repo.updateChatMessage(seenMsg)
-                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                if (_currentChannel.value == channelId) {
+                    _chatMessages.value = _chatMessages.value.map { if (it.id == localId) seenMsg else it }
+                }
                 if (seenMsg.firestoreId.isNotBlank()) {
                     firestoreChatService.updateMessageDeliveryStatus(channelId, seenMsg.firestoreId, "visto", teammateEmail)
                 }
@@ -2155,6 +2191,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val repId = repo.insertChatMessage(reply)
                 firestoreChatService.sendMessage(reply.copy(id = repId))
+                if (_currentChannel.value == channelId) {
+                    _chatMessages.value = (_chatMessages.value + reply.copy(id = repId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
+                }
             }
         }
     }

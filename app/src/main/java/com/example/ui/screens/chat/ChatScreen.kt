@@ -245,10 +245,15 @@ fun ChatScreen(
         return
     }
 
-    // Scroll al último mensaje cuando cambia la cantidad
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Filtrar estrictamente los mensajes que pertenecen al canal actualmente activo
+    val displayMessages = remember(messages, currentChannel) {
+        messages.filter { it.channelId == currentChannel }
+    }
+
+    // Scroll al último mensaje cuando cambia la cantidad del canal activo
+    LaunchedEffect(displayMessages.size) {
+        if (displayMessages.isNotEmpty()) {
+            listState.animateScrollToItem(displayMessages.size - 1)
         }
     }
 
@@ -260,10 +265,10 @@ fun ChatScreen(
     val currentCountdown = groupDeletionCountdowns[currentChannel]
 
     // Índices de mensajes que coinciden con la búsqueda por palabra clave
-    val matchingIndices = remember(messages, searchKeyword) {
+    val matchingIndices = remember(displayMessages, searchKeyword) {
         if (searchKeyword.isBlank()) emptyList()
         else {
-            messages.mapIndexedNotNull { index, msg ->
+            displayMessages.mapIndexedNotNull { index, msg ->
                 val matchesText = msg.text.contains(searchKeyword, ignoreCase = true)
                 val matchesSender = msg.senderName.contains(searchKeyword, ignoreCase = true)
                 val matchesDoc = msg.attachedDocTitle?.contains(searchKeyword, ignoreCase = true) == true
@@ -1036,7 +1041,7 @@ fun ChatScreen(
             }
         }
     ) { innerPadding ->
-        if (messages.isEmpty()) {
+        if (displayMessages.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1089,7 +1094,7 @@ fun ChatScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(messages, key = { it.firestoreId.ifBlank { it.id.toString() } }) { msg ->
+                items(displayMessages, key = { it.firestoreId.ifBlank { it.id.toString() } }) { msg ->
                     val isMe = msg.senderEmail == (authState.currentUser?.email ?: "gonzalez24029@gmail.com")
                     val isMatch = searchKeyword.isNotBlank() && (
                         msg.text.contains(searchKeyword, ignoreCase = true) ||
