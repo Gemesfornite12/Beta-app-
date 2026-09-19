@@ -2202,7 +2202,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
                 try {
                     val uri = android.net.Uri.parse(mediaUrl)
-                    val ownerUid = FirebaseAuth.getInstance().currentUser?.uid ?: "anonimo"
+                    val currentUser = FirebaseAuth.getInstance().currentUser
+                    if (currentUser == null) {
+                        Log.e("OmniViewModel", "Usuario no autenticado, abortando subida.")
+                        return@launch
+                    }
+                    val ownerUid = currentUser.uid
                     val mimeType = getApplication<Application>().contentResolver.getType(uri) ?: "application/octet-stream"
                     val uploaded = mediaStorageService.uploadMedia(
                         ownerUid = ownerUid,

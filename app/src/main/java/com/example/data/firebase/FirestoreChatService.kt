@@ -67,23 +67,25 @@ class FirestoreChatService(private val context: Context) {
     private val _connectionStatus = MutableStateFlow(FirestoreConnectionStatus.CONNECTING)
     val connectionStatus: StateFlow<FirestoreConnectionStatus> = _connectionStatus.asStateFlow()
 
-    private fun getDb(): FirebaseFirestore? {
+    private val _db: FirebaseFirestore? by lazy {
         ensureFirebaseInitialized()
-        return try {
-            val db = FirebaseFirestore.getInstance()
-            Log.d(TAG, "Firestore instancia obtenida. Proyecto: ${db.app.options.projectId}")
+        try {
+            val instance = FirebaseFirestore.getInstance()
+            Log.d(TAG, "Firestore inicializado. Proyecto: ${instance.app.options.projectId}")
             val settings = FirebaseFirestoreSettings.Builder()
                 .setPersistenceEnabled(true)
                 .build()
-            db.firestoreSettings = settings
+            instance.firestoreSettings = settings
             _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
-            db
+            instance
         } catch (e: Exception) {
-            Log.e(TAG, "Error obteniendo Firestore: ${e.message}", e)
+            Log.e(TAG, "Error inicializando Firestore: ${e.message}", e)
             _connectionStatus.value = FirestoreConnectionStatus.OFFLINE_SYNCED
             null
         }
     }
+
+    private fun getDb(): FirebaseFirestore? = _db
 
     val availableChannels = listOf(
         ChannelInfo(
