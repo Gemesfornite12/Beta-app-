@@ -844,4 +844,25 @@ class FirestoreChatService(private val context: Context) {
             null
         }
     }
+
+    /**
+     * Obtiene todos los mensajes de un canal de una sola vez.
+     */
+    suspend fun getChannelMessagesOnce(channelId: String): List<ChatMessage> {
+        val db = firestore ?: return emptyList()
+        return try {
+            val snapshot = db.collection("chat_channels")
+                .document(channelId)
+                .collection("messages")
+                .orderBy("timestamp", Query.Direction.ASCENDING)
+                .get()
+                .await()
+            snapshot.documents.mapNotNull { doc ->
+                docToChatMessage(doc, channelId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching messages once for $channelId: ${e.message}")
+            emptyList()
+        }
+    }
 }

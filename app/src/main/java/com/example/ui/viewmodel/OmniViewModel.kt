@@ -26,12 +26,14 @@ import com.example.data.model.DocumentItem
 import com.example.data.model.DocumentType
 import com.example.data.model.UserAccount
 import com.example.data.repository.OmniRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -164,7 +166,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val firestoreChatService = FirestoreChatService(application)
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
     private val _availableChannels = MutableStateFlow<List<ChannelInfo>>(firestoreChatService.availableChannels)
-    val availableChannels: StateFlow<List<ChannelInfo>> = _availableChannels.asStateFlow()
+    val availableChannels: StateFlow<List<ChannelInfo>> = combine(_availableChannels, _authUiState) { channels, auth ->
+        val currentUserEmail = auth.currentUser?.email
+        if (currentUserEmail == null) {
+            channels
+        } else {
+            channels.map { ch ->
+                if (ch.isDirect) {
+                    val peer = ch.members.firstOrNull { !it.email.equals(currentUserEmail, ignoreCase = true) }
+                    if (peer != null) {
+                        ch.copy(
+                            name = peer.name.ifBlank { peer.email.substringBefore("@") },
+                            groupPhotoUrl = peer.avatarUrl.ifBlank { ch.groupPhotoUrl },
+                            description = "Chat privado con ${peer.name.ifBlank { peer.email.substringBefore("@") }}"
+                        )
+                    } else {
+                        ch
+                    }
+                } else {
+                    ch
+                }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), firestoreChatService.availableChannels)
 
     // Archived Channels State (Ocultar chats sin eliminarlos de Firestore)
     private val _archivedChannelIds = MutableStateFlow<Set<String>>(emptySet())
@@ -389,10 +413,31 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             firestoreChatService.listenToCustomChannels().collect { customChannels ->
                 val defaultChannels = firestoreChatService.availableChannels
+                val currentUserEmail = _authUiState.value.currentUser?.email
                 val mergedMap = LinkedHashMap<String, ChannelInfo>()
+                
+                // Agregar canales predeterminados
                 defaultChannels.forEach { mergedMap[it.id] = it }
-                customChannels.forEach { mergedMap[it.id] = it }
-                _availableChannels.value = mergedMap.values.toList()
+                
+                // Agregar y filtrar canales de Firestore
+                customChannels.forEach { ch ->
+                    if (!ch.isDirect && !ch.isGroup) {
+                        // Canal público general
+                        mergedMap[ch.id] = ch
+                    } else {
+                        // Grupo o chat directo: el usuario activo debe ser miembro
+                        val isMember = ch.members.any { it.email.equals(currentUserEmail, ignoreCase = true) }
+                        if (isMember) {
+                            mergedMap[ch.id] = ch
+                        }
+                    }
+                }
+                
+                val finalChannels = mergedMap.values.toList()
+                _availableChannels.value = finalChannels
+                
+                // Sincronizar todos los mensajes de estos canales en segundo plano de una sola vez
+                syncAllChannelsMessages(finalChannels)
             }
         }
 
@@ -1701,10 +1746,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // GESTIÓN AVANZADA DE CANALES, CHAT PRIVADO, GRUPOS Y PERMISOS
 
     fun startDirectChat(peerEmail: String, peerName: String, peerAvatar: String = "") {
-        val cleanId = "directo-" + peerEmail.replace("@", "-at-").replace(".", "-")
-        val existing = _availableChannels.value.firstOrNull {
-            it.id == cleanId || (it.isDirect && it.name.equals(peerName, ignoreCase = true))
-        }
+        val currentUser = _authUiState.value.currentUser
+        val currentUserEmail = currentUser?.email ?: "gonzalez24029@gmail.com"
+        val currentUserName = currentUser?.displayName ?: "Alex González"
+        val currentUserAvatar = currentUser?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
+
+        // Generar un ID de canal simétrico basado en la ordenación alfabética de los correos
+        val email1 = if (currentUserEmail < peerEmail) currentUserEmail else peerEmail
+        val email2 = if (currentUserEmail < peerEmail) peerEmail else currentUserEmail
+        val cleanId = "directo-" + email1.replace("@", "-at-").replace(".", "-") + "_and_" + email2.replace("@", "-at-").replace(".", "-")
+
+        val existing = _availableChannels.value.firstOrNull { it.id == cleanId }
         if (existing != null) {
             loadChannelMessages(existing.id)
             return
@@ -1716,9 +1768,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             description = "Chat privado con $peerName",
             iconEmoji = "💬",
             isDirect = true,
-            groupPhotoUrl = peerAvatar
+            groupPhotoUrl = peerAvatar,
+            members = listOf(
+                GroupMember(
+                    email = currentUserEmail,
+                    name = currentUserName,
+                    avatarUrl = currentUserAvatar,
+                    role = "admin"
+                ),
+                GroupMember(
+                    email = peerEmail,
+                    name = peerName,
+                    avatarUrl = peerAvatar,
+                    role = "member"
+                )
+            ),
+            creatorEmail = currentUserEmail,
+            creatorName = currentUserName
         )
+
         _availableChannels.value = _availableChannels.value + newDirect
+        viewModelScope.launch {
+            firestoreChatService.saveOrUpdateChannel(newDirect)
+        }
         loadChannelMessages(cleanId)
     }
 
@@ -2640,6 +2712,23 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     fun clearFeedbackMessage() {
         _conversionSuccessMessage.value = null
         _authUiState.value = _authUiState.value.copy(authFeedbackMessage = null)
+    }
+
+    fun syncAllChannelsMessages(channels: List<ChannelInfo>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            Log.d("OmniViewModel", "Sincronizando de una sola vez los mensajes de todos los canales (${channels.size})...")
+            for (ch in channels) {
+                try {
+                    val messages = firestoreChatService.getChannelMessagesOnce(ch.id)
+                    if (messages.isNotEmpty()) {
+                        repo.insertChatMessages(messages)
+                    }
+                } catch (e: Exception) {
+                    Log.e("OmniViewModel", "Error sincronizando mensajes para el canal ${ch.id}: ${e.message}")
+                }
+            }
+            Log.d("OmniViewModel", "Sincronización completa de todos los mensajes.")
+        }
     }
 
     override fun onCleared() {
