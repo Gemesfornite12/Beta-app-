@@ -1,5 +1,6 @@
 package com.example.data.firebase
 
+import android.content.Context
 import android.net.Uri
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -24,9 +25,10 @@ data class UploadedMedia(
     val sizeBytes: Long?
 )
 
-class FirebaseMediaStorageService {
-    private val storage = FirebaseStorage.getInstance()
-    private val firestore = FirebaseFirestore.getInstance()
+class FirebaseMediaStorageService(context: Context) {
+    private val app = FirebaseAppProvider.get(context)
+    private val storage = FirebaseStorage.getInstance(app)
+    private val firestore = FirebaseFirestore.getInstance(app)
 
     /**
      * mediaType: image, video, audio, gif, sticker o document.

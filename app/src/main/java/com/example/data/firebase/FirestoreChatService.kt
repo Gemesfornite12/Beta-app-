@@ -68,10 +68,10 @@ class FirestoreChatService(private val context: Context) {
     val connectionStatus: StateFlow<FirestoreConnectionStatus> = _connectionStatus.asStateFlow()
 
     private val _db: FirebaseFirestore? by lazy {
-        ensureFirebaseInitialized()
         try {
-            val instance = FirebaseFirestore.getInstance()
-            Log.d(TAG, "Firestore inicializado. Proyecto: ${instance.app.options.projectId}")
+            val app = FirebaseAppProvider.get(context)
+            val instance = FirebaseFirestore.getInstance(app)
+            Log.d(TAG, "Firestore inicializado con FirebaseApp. Proyecto: ${instance.app.options.projectId}")
             val settings = FirebaseFirestoreSettings.Builder()
                 .setPersistenceEnabled(true)
                 .build()
@@ -127,17 +127,6 @@ class FirestoreChatService(private val context: Context) {
             isDirect = true
         )
     )
-
-    private fun ensureFirebaseInitialized() {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            try {
-                FirebaseApp.initializeApp(context)
-                Log.d(TAG, "FirebaseApp initialized automatically using google-services.json")
-            } catch (e: Exception) {
-                Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
-            }
-        }
-    }
 
     /**
      * Escucha en tiempo real todos los mensajes de un canal en Firestore.

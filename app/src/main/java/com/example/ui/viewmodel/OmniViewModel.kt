@@ -2176,7 +2176,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
         val channelId = _currentChannel.value
-        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService()
+        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService(getApplication())
 
         viewModelScope.launch {
             var finalUrl = mediaUrl

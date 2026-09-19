@@ -15,6 +15,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.example.data.firebase.FirestoreChatService
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.example.data.firebase.FirebaseAppProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
@@ -63,40 +64,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(AuthenticationState())
     val uiState: StateFlow<AuthenticationState> = _uiState.asStateFlow()
 
-    private fun ensureFirebaseInitialized() {
-        val context = getApplication<Application>()
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            try {
-                val options = try {
-                    FirebaseOptions.fromResource(context)
-                } catch (e: Exception) {
-                    null
-                } ?: FirebaseOptions.Builder()
-                    .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-caaf5")
-                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
-                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
-                    .build()
-                FirebaseApp.initializeApp(context, options)
-                Log.d(TAG, "Programmatic FirebaseApp created successfully in AuthViewModel using project omnistudio-caaf5")
-            } catch (e: Exception) {
-                Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
-            }
-        }
-    }
-
     private val auth: FirebaseAuth? by lazy {
         try {
-            ensureFirebaseInitialized()
-            val app = FirebaseApp.getInstance()
+            val app = FirebaseAppProvider.get(getApplication())
             FirebaseAuth.getInstance(app)
         } catch (e: Exception) {
-            try {
-                FirebaseAuth.getInstance()
-            } catch (inner: Exception) {
-                Log.w(TAG, "Firebase no está inicializado o falta google-services.json: ${inner.message}")
-                null
-            }
+            Log.w(TAG, "Firebase no está inicializado o falta google-services.json: ${e.message}")
+            null
         }
     }
 
