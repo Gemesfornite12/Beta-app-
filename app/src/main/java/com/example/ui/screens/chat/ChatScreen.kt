@@ -1576,6 +1576,7 @@ fun ChatScreen(
                                 "image" -> "📷 Imagen Ampliada"
                                 "video" -> "🎥 Video en Reproducción"
                                 "gif" -> "🎭 Animación GIF"
+                                "sticker" -> "✨ Sticker Animado"
                                 else -> "Multimedia"
                             },
                             color = Color.White,
@@ -1603,8 +1604,11 @@ fun ChatScreen(
                             .heightIn(min = 220.dp, max = 380.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
+                            val safePreviewUrl = remember(previewMediaUrl) {
+                                previewMediaUrl?.replace("http://", "https://")
+                            }
                             AsyncImage(
-                                model = previewMediaUrl,
+                                model = safePreviewUrl,
                                 contentDescription = "Vista previa multimedia",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
@@ -2153,19 +2157,21 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de GIFs animados
-                    if (message.mediaType == "gif" && !message.mediaUrl.isNullOrBlank()) {
+                    // Renderizado de GIFs y Stickers animados
+                    if ((message.mediaType == "gif" || message.mediaType == "sticker") && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
+                        val safeMediaUrl = remember(message.mediaUrl) {
+                            message.mediaUrl.replace("http://", "https://")
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { onPreviewMedia(message.mediaUrl, "gif") }
+                                .clickable { onPreviewMedia(safeMediaUrl, message.mediaType) }
                         ) {
                             AsyncImage(
-                                model = message.mediaUrl,
-                                imageLoader = gifImageLoader,
-                                contentDescription = "GIF animado",
+                                model = safeMediaUrl,
+                                contentDescription = if (message.mediaType == "gif") "GIF animado" else "Sticker animado",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2173,13 +2179,13 @@ private fun MessageBubble(
                             )
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
-                                color = Color(0xFFEF4444),
+                                color = if (message.mediaType == "gif") Color(0xFFEF4444) else Color(0xFF10B981),
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .padding(6.dp)
                             ) {
                                 Text(
-                                    text = "GIF",
+                                    text = if (message.mediaType == "gif") "GIF" else "STICKER",
                                     color = Color.White,
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,

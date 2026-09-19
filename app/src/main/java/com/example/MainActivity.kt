@@ -49,6 +49,10 @@ import com.example.ui.screens.music.MusicStudioScreen
 import com.example.ui.screens.profile.ProfileScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.OmniViewModel
+import coil.Coil
+import coil.ImageLoader
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 
 class MainActivity : ComponentActivity() {
   private val viewModel: OmniViewModel by viewModels()
@@ -63,6 +67,24 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    
+    // Configurar Coil globalmente para soporte nativo de GIFs y Stickers animados
+    try {
+      val imageLoader = ImageLoader.Builder(applicationContext)
+        .components {
+          if (Build.VERSION.SDK_INT >= 28) {
+            add(ImageDecoderDecoder.Factory())
+          } else {
+            add(GifDecoder.Factory())
+          }
+        }
+        .crossfade(true)
+        .build()
+      Coil.setImageLoader(imageLoader)
+    } catch (e: Exception) {
+      Log.e("MainActivity", "Error inicializando Coil: ${e.message}", e)
+    }
+
     enableEdgeToEdge()
     currentIntentUri = intent?.data
 

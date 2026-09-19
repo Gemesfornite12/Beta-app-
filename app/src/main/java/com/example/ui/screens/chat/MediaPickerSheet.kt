@@ -771,7 +771,8 @@ fun MediaPickerSheet(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                     ) {
                                                         for (item in rowItems) {
-                                                            val finalUrl = item.images.fixedHeight?.url ?: item.images.original?.url ?: ""
+                                                            val rawUrl = item.images.fixedHeight?.url ?: item.images.original?.url ?: ""
+                                                            val finalUrl = rawUrl.replace("http://", "https://")
                                                             Card(
                                                                 shape = RoundedCornerShape(12.dp),
                                                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
@@ -852,7 +853,8 @@ fun MediaPickerSheet(
                                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                     ) {
                                                         for (item in rowItems) {
-                                                            val finalUrl = item.getBestUrl()
+                                                            val rawUrl = item.getBestUrl()
+                                                            val finalUrl = rawUrl.replace("http://", "https://")
                                                             Card(
                                                                 shape = RoundedCornerShape(12.dp),
                                                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
