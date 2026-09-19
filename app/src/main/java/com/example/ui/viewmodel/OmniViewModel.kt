@@ -2194,29 +2194,48 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
         val channelId = _currentChannel.value
-
-        val fallbackText = when (mediaType) {
-            "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
-            "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
-            "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
-            else -> caption
-        }
-
-        val now = System.currentTimeMillis()
-        val msg = ChatMessage(
-            channelId = channelId,
-            senderName = senderName,
-            senderEmail = senderEmail,
-            text = fallbackText,
-            timestamp = now,
-            mediaType = mediaType,
-            mediaUrl = mediaUrl,
-            isSyncedFirestore = false,
-            deliveryStatus = "enviando",
-            sentTimestamp = now
-        )
+        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService()
 
         viewModelScope.launch {
+            var finalUrl = mediaUrl
+            if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
+                try {
+                    val uri = android.net.Uri.parse(mediaUrl)
+                    val ownerUid = user?.email ?: "anonimo"
+                    val uploaded = mediaStorageService.uploadMedia(
+                        ownerUid = ownerUid,
+                        localUri = uri,
+                        mediaType = mediaType,
+                        mimeType = "application/octet-stream"
+                    )
+                    finalUrl = uploaded.downloadUrl
+                } catch (e: Exception) {
+                    Log.e("OmniViewModel", "Error subiendo media: ${e.message}")
+                    return@launch
+                }
+            }
+
+            val fallbackText = when (mediaType) {
+                "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
+                "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
+                "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
+                else -> caption
+            }
+
+            val now = System.currentTimeMillis()
+            val msg = ChatMessage(
+                channelId = channelId,
+                senderName = senderName,
+                senderEmail = senderEmail,
+                text = fallbackText,
+                timestamp = now,
+                mediaType = mediaType,
+                mediaUrl = finalUrl,
+                isSyncedFirestore = false,
+                deliveryStatus = "enviando",
+                sentTimestamp = now
+            )
+
             val localId = repo.insertChatMessage(msg)
             val initialMsg = msg.copy(id = localId)
             if (_currentChannel.value == channelId) {
@@ -2227,27 +2246,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             val sentMsg = initialMsg.copy(
                 firestoreId = firestoreId ?: "",
                 isSyncedFirestore = !firestoreId.isNullOrBlank(),
-                deliveryStatus = "enviado"
+                deliveryStatus = if (!firestoreId.isNullOrBlank()) "enviado" else "error"
             )
+            
             repo.updateChatMessage(sentMsg)
-            if (_currentChannel.value == channelId) {
-                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
-            }
-
-            // Transición a entregado
-            delay(500)
-            val deliveredTime = System.currentTimeMillis()
-            val deliveredMsg = sentMsg.copy(
-                deliveryStatus = "entregado",
-                deliveredTimestamp = deliveredTime
-            )
-            repo.updateChatMessage(deliveredMsg)
-            if (_currentChannel.value == channelId) {
-                _chatMessages.value = _chatMessages.value.map { if (it.id == localId) deliveredMsg else it }
-            }
-            if (deliveredMsg.firestoreId.isNotBlank()) {
-                firestoreChatService.updateMessageDeliveryStatus(channelId, deliveredMsg.firestoreId, "entregado")
-            }
+            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
         }
     }
 
