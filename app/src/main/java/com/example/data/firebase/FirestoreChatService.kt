@@ -129,13 +129,18 @@ class FirestoreChatService(private val context: Context) {
     private fun ensureFirebaseInitialized() {
         if (FirebaseApp.getApps(context).isEmpty()) {
             try {
-                val options = FirebaseOptions.Builder()
+                val options = try {
+                    FirebaseOptions.fromResource(context)
+                } catch (e: Exception) {
+                    null
+                } ?: FirebaseOptions.Builder()
                     .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-cloud-app")
-                    .setApiKey("AIzaSyB-OmniStudioFirestoreAppKey2026")
+                    .setProjectId("omnistudio-caaf5")
+                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
+                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
                     .build()
                 FirebaseApp.initializeApp(context, options)
-                Log.d(TAG, "Programmatic FirebaseApp created successfully")
+                Log.d(TAG, "Programmatic FirebaseApp created successfully using project omnistudio-caaf5")
             } catch (e: Exception) {
                 Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
             }

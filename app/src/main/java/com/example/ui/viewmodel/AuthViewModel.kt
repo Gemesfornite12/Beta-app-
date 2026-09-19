@@ -66,13 +66,18 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         if (FirebaseApp.getApps(context).isEmpty()) {
             try {
-                val options = FirebaseOptions.Builder()
+                val options = try {
+                    FirebaseOptions.fromResource(context)
+                } catch (e: Exception) {
+                    null
+                } ?: FirebaseOptions.Builder()
                     .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-cloud-app")
-                    .setApiKey("AIzaSyB-OmniStudioFirestoreAppKey2026")
+                    .setProjectId("omnistudio-caaf5")
+                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
+                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
                     .build()
                 FirebaseApp.initializeApp(context, options)
-                Log.d(TAG, "Programmatic FirebaseApp created successfully in AuthViewModel")
+                Log.d(TAG, "Programmatic FirebaseApp created successfully in AuthViewModel using project omnistudio-caaf5")
             } catch (e: Exception) {
                 Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
             }
@@ -342,7 +347,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 // Configurar opción de Google ID Token
                 val googleIdOption = GetGoogleIdOption.Builder()
                     .setFilterByAuthorizedAccounts(false)
-                    .setServerClientId("190419569788-omnistudio.apps.googleusercontent.com")
+                    .setServerClientId("611449222458-15tufgtevlao0dtmpuba9thld02ep30s.apps.googleusercontent.com")
                     .setNonce(hashedNonce)
                     .setAutoSelectEnabled(false)
                     .build()

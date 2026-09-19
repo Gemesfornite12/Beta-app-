@@ -31,14 +31,19 @@ object FcmTokenManager {
     fun ensureFirebaseInitialized(context: Context): Boolean {
         return try {
             if (FirebaseApp.getApps(context).isEmpty()) {
-                val options = FirebaseOptions.Builder()
+                val options = try {
+                    FirebaseOptions.fromResource(context)
+                } catch (e: Exception) {
+                    null
+                } ?: FirebaseOptions.Builder()
                     .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-cloud-app")
-                    .setApiKey("AIzaSyB-OmniStudioFirestoreAppKey2026")
-                    .setGcmSenderId("190419569788")
+                    .setProjectId("omnistudio-caaf5")
+                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
+                    .setGcmSenderId("611449222458")
+                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
                     .build()
                 FirebaseApp.initializeApp(context.applicationContext, options)
-                Log.d(TAG, "FirebaseApp programmatically initialized for FCM")
+                Log.d(TAG, "FirebaseApp programmatically initialized for FCM using project omnistudio-caaf5")
             }
             true
         } catch (e: Exception) {
