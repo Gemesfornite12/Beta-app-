@@ -71,11 +71,15 @@ class FirestoreChatService(private val context: Context) {
         try {
             val app = FirebaseAppProvider.get(context)
             val instance = FirebaseFirestore.getInstance(app)
-            Log.d(TAG, "Firestore inicializado con FirebaseApp. Proyecto: ${instance.app.options.projectId}")
+            
+            // Log crítico para verificar a qué proyecto apunta la app
+            Log.d(TAG, "CONEXIÓN FIRESTORE: Proyecto=${instance.app.options.projectId}")
+            
             val settings = FirebaseFirestoreSettings.Builder()
-                .setPersistenceEnabled(true)
+                .setPersistenceEnabled(false)
                 .build()
             instance.firestoreSettings = settings
+            instance.enableNetwork()
             _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
             instance
         } catch (e: Exception) {
@@ -85,6 +89,8 @@ class FirestoreChatService(private val context: Context) {
         }
     }
 
+    // ... dentro de FirestoreChatService ...
+    
     private fun getDb(): FirebaseFirestore? = _db
 
     val availableChannels = listOf(
