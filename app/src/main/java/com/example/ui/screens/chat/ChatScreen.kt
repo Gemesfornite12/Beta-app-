@@ -175,6 +175,13 @@ fun ChatScreen(
     var previewMediaType by remember { mutableStateOf<String?>(null) }
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
+    // Estados para adjuntos pendientes (pre-envío) que el usuario puede revisar o borrar
+    var pendingMediaType by remember { mutableStateOf<String?>(null) } // "image", "video", "gif"
+    var pendingMediaUrl by remember { mutableStateOf<String?>(null) }
+    var pendingMediaTitle by remember { mutableStateOf<String?>(null) }
+    var pendingDocItem by remember { mutableStateOf<com.example.data.model.DocumentItem?>(null) }
+    var pendingAudioProject by remember { mutableStateOf<com.example.data.model.AudioProject?>(null) }
+
     // Estados de búsqueda y archivado de canales
     var isSearching by remember { mutableStateOf(false) }
     var searchKeyword by remember { mutableStateOf("") }
@@ -1019,6 +1026,128 @@ fun ChatScreen(
                     }
                 }
 
+                // Visualización y opción de borrar adjuntos seleccionados antes de enviar (Boceto / Pre-envío)
+                if (pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null) {
+                    Surface(
+                        color = Color(0xFF0F172A),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Miniatura o icono descriptivo
+                            Box(
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF1E293B)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                when {
+                                    pendingMediaType == "image" || pendingMediaType == "gif" -> {
+                                        AsyncImage(
+                                            model = pendingMediaUrl,
+                                            contentDescription = "Vista previa de imagen",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                    pendingMediaType == "video" -> {
+                                        Box(modifier = Modifier.fillMaxSize()) {
+                                            AsyncImage(
+                                                model = pendingMediaUrl,
+                                                contentDescription = "Vista previa de video",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(20.dp).align(Alignment.Center)
+                                            )
+                                        }
+                                    }
+                                    pendingDocItem != null -> {
+                                        Icon(
+                                            imageVector = Icons.Default.Description,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    pendingAudioProject != null -> {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = null,
+                                            tint = Color(0xFFA855F7),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            // Información de lo que se enviará
+                            Column(modifier = Modifier.weight(1f)) {
+                                val labelText = when {
+                                    pendingMediaType == "image" -> "📷 Imagen lista para enviar"
+                                    pendingMediaType == "video" -> "🎥 Video listo para enviar"
+                                    pendingMediaType == "gif" -> "🎭 GIF listo para enviar"
+                                    pendingDocItem != null -> "📁 Documento listo para enviar"
+                                    pendingAudioProject != null -> "🎵 Audio del estudio listo para enviar"
+                                    else -> "Adjunto listo"
+                                }
+                                Text(
+                                    text = labelText,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = pendingMediaTitle ?: pendingDocItem?.title ?: pendingAudioProject?.title ?: "Archivo seleccionado",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // Botón de eliminar/borrar el adjunto antes de enviar (pedido por el usuario)
+                            IconButton(
+                                onClick = {
+                                    pendingMediaType = null
+                                    pendingMediaUrl = null
+                                    pendingMediaTitle = null
+                                    pendingDocItem = null
+                                    pendingAudioProject = null
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color(0xFFEF4444).copy(alpha = 0.2f), CircleShape)
+                                    .testTag("btn_delete_pending_attachment")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Borrar adjunto",
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Barra de entrada de texto
                 Row(
                     modifier = Modifier
@@ -1058,6 +1187,7 @@ fun ChatScreen(
                         placeholder = {
                             Text(
                                 if (!canSendMessages) "Permiso restringido por el creador"
+                                else if (pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null) "Añade un comentario / leyenda opcional..."
                                 else "Escribe en #${activeChannelInfo?.name ?: currentChannel}...",
                                 color = Color(0xFF64748B),
                                 fontSize = 13.sp
@@ -1082,21 +1212,49 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(6.dp))
 
+                    val hasAnyInput = chatInput.isNotBlank() || pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null
+
                     Surface(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .clickable(enabled = canSendMessages && chatInput.isNotBlank()) {
-                                if (canSendMessages) viewModel.sendChatMessage()
+                            .clickable(enabled = canSendMessages && hasAnyInput) {
+                                if (canSendMessages) {
+                                    when {
+                                        pendingMediaType != null -> {
+                                            viewModel.sendMediaMessage(
+                                                mediaType = pendingMediaType!!,
+                                                mediaUrl = pendingMediaUrl!!,
+                                                caption = chatInput
+                                            )
+                                            viewModel.onChatInputChanged("")
+                                        }
+                                        pendingDocItem != null -> {
+                                            viewModel.sendChatMessage(attachedDoc = pendingDocItem)
+                                        }
+                                        pendingAudioProject != null -> {
+                                            viewModel.sendChatMessage(attachedAudio = pendingAudioProject)
+                                        }
+                                        else -> {
+                                            viewModel.sendChatMessage()
+                                        }
+                                    }
+                                    // Limpiar estados locales de adjuntos
+                                    pendingMediaType = null
+                                    pendingMediaUrl = null
+                                    pendingMediaTitle = null
+                                    pendingDocItem = null
+                                    pendingAudioProject = null
+                                }
                             }
                             .testTag("btn_send_chat"),
-                        color = if (canSendMessages && chatInput.isNotBlank()) Color(0xFF4F46E5) else Color(0xFF334155)
+                        color = if (canSendMessages && hasAnyInput) Color(0xFF4F46E5) else Color(0xFF334155)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Enviar",
-                                tint = if (canSendMessages && chatInput.isNotBlank()) Color.White else Color(0xFF94A3B8),
+                                tint = if (canSendMessages && hasAnyInput) Color.White else Color(0xFF94A3B8),
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -1244,13 +1402,25 @@ fun ChatScreen(
             docs = allDocs,
             audios = allAudio,
             onSendMedia = { type, url, caption ->
-                viewModel.sendMediaMessage(mediaType = type, mediaUrl = url, caption = caption)
+                pendingMediaType = type
+                pendingMediaUrl = url
+                pendingMediaTitle = caption
+                pendingDocItem = null
+                pendingAudioProject = null
             },
             onSendDoc = { doc ->
-                viewModel.sendChatMessage(attachedDoc = doc)
+                pendingMediaType = null
+                pendingMediaUrl = null
+                pendingMediaTitle = null
+                pendingDocItem = doc
+                pendingAudioProject = null
             },
             onSendAudio = { audio ->
-                viewModel.sendChatMessage(attachedAudio = audio)
+                pendingMediaType = null
+                pendingMediaUrl = null
+                pendingMediaTitle = null
+                pendingDocItem = null
+                pendingAudioProject = audio
             },
             onDismiss = { showAttachDialog = false }
         )

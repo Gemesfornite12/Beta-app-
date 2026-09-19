@@ -34,15 +34,19 @@ import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -51,6 +55,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -188,6 +193,46 @@ fun MediaPickerSheet(
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) } // 0: Fotos, 1: Videos, 2: GIFs, 3: Música/Audio, 4: Archivos
     val tabs = listOf("📷 Fotos", "🎥 Videos", "🎭 GIFs", "🎵 Música/Audio", "📁 Archivos")
+
+    // Estados de GIPHY Live API
+    var giphySearchQuery by remember { mutableStateOf("") }
+    var giphyType by remember { mutableStateOf("gifs") } // "gifs" or "stickers"
+    var giphyItems by remember { mutableStateOf<List<com.example.data.giphy.GiphyItem>>(emptyList()) }
+    var isGiphyLoading by remember { mutableStateOf(false) }
+    var giphyError by remember { mutableStateOf<String?>(null) }
+
+    val giphyApiKey = try { com.example.BuildConfig.GIPHY_API_KEY } catch (_: Exception) { "" }
+
+    LaunchedEffect(giphySearchQuery, giphyType) {
+        if (giphyApiKey.isBlank()) {
+            giphyError = "API Key no configurada"
+            return@LaunchedEffect
+        }
+        isGiphyLoading = true
+        giphyError = null
+        try {
+            val response = if (giphySearchQuery.isBlank()) {
+                if (giphyType == "gifs") {
+                    com.example.data.giphy.GiphyClient.apiService.getTrendingGifs(apiKey = giphyApiKey, limit = 25)
+                } else {
+                    com.example.data.giphy.GiphyClient.apiService.getTrendingStickers(apiKey = giphyApiKey, limit = 25)
+                }
+            } else {
+                if (giphyType == "gifs") {
+                    com.example.data.giphy.GiphyClient.apiService.searchGifs(apiKey = giphyApiKey, query = giphySearchQuery, limit = 25)
+                } else {
+                    com.example.data.giphy.GiphyClient.apiService.searchStickers(apiKey = giphyApiKey, query = giphySearchQuery, limit = 25)
+                }
+            }
+            giphyItems = response.data
+        } catch (e: Exception) {
+            android.util.Log.e("MediaPickerSheet", "Error Giphy: ${e.message}", e)
+            giphyError = "Sin conexión o clave incorrecta. Mostrando presets locales."
+            giphyItems = emptyList()
+        } finally {
+            isGiphyLoading = false
+        }
+    }
 
     // Photo Picker nativo de Android (zero permissions)
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -475,56 +520,199 @@ fun MediaPickerSheet(
                         }
 
                         2 -> {
-                            // PESTAÑA: GIFS
+                            // PESTAÑA: GIFS & STICKERS (GIPHY API INTEGRATION)
                             Column {
-                                Text("Elige un GIF animado para responder:", color = Color(0xFFCBD5E1), fontSize = 12.sp)
+                                // Barra de Búsqueda Giphy
+                                OutlinedTextField(
+                                    value = giphySearchQuery,
+                                    onValueChange = { giphySearchQuery = it },
+                                    placeholder = { Text("Buscar en GIPHY...", color = Color(0xFF94A3B8), fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Buscar",
+                                            tint = Color(0xFF818CF8),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color(0xFF0F172A),
+                                        unfocusedContainerColor = Color(0xFF0F172A),
+                                        focusedBorderColor = Color(0xFF4F46E5),
+                                        unfocusedBorderColor = Color(0xFF334155),
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("giphy_search_input")
+                                )
+
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                LazyColumn(modifier = Modifier.height(280.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(PRESET_GIFS) { gif ->
-                                        Card(
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                // Selectores de Tipo: Gifs vs Stickers
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf("gifs" to "👾 GIFs", "stickers" to "✨ Stickers").forEach { (typeKey, label) ->
+                                        val isSelected = giphyType == typeKey
+                                        Surface(
+                                            shape = RoundedCornerShape(16.dp),
+                                            color = if (isSelected) Color(0xFF4F46E5) else Color(0xFF1E293B),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(32.dp)
+                                                .clickable { giphyType = typeKey }
+                                                .testTag("giphy_tab_$typeKey")
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = label,
+                                                    color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Cuerpo de Resultados
+                                if (isGiphyLoading) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(200.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(color = Color(0xFF818CF8), modifier = Modifier.size(28.dp))
+                                    }
+                                } else if (giphyError != null && giphyItems.isEmpty()) {
+                                    // Fallback a Presets locales si no hay internet o clave inválida
+                                    Column {
+                                        Text(giphyError ?: "Mostrando presets locales", color = Color(0xFFF43F5E), fontSize = 10.sp, modifier = Modifier.padding(bottom = 6.dp))
+                                        
+                                        LazyColumn(modifier = Modifier.height(180.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            items(PRESET_GIFS) { gif ->
+                                                Card(
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            onSendMedia("gif", gif.url, "${gif.emoji} ${gif.title}")
+                                                            onDismiss()
+                                                        }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Box(modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp))) {
+                                                            AsyncImage(
+                                                                model = gif.url,
+                                                                contentDescription = gif.title,
+                                                                contentScale = ContentScale.Crop,
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            )
+                                                        }
+                                                        Spacer(modifier = Modifier.width(12.dp))
+                                                        Column {
+                                                            Row {
+                                                                Text(gif.emoji, fontSize = 14.sp)
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Text(gif.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                            }
+                                                            Text("Categoría: ${gif.category}", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Grid Virtual chunking 2 por fila
+                                    val rowItemsList = giphyItems.chunked(2)
+                                    if (rowItemsList.isEmpty()) {
+                                        Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable {
-                                                    onSendMedia("gif", gif.url, "${gif.emoji} ${gif.title}")
-                                                    onDismiss()
-                                                }
+                                                .height(200.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Row(
-                                                modifier = Modifier.padding(8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(60.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
+                                            Text("No se encontraron resultados en GIPHY", color = Color(0xFF64748B), fontSize = 12.sp)
+                                        }
+                                    } else {
+                                        LazyColumn(modifier = Modifier.height(200.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            items(rowItemsList) { rowItems ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
-                                                    AsyncImage(
-                                                        model = gif.url,
-                                                        contentDescription = gif.title,
-                                                        contentScale = ContentScale.Crop,
-                                                        modifier = Modifier.fillMaxWidth()
-                                                    )
-                                                    Surface(
-                                                        shape = RoundedCornerShape(4.dp),
-                                                        color = Color(0xFFEF4444),
-                                                        modifier = Modifier
-                                                            .align(Alignment.TopStart)
-                                                            .padding(2.dp)
-                                                    ) {
-                                                        Text("GIF", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 3.dp))
+                                                    for (item in rowItems) {
+                                                        val finalUrl = item.images.fixedHeight?.url ?: item.images.original?.url ?: ""
+                                                        Card(
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .clickable {
+                                                                    if (finalUrl.isNotEmpty()) {
+                                                                        onSendMedia(if (giphyType == "gifs") "gif" else "sticker", finalUrl, item.title ?: "Giphy ${giphyType}")
+                                                                        onDismiss()
+                                                                    }
+                                                                }
+                                                        ) {
+                                                            Column(modifier = Modifier.padding(6.dp)) {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .height(80.dp)
+                                                                        .clip(RoundedCornerShape(8.dp))
+                                                                ) {
+                                                                    AsyncImage(
+                                                                        model = finalUrl,
+                                                                        contentDescription = item.title,
+                                                                        contentScale = ContentScale.Crop,
+                                                                        modifier = Modifier.fillMaxWidth()
+                                                                    )
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(4.dp),
+                                                                        color = if (giphyType == "gifs") Color(0xFF818CF8) else Color(0xFF10B981),
+                                                                        modifier = Modifier
+                                                                            .align(Alignment.TopStart)
+                                                                            .padding(2.dp)
+                                                                    ) {
+                                                                        Text(
+                                                                            text = if (giphyType == "gifs") "GIF" else "STICKER",
+                                                                            color = Color.White,
+                                                                            fontSize = 7.sp,
+                                                                            fontWeight = FontWeight.Bold,
+                                                                            modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                                                        )
+                                                                    }
+                                                                }
+                                                                Spacer(modifier = Modifier.height(4.dp))
+                                                                Text(
+                                                                    text = item.title ?: "Sin título",
+                                                                    color = Color.White,
+                                                                    fontSize = 10.sp,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
+                                                            }
+                                                        }
                                                     }
-                                                }
-                                                Spacer(modifier = Modifier.width(12.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text(gif.emoji, fontSize = 16.sp)
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text(gif.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                    // Relleno de espacio si el número es impar en la fila final
+                                                    if (rowItems.size < 2) {
+                                                        Spacer(modifier = Modifier.weight(1f))
                                                     }
-                                                    Text("Categoría: ${gif.category}", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                                 }
                                             }
                                         }
