@@ -840,7 +840,7 @@ class FirestoreChatService(private val context: Context) {
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching user profile from Firestore: ${e.message}")
+            Log.w(TAG, "Error fetching user profile from Firestore: ${e.message}")
             null
         }
     }

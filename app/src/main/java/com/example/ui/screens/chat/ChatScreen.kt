@@ -166,6 +166,17 @@ fun ChatScreen(
     val channelNotificationPrefs by viewModel.channelNotificationPrefs.collectAsState()
 
     val context = LocalContext.current
+    val gifImageLoader = remember(context) {
+        coil.ImageLoader.Builder(context)
+            .components {
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    add(coil.decode.ImageDecoderDecoder.Factory())
+                } else {
+                    add(coil.decode.GifDecoder.Factory())
+                }
+            }
+            .build()
+    }
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var showAttachDialog by remember { mutableStateOf(false) }
@@ -1762,6 +1773,18 @@ private fun MessageBubble(
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val gifImageLoader = remember(context) {
+        coil.ImageLoader.Builder(context)
+            .components {
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    add(coil.decode.ImageDecoderDecoder.Factory())
+                } else {
+                    add(coil.decode.GifDecoder.Factory())
+                }
+            }
+            .build()
+    }
     val timeFormatted = remember(message.timestamp) {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
         sdf.format(Date(message.timestamp))
@@ -2141,6 +2164,7 @@ private fun MessageBubble(
                         ) {
                             AsyncImage(
                                 model = message.mediaUrl,
+                                imageLoader = gifImageLoader,
                                 contentDescription = "GIF animado",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier

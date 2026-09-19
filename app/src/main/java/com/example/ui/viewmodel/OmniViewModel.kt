@@ -494,20 +494,42 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             } else if (user != null) {
                 _authUiState.value = _authUiState.value.copy(authFeedbackMessage = "Contraseña incorrecta")
             } else {
-                // Auto create account or report not found
-                val newUser = UserAccount(
-                    email = email,
-                    username = email.substringBefore("@"),
-                    displayName = email.substringBefore("@").replaceFirstChar { it.uppercase() },
-                    passwordHash = pass,
-                    isGoogleAccount = false
-                )
-                repo.saveUser(newUser)
-                _authUiState.value = _authUiState.value.copy(
-                    currentUser = newUser,
-                    isLoggedIn = true,
-                    authFeedbackMessage = "Cuenta creada exitosamente en la nube"
-                )
+                // Intentar recuperar el perfil de usuario desde Firestore en la nube si existe
+                val cloudProfile = firestoreChatService.getUserProfileFromCloud(email)
+                if (cloudProfile != null) {
+                    val cloudName = cloudProfile["displayName"] as? String ?: email.substringBefore("@").replaceFirstChar { it.uppercase() }
+                    val cloudAvatar = cloudProfile["avatarUrl"] as? String ?: ""
+                    val restoredUser = UserAccount(
+                        email = email,
+                        username = email.substringBefore("@"),
+                        displayName = cloudName,
+                        passwordHash = pass,
+                        isGoogleAccount = false,
+                        avatarUrl = cloudAvatar
+                    )
+                    repo.saveUser(restoredUser)
+                    _authUiState.value = _authUiState.value.copy(
+                        currentUser = restoredUser,
+                        isLoggedIn = true,
+                        authFeedbackMessage = "¡Perfil de usuario restaurado con éxito desde la nube!"
+                    )
+                } else {
+                    // Auto crear cuenta localmente y registrar en la nube
+                    val newUser = UserAccount(
+                        email = email,
+                        username = email.substringBefore("@"),
+                        displayName = email.substringBefore("@").replaceFirstChar { it.uppercase() },
+                        passwordHash = pass,
+                        isGoogleAccount = false
+                    )
+                    repo.saveUser(newUser)
+                    firestoreChatService.saveUserProfileToCloud(email, newUser.displayName, "")
+                    _authUiState.value = _authUiState.value.copy(
+                        currentUser = newUser,
+                        isLoggedIn = true,
+                        authFeedbackMessage = "Cuenta creada exitosamente y sincronizada en la nube"
+                    )
+                }
             }
         }
     }
