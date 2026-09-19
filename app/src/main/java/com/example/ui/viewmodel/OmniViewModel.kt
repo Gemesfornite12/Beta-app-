@@ -43,7 +43,7 @@ import org.json.JSONObject
 
 data class AuthUiState(
     val currentUser: UserAccount? = null,
-    val isLoggedIn: Boolean = true, // Default to true after seeding, or false for login
+    val isLoggedIn: Boolean = false,
     val isAuthModeLogin: Boolean = true,
     val emailInput: String = "",
     val passwordInput: String = "",
@@ -382,32 +382,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            repo.seedInitialDataIfEmpty()
-            val user = repo.getUserByEmail("gonzalez24029@gmail.com")
-            _authUiState.value = _authUiState.value.copy(
-                currentUser = user,
-                isLoggedIn = true
-            )
-            loadChannelMessages("general")
-            initDefaultSequencerTracks()
-
-            // Sincronizar el perfil del usuario activo desde la nube para restaurar nombre/apellidos
-            user?.let { u ->
-                val cloudProfile = firestoreChatService.getUserProfileFromCloud(u.email)
-                if (cloudProfile != null) {
-                    val cloudName = cloudProfile["displayName"] as? String
-                    val cloudAvatar = cloudProfile["avatarUrl"] as? String
-                    if (!cloudName.isNullOrBlank() || !cloudAvatar.isNullOrBlank()) {
-                        val updated = u.copy(
-                            displayName = cloudName ?: u.displayName,
-                            avatarUrl = cloudAvatar ?: u.avatarUrl
-                        )
-                        repo.updateUser(updated)
-                        _authUiState.value = _authUiState.value.copy(currentUser = updated)
-                        Log.d("OmniViewModel", "Restored active user profile from cloud: ${updated.displayName}")
-                    }
-                }
+            val currentUser = FirebaseAuth.getInstance().currentUser
+            if (currentUser != null) {
+                syncUserFromFirebaseAuth(currentUser.email, currentUser.displayName, currentUser.photoUrl?.toString())
             }
+            initDefaultSequencerTracks()
         }
 
         // Escuchar canales y grupos personalizados creados y guardados en Firestore
@@ -636,6 +615,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
+        FirebaseAuth.getInstance().signOut()
         _authUiState.value = _authUiState.value.copy(
             isLoggedIn = false,
             currentUser = null,
