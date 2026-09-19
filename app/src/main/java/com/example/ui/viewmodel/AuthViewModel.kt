@@ -216,8 +216,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } else {
-            // Fallback de desarrollo local si google-services.json no está configurado
-            simulateLocalAuthSuccess(email, password, isRegister = false)
+            _uiState.update { it.copy(isLoading = false, errorMessage = "Error: Firebase no está configurado correctamente.") }
         }
     }
 
@@ -280,8 +279,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } else {
-            // Fallback de desarrollo local
-            simulateLocalAuthSuccess(email, password, isRegister = true, displayName = name)
+            _uiState.update { it.copy(isLoading = false, errorMessage = "Error: Firebase no está configurado correctamente.") }
         }
     }
 
@@ -395,7 +393,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 } else {
-                    simulateGoogleAuthSuccess()
+                    _uiState.update { 
+                        it.copy(
+                            isGoogleLoading = false,
+                            errorMessage = "Error de configuración de Google Sign-In"
+                        ) 
+                    }
                 }
             }
         }
@@ -454,39 +457,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } else {
-            simulateGoogleAuthSuccess()
+            _uiState.update { it.copy(isGoogleLoading = false, errorMessage = "Error de configuración de Firebase Auth") }
         }
     }
 
-    private fun simulateLocalAuthSuccess(
-        email: String,
-        pass: String,
-        isRegister: Boolean,
-        displayName: String = ""
-    ) {
-        val finalName = if (displayName.isNotEmpty()) displayName else email.substringBefore("@").replaceFirstChar { it.uppercase() }
-        _uiState.update {
-            it.copy(
-                isLoading = false,
-                isAuthenticated = true,
-                userEmail = email,
-                userDisplayName = finalName,
-                successMessage = if (isRegister) "Cuenta creada exitosamente" else "¡Bienvenido, $finalName!"
-            )
-        }
-    }
-
-    private fun simulateGoogleAuthSuccess() {
-        _uiState.update {
-            it.copy(
-                isGoogleLoading = false,
-                isAuthenticated = true,
-                userEmail = "gonzalez24029@gmail.com",
-                userDisplayName = "Alexis González (Google)",
-                successMessage = "Conectado vía Google Cloud Identity"
-            )
-        }
-    }
+    // Funciones de simulación eliminadas para prevenir auto-login con cuenta de desarrollador
 
     /**
      * Cerrar sesión
