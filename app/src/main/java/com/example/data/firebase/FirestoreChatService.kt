@@ -67,19 +67,19 @@ class FirestoreChatService(private val context: Context) {
     private val _connectionStatus = MutableStateFlow(FirestoreConnectionStatus.CONNECTING)
     val connectionStatus: StateFlow<FirestoreConnectionStatus> = _connectionStatus.asStateFlow()
 
-    private val firestore: FirebaseFirestore? by lazy {
-        try {
-            ensureFirebaseInitialized()
+    private fun getDb(): FirebaseFirestore? {
+        ensureFirebaseInitialized()
+        return try {
             val db = FirebaseFirestore.getInstance()
+            Log.d(TAG, "Firestore instancia obtenida. Proyecto: ${db.app.options.projectId}")
             val settings = FirebaseFirestoreSettings.Builder()
                 .setPersistenceEnabled(true)
                 .build()
             db.firestoreSettings = settings
             _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
-            Log.d(TAG, "Firebase Firestore initialized successfully with real-time persistence")
             db
         } catch (e: Exception) {
-            Log.e(TAG, "Error initializing Firebase Firestore: ${e.message}", e)
+            Log.e(TAG, "Error obteniendo Firestore: ${e.message}", e)
             _connectionStatus.value = FirestoreConnectionStatus.OFFLINE_SYNCED
             null
         }
@@ -129,18 +129,8 @@ class FirestoreChatService(private val context: Context) {
     private fun ensureFirebaseInitialized() {
         if (FirebaseApp.getApps(context).isEmpty()) {
             try {
-                val options = try {
-                    FirebaseOptions.fromResource(context)
-                } catch (e: Exception) {
-                    null
-                } ?: FirebaseOptions.Builder()
-                    .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-caaf5")
-                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
-                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
-                    .build()
-                FirebaseApp.initializeApp(context, options)
-                Log.d(TAG, "Programmatic FirebaseApp created successfully using project omnistudio-caaf5")
+                FirebaseApp.initializeApp(context)
+                Log.d(TAG, "FirebaseApp initialized automatically using google-services.json")
             } catch (e: Exception) {
                 Log.w(TAG, "FirebaseApp.initializeApp warning: ${e.message}")
             }
@@ -152,7 +142,7 @@ class FirestoreChatService(private val context: Context) {
      * Utiliza addSnapshotListener para recibir cambios instantáneos cuando cualquier usuario escribe.
      */
     fun listenToChannelMessages(channelId: String): Flow<List<ChatMessage>> = callbackFlow {
-        val db = firestore
+        val db = getDb()
         if (db == null) {
             _connectionStatus.value = FirestoreConnectionStatus.OFFLINE_SYNCED
             trySend(emptyList())
@@ -195,7 +185,7 @@ class FirestoreChatService(private val context: Context) {
      * Envía un mensaje a Firestore en tiempo real.
      */
     suspend fun sendMessage(message: ChatMessage): String? {
-        val db = firestore ?: return null
+        val db = getDb() ?: return null
         return try {
             val docRef = db.collection("chat_channels")
                 .document(message.channelId)
@@ -251,7 +241,7 @@ class FirestoreChatService(private val context: Context) {
      * Agrega una reacción emoji en tiempo real a un mensaje en Firestore.
      */
     suspend fun addReaction(channelId: String, firestoreId: String, emoji: String, currentReactions: String): Boolean {
-        val db = firestore ?: return false
+        val db = getDb() ?: return false
         if (firestoreId.isBlank()) return false
         return try {
             val updatedReactions = if (currentReactions.isBlank()) emoji else "$currentReactions,$emoji"
@@ -272,7 +262,7 @@ class FirestoreChatService(private val context: Context) {
      * Elimina un mensaje en tiempo real de Firestore.
      */
     suspend fun deleteMessage(channelId: String, firestoreId: String): Boolean {
-        val db = firestore ?: return false
+        val db = getDb() ?: return false
         if (firestoreId.isBlank()) return false
         return try {
             db.collection("chat_channels")
@@ -292,7 +282,7 @@ class FirestoreChatService(private val context: Context) {
      * Publica el estado de escritura ("typing indicator") en tiempo real.
      */
     suspend fun setTypingStatus(channelId: String, userEmail: String, userName: String, isTyping: Boolean) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         val cleanEmailKey = userEmail.replace(".", "_").replace("@", "_at_")
         try {
             val typingRef = db.collection("chat_channels")
@@ -319,7 +309,7 @@ class FirestoreChatService(private val context: Context) {
      * Escucha en tiempo real quiénes están escribiendo en el canal.
      */
     fun listenToTyping(channelId: String, currentUserEmail: String): Flow<List<String>> = callbackFlow {
-        val db = firestore
+        val db = getDb()
         if (db == null) {
             trySend(emptyList())
             awaitClose { }
@@ -360,7 +350,7 @@ class FirestoreChatService(private val context: Context) {
      * Actualiza la presencia activa de un usuario en el canal.
      */
     suspend fun updatePresence(channelId: String, userEmail: String, userName: String) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         val cleanKey = userEmail.replace(".", "_").replace("@", "_at_")
         try {
             val data = hashMapOf(
@@ -383,7 +373,7 @@ class FirestoreChatService(private val context: Context) {
      * Escucha en tiempo real los usuarios conectados en este canal.
      */
     fun listenToPresence(channelId: String): Flow<List<PresenceUser>> = callbackFlow {
-        val db = firestore
+        val db = getDb()
         if (db == null) {
             trySend(emptyList())
             awaitClose { }
@@ -468,7 +458,7 @@ class FirestoreChatService(private val context: Context) {
      * Marca mensajes de un canal en Firestore como 'entregado' cuando un cliente los recibe.
      */
     suspend fun markChannelMessagesAsDelivered(channelId: String, currentRecipientEmail: String) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         try {
             val snapshot = db.collection("chat_channels")
                 .document(channelId)
@@ -498,7 +488,7 @@ class FirestoreChatService(private val context: Context) {
      * Marca mensajes de un canal en Firestore como 'visto' (leído) con fecha y usuario.
      */
     suspend fun markChannelMessagesAsSeen(channelId: String, currentRecipientEmail: String) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         try {
             val snapshot = db.collection("chat_channels")
                 .document(channelId)
@@ -539,7 +529,7 @@ class FirestoreChatService(private val context: Context) {
         status: String,
         seenByEmail: String? = null
     ) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         if (firestoreId.isBlank()) return
         try {
             val updates = mutableMapOf<String, Any>(
@@ -570,7 +560,7 @@ class FirestoreChatService(private val context: Context) {
      * Sincroniza un documento a Firestore en la colección 'cloud_documents'.
      */
     suspend fun syncDocument(doc: DocumentItem): String? {
-        val db = firestore ?: return null
+        val db = getDb() ?: return null
         return try {
             val docRef = if (doc.firestoreId.isNotBlank()) {
                 db.collection("cloud_documents").document(doc.firestoreId)
@@ -603,7 +593,7 @@ class FirestoreChatService(private val context: Context) {
      * Sincroniza un proyecto musical a Firestore en la colección 'cloud_audio_projects'.
      */
     suspend fun syncAudioProject(project: AudioProject): String? {
-        val db = firestore ?: return null
+        val db = getDb() ?: return null
         return try {
             val docRef = if (project.firestoreId.isNotBlank()) {
                 db.collection("cloud_audio_projects").document(project.firestoreId)
@@ -640,7 +630,7 @@ class FirestoreChatService(private val context: Context) {
      * Inicia una señal de llamada en Firestore.
      */
     suspend fun startCallSignal(call: CallSession): Boolean {
-        val db = firestore ?: return false
+        val db = getDb() ?: return false
         return try {
             val callRef = db.collection("chat_channels")
                 .document(call.channelId)
@@ -667,7 +657,7 @@ class FirestoreChatService(private val context: Context) {
      * Finaliza la llamada en Firestore.
      */
     suspend fun endCallSignal(channelId: String, callId: String) {
-        val db = firestore ?: return
+        val db = getDb() ?: return
         try {
             db.collection("chat_channels")
                 .document(channelId)
@@ -684,7 +674,7 @@ class FirestoreChatService(private val context: Context) {
      * Guarda o actualiza la información y metadatos de un canal o grupo en Firestore.
      */
     suspend fun saveOrUpdateChannel(channel: ChannelInfo): Boolean {
-        val db = firestore ?: return false
+        val db = getDb() ?: return false
         return try {
             val membersData = channel.members.map { m ->
                 mapOf(
@@ -728,7 +718,7 @@ class FirestoreChatService(private val context: Context) {
      * Escucha en tiempo real todos los canales y grupos guardados en Firestore.
      */
     fun listenToCustomChannels(): Flow<List<ChannelInfo>> = callbackFlow {
-        val db = firestore
+        val db = getDb()
         if (db == null) {
             trySend(emptyList())
             awaitClose { }
@@ -793,7 +783,7 @@ class FirestoreChatService(private val context: Context) {
      * Elimina el canal de Firestore.
      */
     suspend fun deleteChannelFromFirestore(channelId: String): Boolean {
-        val db = firestore ?: return false
+        val db = getDb() ?: return false
         return try {
             db.collection("chat_channels").document(channelId).delete().await()
             true
@@ -807,8 +797,13 @@ class FirestoreChatService(private val context: Context) {
      * Sincroniza el perfil de usuario (nombre y avatar) en la nube de Firestore.
      */
     suspend fun saveUserProfileToCloud(email: String, displayName: String, avatarUrl: String): Boolean {
-        val db = firestore ?: return false
+        val db = firestore
+        if (db == null) {
+            Log.e(TAG, "saveUserProfileToCloud: Firestore es NULO. No se puede guardar.")
+            return false
+        }
         val cleanEmail = email.replace(".", "_").replace("@", "_at_")
+        Log.d(TAG, "Intentando guardar perfil para: $cleanEmail")
         return try {
             val data = hashMapOf(
                 "email" to email,
@@ -820,10 +815,10 @@ class FirestoreChatService(private val context: Context) {
                 .document(cleanEmail)
                 .set(data, SetOptions.merge())
                 .await()
-            Log.d(TAG, "User profile synced to Firestore: $displayName ($email)")
+            Log.d(TAG, "User profile SYNCED SUCCESSFULLY to Firestore: $displayName ($email)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving user profile to Firestore: ${e.message}")
+            Log.e(TAG, "CRITICAL ERROR saving user profile to Firestore: ${e.message}", e)
             false
         }
     }
@@ -854,7 +849,7 @@ class FirestoreChatService(private val context: Context) {
      * Obtiene todos los mensajes de un canal de una sola vez.
      */
     suspend fun getChannelMessagesOnce(channelId: String): List<ChatMessage> {
-        val db = firestore ?: return emptyList()
+        val db = getDb() ?: return emptyList()
         return try {
             val snapshot = db.collection("chat_channels")
                 .document(channelId)

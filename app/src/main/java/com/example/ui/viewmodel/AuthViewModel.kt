@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.example.data.firebase.FirestoreChatService
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
@@ -98,6 +99,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    private val firestoreChatService by lazy { FirestoreChatService(getApplication()) }
 
     init {
         // Escuchar cambios de autenticación de Firebase si está disponible
@@ -406,6 +409,29 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     val credential = GoogleAuthProvider.getCredential(idToken, null)
                     val result = firebaseAuth.signInWithCredential(credential).await()
                     val user = result.user
+                    // Guardar perfil en Firestore
+                    user?.let {
+                        Log.d("AuthViewModel", "--- DEPURACIÓN FIRESTORE ---")
+                        Log.d("AuthViewModel", "Usuario: ${it.email}")
+                        Log.d("AuthViewModel", "Servicio: $firestoreChatService")
+                        
+                        // Forzar una llamada directa a Firestore para verificar la instancia
+                        try {
+                            val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                            Log.d("AuthViewModel", "Instancia Firestore obtenida: ${db.app.options.projectId}")
+                        } catch (e: Exception) {
+                            Log.e("AuthViewModel", "Error obteniendo instancia Firestore: ${e.message}")
+                        }
+
+                        firestoreChatService.saveUserProfileToCloud(
+                            email = it.email ?: "",
+                            displayName = it.displayName ?: "Usuario",
+                            avatarUrl = it.photoUrl?.toString() ?: ""
+                        ).also { success ->
+                            Log.d("AuthViewModel", "Resultado FINAL de guardar perfil: $success")
+                        }
+                    }
+
                     _uiState.update {
                         it.copy(
                             isGoogleLoading = false,
