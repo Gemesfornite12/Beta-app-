@@ -107,6 +107,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         try {
             auth?.addAuthStateListener { firebaseAuth ->
                 val user = firebaseAuth.currentUser
+                Log.d(TAG, "AuthStateListener trigger: user is ${user?.email}")
                 if (user != null) {
                     _uiState.update {
                         it.copy(

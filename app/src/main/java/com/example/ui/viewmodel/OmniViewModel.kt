@@ -391,34 +391,35 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         // Escuchar canales y grupos personalizados creados y guardados en Firestore
         viewModelScope.launch {
-            firestoreChatService.listenToCustomChannels().collect { customChannels ->
-                val defaultChannels = firestoreChatService.availableChannels
-                val currentUserEmail = _authUiState.value.currentUser?.email
-                val mergedMap = LinkedHashMap<String, ChannelInfo>()
-                
-                // Agregar canales predeterminados
-                defaultChannels.forEach { mergedMap[it.id] = it }
-                
-                // Agregar y filtrar canales de Firestore
-                customChannels.forEach { ch ->
-                    if (!ch.isDirect && !ch.isGroup) {
-                        // Canal público general
-                        mergedMap[ch.id] = ch
-                    } else {
-                        // Grupo o chat directo: el usuario activo debe ser miembro
-                        val isMember = ch.members.any { it.email.equals(currentUserEmail, ignoreCase = true) }
-                        if (isMember) {
+            firestoreChatService.listenToCustomChannels()
+                .combine(_authUiState) { channels, auth -> channels to auth.currentUser?.email }
+                .collect { (customChannels, currentUserEmail) ->
+                    val defaultChannels = firestoreChatService.availableChannels
+                    val mergedMap = LinkedHashMap<String, ChannelInfo>()
+                    
+                    // Agregar canales predeterminados
+                    defaultChannels.forEach { mergedMap[it.id] = it }
+                    
+                    // Agregar y filtrar canales de Firestore
+                    customChannels.forEach { ch ->
+                        if (!ch.isDirect && !ch.isGroup) {
+                            // Canal público general
                             mergedMap[ch.id] = ch
+                        } else {
+                            // Grupo o chat directo: el usuario activo debe ser miembro
+                            val isMember = ch.members.any { it.email.equals(currentUserEmail, ignoreCase = true) }
+                            if (isMember) {
+                                mergedMap[ch.id] = ch
+                            }
                         }
                     }
+                    
+                    val finalChannels = mergedMap.values.toList()
+                    _availableChannels.value = finalChannels
+                    
+                    // Sincronizar todos los mensajes de estos canales en segundo plano de una sola vez
+                    syncAllChannelsMessages(finalChannels)
                 }
-                
-                val finalChannels = mergedMap.values.toList()
-                _availableChannels.value = finalChannels
-                
-                // Sincronizar todos los mensajes de estos canales en segundo plano de una sola vez
-                syncAllChannelsMessages(finalChannels)
-            }
         }
 
         // Bucle periódico de sincronización automática con Firestore y mensajes pendientes offline (cada 6 segundos)
