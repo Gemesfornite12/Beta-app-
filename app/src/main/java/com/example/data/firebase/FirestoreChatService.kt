@@ -797,7 +797,7 @@ class FirestoreChatService(private val context: Context) {
      * Sincroniza el perfil de usuario (nombre y avatar) en la nube de Firestore.
      */
     suspend fun saveUserProfileToCloud(email: String, displayName: String, avatarUrl: String): Boolean {
-        val db = firestore
+        val db = getDb()
         if (db == null) {
             Log.e(TAG, "saveUserProfileToCloud: Firestore es NULO. No se puede guardar.")
             return false
@@ -827,7 +827,7 @@ class FirestoreChatService(private val context: Context) {
      * Obtiene el perfil de un usuario desde la nube de Firestore.
      */
     suspend fun getUserProfileFromCloud(email: String): Map<String, Any>? {
-        val db = firestore ?: return null
+        val db = getDb() ?: return null
         val cleanEmail = email.replace(".", "_").replace("@", "_at_")
         return try {
             val doc = db.collection("user_profiles")
