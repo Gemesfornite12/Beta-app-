@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -2201,12 +2202,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
                 try {
                     val uri = android.net.Uri.parse(mediaUrl)
-                    val ownerUid = user?.email ?: "anonimo"
+                    val ownerUid = FirebaseAuth.getInstance().currentUser?.uid ?: "anonimo"
+                    val mimeType = getApplication<Application>().contentResolver.getType(uri) ?: "application/octet-stream"
                     val uploaded = mediaStorageService.uploadMedia(
                         ownerUid = ownerUid,
                         localUri = uri,
                         mediaType = mediaType,
-                        mimeType = "application/octet-stream"
+                        mimeType = mimeType
                     )
                     finalUrl = uploaded.downloadUrl
                 } catch (e: Exception) {
