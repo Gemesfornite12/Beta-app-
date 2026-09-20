@@ -712,6 +712,7 @@ fun DocEditorScreen(
             var scale by remember { mutableStateOf(slide.imageScale) }
             var offsetX by remember { mutableStateOf(slide.imageOffsetX) }
             var offsetY by remember { mutableStateOf(slide.imageOffsetY) }
+            var rotation by remember { mutableStateOf(slide.imageRotation) }
             var cornerRadius by remember { mutableStateOf(slide.imageCornerRadius) }
             var keepProportion by remember { mutableStateOf(slide.imageAspectRatio == null) }
             
@@ -719,17 +720,22 @@ fun DocEditorScreen(
                 onDismissRequest = { showImageAdjustDialog = false },
                 title = { Text("Ajustar Imagen", fontWeight = FontWeight.Bold) },
                 text = {
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         // Preview Area with gestures
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(200.dp)
+                                .height(220.dp)
                                 .clip(RoundedCornerShape(cornerRadius.dp))
                                 .background(Color(0xFFF1F5F9))
                                 .pointerInput(Unit) {
-                                    detectTransformGestures { _, pan, zoom, _ ->
-                                        scale *= zoom
+                                    detectTransformGestures { _, pan, zoom, rot ->
+                                        scale = (scale * zoom).coerceIn(0.2f, 10f)
+                                        rotation += rot
                                         offsetX += pan.x
                                         offsetY += pan.y
                                     }
@@ -751,42 +757,52 @@ fun DocEditorScreen(
                                         scaleX = scale,
                                         scaleY = scale,
                                         translationX = offsetX,
-                                        translationY = offsetY
+                                        translationY = offsetY,
+                                        rotationZ = rotation
                                     )
                             )
                             
                             // Visual guides for "cropping"
-                            Box(modifier = Modifier.fillMaxSize().border(2.dp, Color(0xFFEA580C).copy(alpha = 0.3f), RoundedCornerShape(cornerRadius.dp)))
+                            Box(modifier = Modifier.fillMaxSize().border(1.dp, Color(0xFFEA580C).copy(alpha = 0.5f), RoundedCornerShape(cornerRadius.dp)))
                         }
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        Text("Redondeo de esquinas: ${cornerRadius.toInt()}dp", fontSize = 12.sp)
-                        Slider(
-                            value = cornerRadius,
-                            onValueChange = { cornerRadius = it },
-                            valueRange = 0f..50f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Mantener proporción", fontSize = 12.sp, modifier = Modifier.weight(1f))
-                            Switch(checked = keepProportion, onCheckedChange = { keepProportion = it })
-                        }
-                        
-                        Text("Zoom: ${(scale * 100).toInt()}%", fontSize = 11.sp, color = Color.Gray)
+                        Text("Zoom: ${(scale * 100).toInt()}%", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
                         Slider(
                             value = scale,
                             onValueChange = { scale = it },
-                            valueRange = 0.5f..3.0f,
+                            valueRange = 0.2f..5.0f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Text("Rotación: ${rotation.toInt()}°", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Slider(
+                            value = rotation,
+                            onValueChange = { rotation = it },
+                            valueRange = -180f..180f,
                             modifier = Modifier.fillMaxWidth()
                         )
                         
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Redondeo: ${cornerRadius.toInt()}dp", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Slider(
+                            value = cornerRadius,
+                            onValueChange = { cornerRadius = it },
+                            valueRange = 0f..100f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                            Text("Proporción original", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Switch(checked = keepProportion, onCheckedChange = { keepProportion = it })
+                        }
+                        
+                        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                             TextButton(onClick = {
                                 scale = 1.0f
                                 offsetX = 0f
                                 offsetY = 0f
+                                rotation = 0f
                                 cornerRadius = 8f
                                 keepProportion = true
                             }) {
@@ -810,8 +826,9 @@ fun DocEditorScreen(
                                 scale,
                                 offsetX,
                                 offsetY,
+                                rotation,
                                 cornerRadius,
-                                if (keepProportion) null else 1f // Dummy aspect ratio for FillBounds
+                                if (keepProportion) null else 1f
                             )
                             showImageAdjustDialog = false
                         },
@@ -1209,7 +1226,8 @@ private fun SlideEditorView(
                                             scaleX = slide.imageScale,
                                             scaleY = slide.imageScale,
                                             translationX = slide.imageOffsetX / 4, // Scaled down offsets
-                                            translationY = slide.imageOffsetY / 4
+                                            translationY = slide.imageOffsetY / 4,
+                                            rotationZ = slide.imageRotation
                                         )
                                 )
                             } else {

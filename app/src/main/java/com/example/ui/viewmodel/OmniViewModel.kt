@@ -933,6 +933,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         scale: Float,
         offsetX: Float,
         offsetY: Float,
+        rotation: Float,
         cornerRadius: Float,
         aspectRatio: Float?
     ) {
@@ -944,6 +945,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 slideObj.put("imageScale", scale.toDouble())
                 slideObj.put("imageOffsetX", offsetX.toDouble())
                 slideObj.put("imageOffsetY", offsetY.toDouble())
+                slideObj.put("imageRotation", rotation.toDouble())
                 slideObj.put("imageCornerRadius", cornerRadius.toDouble())
                 if (aspectRatio == null) {
                     slideObj.remove("imageAspectRatio")
