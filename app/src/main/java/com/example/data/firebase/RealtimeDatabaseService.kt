@@ -20,26 +20,22 @@ import kotlinx.coroutines.flow.callbackFlow
 class RealtimeDatabaseService {
 
     private val auth = FirebaseAuth.getInstance()
-    private val rtdbInstance = try {
-        FirebaseDatabase.getInstance()
-    } catch (_: Exception) {
-        null
-    }
-    private val database = rtdbInstance?.reference
+    private val rtdbInstance: FirebaseDatabase = FirebaseDatabase.getInstance("https://omnistudio-caaf5-default-rtdb.firebaseio.com")
+    private val database = rtdbInstance.reference
 
     // Estado de conexión reactivo
-    val connectionStatus = MutableStateFlow(true)
+    val connectionStatus = MutableStateFlow(false)
 
     init {
-        try {
-            rtdbInstance?.getReference(".info/connected")?.addValueEventListener(object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    val isConnected = snapshot.getValue(Boolean::class.java) ?: false
-                    connectionStatus.value = isConnected
-                }
-                override fun onCancelled(error: DatabaseError) {}
-            })
-        } catch (_: Exception) {}
+        val connectedRef = rtdbInstance.getReference(".info/connected")
+        connectedRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                connectionStatus.value = snapshot.getValue(Boolean::class.java) ?: false
+            }
+            override fun onCancelled(error: DatabaseError) {
+                connectionStatus.value = false
+            }
+        })
     }
 
     // --- ESCUCHAS (LISTENERS) EN TIEMPO REAL CON addValueEventListener ---
@@ -48,12 +44,7 @@ class RealtimeDatabaseService {
      * Observa en tiempo real todos los chats y conversaciones del nodo 'chats'.
      */
     fun listenToChats(): Flow<List<ChannelInfo>> = callbackFlow {
-        val chatsRef = database?.child("chats")
-        if (chatsRef == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val chatsRef = database.child("chats")
         
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
@@ -107,12 +98,7 @@ class RealtimeDatabaseService {
      * Observa en tiempo real los mensajes de un chat específico dentro de 'chats/{chatId}/messages'.
      */
     fun listenToMessages(chatId: String): Flow<List<ChatMessage>> = callbackFlow {
-        val messagesRef = database?.child("chats")?.child(chatId)?.child("messages")
-        if (messagesRef == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val messagesRef = database.child("chats").child(chatId).child("messages")
         
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
@@ -172,7 +158,7 @@ class RealtimeDatabaseService {
      */
     fun listenToUserDocuments(uid: String? = null): Flow<List<Map<String, Any>>> = callbackFlow {
         val targetUid = uid ?: auth.currentUser?.uid
-        if (targetUid == null || database == null) {
+        if (targetUid == null) {
             trySendBlocking(emptyList())
             channel.close()
             return@callbackFlow
@@ -202,7 +188,7 @@ class RealtimeDatabaseService {
      */
     fun listenToDocument(documentId: String, uid: String? = null): Flow<Map<String, Any>?> = callbackFlow {
         val targetUid = uid ?: auth.currentUser?.uid
-        if (targetUid == null || database == null) {
+        if (targetUid == null) {
             trySendBlocking(null)
             channel.close()
             return@callbackFlow
@@ -229,12 +215,7 @@ class RealtimeDatabaseService {
      * Observa en tiempo real todos los documentos de todos los usuarios en el nodo global 'documents'.
      */
     fun listenToAllDocuments(): Flow<List<Map<String, Any>>> = callbackFlow {
-        val docsRef = database?.child("documents")
-        if (docsRef == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val docsRef = database.child("documents")
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -267,7 +248,6 @@ class RealtimeDatabaseService {
     ) {
         val uid = auth.currentUser?.uid
             ?: error("Usuario no autenticado")
-        val db = database ?: error("Base de datos no disponible")
 
         val user = mapOf(
             "uid" to uid,
@@ -277,7 +257,7 @@ class RealtimeDatabaseService {
             "updatedAt" to System.currentTimeMillis()
         )
 
-        db
+        database
             .child("users")
             .child(uid)
             .setValue(user)
@@ -287,9 +267,8 @@ class RealtimeDatabaseService {
     suspend fun sendMessage(message: ChatMessage): String {
         val user = auth.currentUser
             ?: error("Usuario no autenticado")
-        val db = database ?: error("Base de datos no disponible")
 
-        val docId = if (message.firestoreId.isNotBlank()) message.firestoreId else db.child("chats").child(message.channelId).child("messages").push().key ?: "msg_${System.currentTimeMillis()}"
+        val docId = if (message.firestoreId.isNotBlank()) message.firestoreId else database.child("chats").child(message.channelId).child("messages").push().key ?: "msg_${System.currentTimeMillis()}"
 
         val messageData = mapOf(
             "messageId" to docId,
@@ -314,7 +293,7 @@ class RealtimeDatabaseService {
             "seenBy" to message.seenBy
         )
 
-        db.child("chats").child(message.channelId).child("messages").child(docId).setValue(messageData).await()
+        database.child("chats").child(message.channelId).child("messages").child(docId).setValue(messageData).await()
 
         // Actualizar metadatos del canal
         val channelMeta = mapOf(
@@ -323,7 +302,7 @@ class RealtimeDatabaseService {
             "lastMessageSender" to message.senderName,
             "lastUpdated" to System.currentTimeMillis()
         )
-        db.child("chats").child(message.channelId).updateChildren(channelMeta).await()
+        database.child("chats").child(message.channelId).updateChildren(channelMeta).await()
 
         return docId
     }
@@ -335,7 +314,6 @@ class RealtimeDatabaseService {
     ) {
         val uid = auth.currentUser?.uid
             ?: error("Usuario no autenticado")
-        val db = database ?: error("Base de datos no disponible")
 
         val document = mapOf(
             "documentId" to documentId,
@@ -345,7 +323,7 @@ class RealtimeDatabaseService {
             "updatedAt" to System.currentTimeMillis()
         )
 
-        db
+        database
             .child("documents")
             .child(uid)
             .child(documentId)
@@ -359,9 +337,8 @@ class RealtimeDatabaseService {
     ) {
         auth.currentUser
             ?: error("Usuario no autenticado")
-        val db = database ?: error("Base de datos no disponible")
 
-        db
+        database
             .child("chats")
             .child(chatId)
             .child("messages")
@@ -371,9 +348,8 @@ class RealtimeDatabaseService {
     }
 
     suspend fun addReaction(chatId: String, messageId: String, emoji: String, currentReactions: String) {
-        val db = database ?: error("Base de datos no disponible")
         val updatedReactions = if (currentReactions.isBlank()) emoji else "$currentReactions,$emoji"
-        db.child("chats").child(chatId).child("messages").child(messageId).child("reactions").setValue(updatedReactions).await()
+        database.child("chats").child(chatId).child("messages").child(messageId).child("reactions").setValue(updatedReactions).await()
     }
 
     // --- CHAT PRIVADO (DIRECTO) ---
@@ -396,13 +372,11 @@ class RealtimeDatabaseService {
             "lastUpdated" to System.currentTimeMillis()
         )
 
-        val db = database ?: error("Base de datos no disponible")
-        db.child("chats").child(directChatId).updateChildren(chatData).await()
+        database.child("chats").child(directChatId).updateChildren(chatData).await()
         return directChatId
     }
 
     suspend fun saveOrUpdateChannel(channel: ChannelInfo) {
-        val db = database ?: error("Base de datos no disponible")
         val membersList = channel.members.map { m ->
             mapOf(
                 "email" to m.email,
@@ -433,33 +407,26 @@ class RealtimeDatabaseService {
             chatData["pendingDeletionTimestamp"] = channel.pendingDeletionTimestamp
         }
 
-        db.child("chats").child(channel.id).updateChildren(chatData as Map<String, Any>).await()
+        database.child("chats").child(channel.id).updateChildren(chatData as Map<String, Any>).await()
     }
 
     suspend fun deleteChannel(channelId: String) {
-        val db = database ?: error("Base de datos no disponible")
-        db.child("chats").child(channelId).removeValue().await()
+        database.child("chats").child(channelId).removeValue().await()
     }
 
     // --- INDICADORES DE ESCRITURA Y PRESENCIA ---
     suspend fun setTyping(chatId: String, isTyping: Boolean) {
         val user = auth.currentUser ?: return
-        val db = database ?: return
         val safeEmail = (user.email ?: user.uid).replace(".", "_")
         if (isTyping) {
-            db.child("typing").child(chatId).child(safeEmail).setValue(user.displayName ?: user.email).await()
+            database.child("typing").child(chatId).child(safeEmail).setValue(user.displayName ?: user.email).await()
         } else {
-            db.child("typing").child(chatId).child(safeEmail).removeValue().await()
+            database.child("typing").child(chatId).child(safeEmail).removeValue().await()
         }
     }
 
     fun listenToTyping(chatId: String): Flow<List<String>> = callbackFlow {
-        val ref = database?.child("typing")?.child(chatId)
-        if (ref == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val ref = database.child("typing").child(chatId)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val typers = snapshot.children.mapNotNull { it.value as? String }
@@ -475,23 +442,17 @@ class RealtimeDatabaseService {
 
     suspend fun updatePresence(chatId: String) {
         val user = auth.currentUser ?: return
-        val db = database ?: return
         val safeEmail = (user.email ?: user.uid).replace(".", "_")
         val presenceData = mapOf(
             "email" to (user.email ?: ""),
             "name" to (user.displayName ?: user.email ?: "Usuario"),
             "lastActive" to System.currentTimeMillis()
         )
-        db.child("presence").child(chatId).child(safeEmail).setValue(presenceData).await()
+        database.child("presence").child(chatId).child(safeEmail).setValue(presenceData).await()
     }
 
     fun listenToPresence(chatId: String): Flow<List<PresenceUser>> = callbackFlow {
-        val ref = database?.child("presence")?.child(chatId)
-        if (ref == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val ref = database.child("presence").child(chatId)
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -519,12 +480,7 @@ class RealtimeDatabaseService {
      * Observa en tiempo real todos los perfiles de usuario en 'users'.
      */
     fun listenToAllUsers(): Flow<List<UserAccount>> = callbackFlow {
-        val usersRef = database?.child("users")
-        if (usersRef == null) {
-            trySendBlocking(emptyList())
-            channel.close()
-            return@callbackFlow
-        }
+        val usersRef = database.child("users")
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
