@@ -3,6 +3,7 @@ package com.example.data.firebase
 import android.content.Context
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.tasks.await
 import android.util.Log
 
@@ -10,12 +11,17 @@ import android.util.Log
 class FirestoreConnectionDiagnostics(context: Context) {
     private val app = FirebaseAppProvider.get(context)
     private val db = FirebaseFirestore.getInstance(app)
+    private val rtdb = FirebaseDatabase.getInstance(app)
     private val TAG = "FirestoreDiagnostics"
 
     suspend fun run(): String {
         val projectId = app.options.projectId ?: "desconocido"
         Log.d(TAG, "Iniciando diagnóstico para proyecto: $projectId")
-        return try {
+        
+        val results = mutableListOf<String>()
+        
+        // Firestore
+        try {
             db.collection("_diagnostics")
                 .document("ping")
                 .set(
@@ -26,12 +32,24 @@ class FirestoreConnectionDiagnostics(context: Context) {
                     )
                 )
                 .await()
-
-            "OK: escritura confirmada en Cloud Firestore. Proyecto=$projectId"
+            results.add("Firestore: OK")
         } catch (e: Exception) {
-            val msg = "ERROR REAL: ${e::class.simpleName}: ${e.message}"
-            Log.e(TAG, msg)
-            msg
+            results.add("Firestore ERROR: ${e.message}")
         }
+
+        // RTDB
+        try {
+            rtdb.getReference("_diagnostics").child("ping").setValue(
+                mapOf(
+                    "projectId" to projectId,
+                    "timestamp" to System.currentTimeMillis()
+                )
+            ).await()
+            results.add("RTDB: OK")
+        } catch (e: Exception) {
+            results.add("RTDB ERROR: ${e.message}")
+        }
+
+        return results.joinToString(" | ")
     }
 }

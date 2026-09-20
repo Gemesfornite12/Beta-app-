@@ -6,6 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "users")
 data class UserAccount(
     @PrimaryKey val email: String,
+    val uid: String = "",
     val username: String,
     val displayName: String,
     val passwordHash: String,

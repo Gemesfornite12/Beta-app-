@@ -502,11 +502,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 // Intentar recuperar el perfil de usuario desde Firestore en la nube si existe
                 val cloudProfile = firestoreChatService.getUserProfileFromCloud(email)
+                val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
                 if (cloudProfile != null) {
                     val cloudName = cloudProfile["displayName"] as? String ?: email.substringBefore("@").replaceFirstChar { it.uppercase() }
                     val cloudAvatar = cloudProfile["avatarUrl"] as? String ?: ""
                     val restoredUser = UserAccount(
                         email = email,
+                        uid = uid,
                         username = email.substringBefore("@"),
                         displayName = cloudName,
                         passwordHash = pass,
@@ -523,13 +525,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     // Auto crear cuenta localmente y registrar en la nube
                     val newUser = UserAccount(
                         email = email,
+                        uid = uid,
                         username = email.substringBefore("@"),
                         displayName = email.substringBefore("@").replaceFirstChar { it.uppercase() },
                         passwordHash = pass,
                         isGoogleAccount = false
                     )
                     repo.saveUser(newUser)
-                    firestoreChatService.saveUserProfileToCloud(email, newUser.displayName, "")
+                    firestoreChatService.saveUserProfileToCloud(email, newUser.displayName, "", uid)
                     _authUiState.value = _authUiState.value.copy(
                         currentUser = newUser,
                         isLoggedIn = true,
@@ -544,8 +547,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _authUiState.value = _authUiState.value.copy(isGoogleSigningIn = true)
             delay(600) // Realistic smooth auth transition
+            val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val googleUser = UserAccount(
                 email = "gonzalez24029@gmail.com",
+                uid = uid,
                 username = "gonzalez_google",
                 displayName = "Alexis González (Google)",
                 passwordHash = "google_oauth_token",
@@ -565,17 +570,19 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun syncUserFromFirebaseAuth(email: String?, displayName: String?, photoUrl: String? = null) {
         val userEmail = email ?: "user@omnistudio.cloud"
+        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: ""
         viewModelScope.launch {
             val cloudProfile = firestoreChatService.getUserProfileFromCloud(userEmail)
             val userName = cloudProfile?.get("displayName") as? String ?: displayName ?: userEmail.substringBefore("@")
             val finalAvatar = cloudProfile?.get("avatarUrl") as? String ?: photoUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
 
             if (cloudProfile == null) {
-                firestoreChatService.saveUserProfileToCloud(userEmail, userName, finalAvatar)
+                firestoreChatService.saveUserProfileToCloud(userEmail, userName, finalAvatar, uid)
             }
 
             val account = UserAccount(
                 email = userEmail,
+                uid = uid,
                 username = userEmail.substringBefore("@"),
                 displayName = userName,
                 passwordHash = "firebase_auth_session",
@@ -617,7 +624,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             firestoreChatService.saveUserProfileToCloud(
                 email = updatedUser.email,
                 displayName = finalDisplayName,
-                avatarUrl = finalAvatar
+                avatarUrl = finalAvatar,
+                uid = updatedUser.uid
             )
 
             // Actualizar el nombre y avatar del usuario en los grupos creados o donde es miembro

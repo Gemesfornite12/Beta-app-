@@ -78,12 +78,12 @@ class FirestoreChatService(private val context: Context) {
 
     private val rtdbInstance: FirebaseDatabase? by lazy {
         try {
-            val db = FirebaseDatabase.getInstance("https://omnistudio-caaf5-default-rtdb.firebaseio.com")
+            val db = FirebaseDatabase.getInstance()
             try { db.setPersistenceEnabled(true) } catch (_: Exception) {}
             db
         } catch (e: Exception) {
             Log.e(TAG, "Error inicializando RTDB: ${e.message}")
-            try { FirebaseDatabase.getInstance() } catch (_: Exception) { null }
+            null
         }
     }
     private val rtdbRef get() = rtdbInstance?.reference
@@ -270,7 +270,11 @@ class FirestoreChatService(private val context: Context) {
                 _connectionStatus.value = FirestoreConnectionStatus.CONNECTED_REALTIME
                 Log.d(TAG, "Mensaje guardado en RTDB: $docId en ${message.channelId}")
             } catch (e: Exception) {
-                Log.e(TAG, "Error guardando en RTDB: ${e.message}")
+                if (e.message?.contains("Permission denied", ignoreCase = true) == true) {
+                    Log.w(TAG, "Permiso denegado en RTDB para enviar mensaje, usando Firestore como primario.")
+                } else {
+                    Log.e(TAG, "Error guardando en RTDB: ${e.message}")
+                }
             }
         }
 
@@ -1137,10 +1141,12 @@ class FirestoreChatService(private val context: Context) {
     /**
      * Sincroniza el perfil de usuario (nombre y avatar) en RTDB y Firestore.
      */
-    suspend fun saveUserProfileToCloud(email: String, displayName: String, avatarUrl: String): Boolean {
+    suspend fun saveUserProfileToCloud(email: String, displayName: String, avatarUrl: String, uid: String? = null): Boolean {
         val cleanEmail = email.replace(".", "_").replace("@", "_at_")
+        val effectiveUid = uid ?: com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: cleanEmail
         val data = hashMapOf(
             "email" to email,
+            "uid" to effectiveUid,
             "displayName" to displayName,
             "avatarUrl" to avatarUrl,
             "lastUpdated" to System.currentTimeMillis()
@@ -1150,11 +1156,20 @@ class FirestoreChatService(private val context: Context) {
         val rtdb = rtdbRef
         if (rtdb != null) {
             try {
-                rtdb.child("users").child(cleanEmail).setValue(data).await()
+                // Intentar guardar bajo el UID (mejor para reglas de seguridad)
+                rtdb.child("users").child(effectiveUid).setValue(data).await()
+                // También guardar bajo email para compatibilidad con búsquedas antiguas si es necesario
+                if (effectiveUid != cleanEmail) {
+                    try { rtdb.child("users").child(cleanEmail).setValue(data).await() } catch (_: Exception) {}
+                }
                 success = true
                 Log.d(TAG, "Perfil de usuario sincronizado en RTDB: $displayName ($email)")
             } catch (e: Exception) {
-                Log.e(TAG, "Error guardando perfil en RTDB: ${e.message}")
+                if (e.message?.contains("Permission denied", ignoreCase = true) == true) {
+                    Log.w(TAG, "Permiso denegado en RTDB (reglas restrictivas), continuando con Firestore.")
+                } else {
+                    Log.e(TAG, "Error guardando perfil en RTDB: ${e.message}")
+                }
             }
         }
 

@@ -50,6 +50,7 @@ class OmniRepository(private val db: AppDatabase) {
         if (userCount == null) {
             val defaultUser = UserAccount(
                 email = "gonzalez24029@gmail.com",
+                uid = "",
                 username = "gonzalez_dev",
                 displayName = "Alex González",
                 passwordHash = "demo1234",
@@ -63,6 +64,7 @@ class OmniRepository(private val db: AppDatabase) {
             val teammates = listOf(
                 UserAccount(
                     email = "sofia.m@cloud.io",
+                    uid = "",
                     username = "sofia_audio",
                     displayName = "Sofia Martinez",
                     passwordHash = "demo1234",
@@ -72,6 +74,7 @@ class OmniRepository(private val db: AppDatabase) {
                 ),
                 UserAccount(
                     email = "carlos.m@cloud.io",
+                    uid = "",
                     username = "carlos_docs",
                     displayName = "Carlos Mendoza",
                     passwordHash = "demo1234",
@@ -81,6 +84,7 @@ class OmniRepository(private val db: AppDatabase) {
                 ),
                 UserAccount(
                     email = "alex.r@cloud.io",
+                    uid = "",
                     username = "alex_beats",
                     displayName = "Alex Riva",
                     passwordHash = "demo1234",
@@ -90,6 +94,7 @@ class OmniRepository(private val db: AppDatabase) {
                 ),
                 UserAccount(
                     email = "elena.t@cloud.io",
+                    uid = "",
                     username = "elena_design",
                     displayName = "Elena Torres",
                     passwordHash = "demo1234",
@@ -99,6 +104,7 @@ class OmniRepository(private val db: AppDatabase) {
                 ),
                 UserAccount(
                     email = "mateo.s@cloud.io",
+                    uid = "",
                     username = "mateo_sound",
                     displayName = "Mateo Silva",
                     passwordHash = "demo1234",

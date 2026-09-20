@@ -30,29 +30,19 @@ object FcmTokenManager {
      */
     fun ensureFirebaseInitialized(context: Context): Boolean {
         return try {
-            if (FirebaseApp.getApps(context).isEmpty()) {
-                val options = try {
-                    FirebaseOptions.fromResource(context)
-                } catch (e: Exception) {
-                    null
-                } ?: FirebaseOptions.Builder()
-                    .setApplicationId(context.packageName)
-                    .setProjectId("omnistudio-caaf5")
-                    .setApiKey("AIzaSyCgLRoAH5_C62KxL0noy8VmhOHPSBpMpwg")
-                    .setGcmSenderId("611449222458")
-                    .setStorageBucket("omnistudio-caaf5.firebasestorage.app")
-                    .build()
-                FirebaseApp.initializeApp(context.applicationContext, options)
-                Log.d(TAG, "FirebaseApp programmatically initialized for FCM using project omnistudio-caaf5")
+            val apps = FirebaseApp.getApps(context)
+            if (apps.isEmpty()) {
+                FirebaseApp.initializeApp(context.applicationContext)
+                Log.d(TAG, "FirebaseApp initialized from google-services.json")
+            } else {
+                val app = apps[0]
+                val opts = app.options
+                Log.d(TAG, "FirebaseApp already active: ${app.name}. Project: ${opts.projectId}, AppId: ${opts.applicationId}")
             }
             true
         } catch (e: Exception) {
             Log.w(TAG, "ensureFirebaseInitialized warning: ${e.message}")
-            try {
-                FirebaseApp.initializeApp(context.applicationContext) != null
-            } catch (_: Exception) {
-                false
-            }
+            false
         }
     }
 
@@ -62,48 +52,54 @@ object FcmTokenManager {
     fun initialize(context: Context, userEmail: String? = null) {
         ChatNotificationManager.createNotificationChannels(context)
 
-        try {
-            ensureFirebaseInitialized(context)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Pequeño retardo para asegurar que el sistema esté estable antes de pedir registro FCM
+                delay(2000)
+                
+                val app = FirebaseAppProvider.get(context)
+                Log.d(TAG, "Using FirebaseApp: ${app.name} (${app.options.projectId})")
 
-            FirebaseMessaging.getInstance().token
-                .addOnCompleteListener { task ->
-                    if (!task.isSuccessful) {
-                        Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.message}")
-                        // Si falla en emulador sin Play Services, generar un token local válido para testing
-                        val fallbackToken = "fcm_token_${System.currentTimeMillis()}_${context.packageName.takeLast(6)}"
-                        _currentToken.value = fallbackToken
-                        ChatNotificationManager.saveFcmToken(context, fallbackToken)
-                        if (!userEmail.isNullOrBlank()) {
-                            syncTokenToFirestore(context, userEmail, fallbackToken)
+                FirebaseMessaging.getInstance().token
+                    .addOnCompleteListener { task ->
+                        if (!task.isSuccessful) {
+                            Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.message}")
+                            // Si falla en emulador sin Play Services, generar un token local válido para testing
+                            val fallbackToken = "fcm_token_${System.currentTimeMillis()}_${context.packageName.takeLast(6)}"
+                            _currentToken.value = fallbackToken
+                            ChatNotificationManager.saveFcmToken(context, fallbackToken)
+                            if (!userEmail.isNullOrBlank()) {
+                                syncTokenToFirestore(context, userEmail, fallbackToken)
+                            }
+                            return@addOnCompleteListener
                         }
-                        return@addOnCompleteListener
+
+                        // Obtener nuevo token FCM
+                        val token = task.result
+                        Log.d(TAG, "FCM Registration Token received: ${token.take(20)}...")
+                        _currentToken.value = token
+                        ChatNotificationManager.saveFcmToken(context, token)
+
+                        if (!userEmail.isNullOrBlank()) {
+                            syncTokenToFirestore(context, userEmail, token)
+                        }
+                        _isPushSubscribed.value = true
                     }
 
-                    // Obtener nuevo token FCM
-                    val token = task.result
-                    Log.d(TAG, "FCM Registration Token received: ${token.take(20)}...")
-                    _currentToken.value = token
-                    ChatNotificationManager.saveFcmToken(context, token)
-
-                    if (!userEmail.isNullOrBlank()) {
-                        syncTokenToFirestore(context, userEmail, token)
+                // Suscribirse al tema general de avisos
+                FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
+                    .addOnCompleteListener {
+                        Log.d(TAG, "Subscribed to all_users_omnistudio topic")
                     }
-                    _isPushSubscribed.value = true
-                }
 
-            // Suscribirse al tema general de avisos
-            FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
-                .addOnCompleteListener {
-                    Log.d(TAG, "Subscribed to all_users_omnistudio topic")
+            } catch (e: Throwable) {
+                Log.w(TAG, "FCM initialization handled with local fallback: ${e.message}")
+                val fallbackToken = "fcm_token_local_${System.currentTimeMillis()}"
+                _currentToken.value = fallbackToken
+                ChatNotificationManager.saveFcmToken(context, fallbackToken)
+                if (!userEmail.isNullOrBlank()) {
+                    syncTokenToFirestore(context, userEmail, fallbackToken)
                 }
-
-        } catch (e: Throwable) {
-            Log.w(TAG, "FCM initialization handled with local fallback: ${e.message}")
-            val fallbackToken = "fcm_token_local_${System.currentTimeMillis()}"
-            _currentToken.value = fallbackToken
-            ChatNotificationManager.saveFcmToken(context, fallbackToken)
-            if (!userEmail.isNullOrBlank()) {
-                syncTokenToFirestore(context, userEmail, fallbackToken)
             }
         }
     }
@@ -113,10 +109,12 @@ object FcmTokenManager {
      */
     fun syncTokenToFirestore(context: Context? = null, userEmail: String, token: String) {
         try {
-            if (context != null) {
-                ensureFirebaseInitialized(context)
+            val db = if (context != null) {
+                val app = FirebaseAppProvider.get(context)
+                FirebaseFirestore.getInstance(app)
+            } else {
+                FirebaseFirestore.getInstance()
             }
-            val db = FirebaseFirestore.getInstance()
             val cleanEmail = userEmail.replace(".", "_").replace("@", "_at_")
             val data = hashMapOf(
                 "email" to userEmail,
