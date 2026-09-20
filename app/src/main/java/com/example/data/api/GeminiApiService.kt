@@ -58,7 +58,7 @@ data class GeminiError(
 )
 
 interface GeminiApiService {
-    @POST("v1beta/models/gemini-flash-latest:generateContent")
+    @POST("v1beta/models/gemini-3.8-flash:generateContent")
     suspend fun generateContent(
         @Query("key") apiKey: String,
         @Body request: GenerateContentRequest
