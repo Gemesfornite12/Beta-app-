@@ -126,8 +126,10 @@ object OpenRouteServiceClient {
             .baseUrl(BASE_URL)
             .client(client)
             .addConverterFactory(
-                kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                    .asConverterFactory("application/json".toMediaType())
+                kotlinx.serialization.json.Json { 
+                    ignoreUnknownKeys = true
+                    explicitNulls = false
+                }.asConverterFactory("application/json".toMediaType())
             )
             .build()
             .create(OpenRouteServiceApi::class.java)
