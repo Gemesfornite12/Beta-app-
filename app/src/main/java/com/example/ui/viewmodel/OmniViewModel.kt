@@ -339,6 +339,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis()
                 )
                 _aiChatHistory.value = _aiChatHistory.value + aiMsg
+            } catch (e: retrofit2.HttpException) {
+                val errorMsg = ChatMessage(
+                    channelId = "ai_assistant",
+                    senderEmail = "gemini",
+                    senderName = "Gemini",
+                    text = "Error API (${e.code()}): El modelo seleccionado no existe o la clave es inválida.",
+                    timestamp = System.currentTimeMillis()
+                )
+                _aiChatHistory.value = _aiChatHistory.value + errorMsg
             } catch (e: Exception) {
                 val errorMsg = ChatMessage(
                     channelId = "ai_assistant",
@@ -358,7 +367,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _aiChatHistory.value = emptyList()
     }
 
-    private val _selectedGeminiModel = MutableStateFlow("gemini-3.8-flash")
+    private val _selectedGeminiModel = MutableStateFlow("gemini-1.5-flash")
     val selectedGeminiModel: StateFlow<String> = _selectedGeminiModel.asStateFlow()
 
     fun updateSelectedModel(model: String) {

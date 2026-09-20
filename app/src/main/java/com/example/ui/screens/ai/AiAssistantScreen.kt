@@ -39,9 +39,9 @@ fun AiAssistantScreen(
     var showModelMenu by remember { mutableStateOf(false) }
 
     val models = listOf(
-        "gemini-3.8-flash" to "Flash 3.8 (Rápido)",
-        "gemini-1.5-flash" to "Flash 1.5 (Estable)",
-        "gemini-1.5-pro" to "Pro 1.5 (Inteligente)",
+        "gemini-1.5-flash" to "Gemini 1.5 Flash (Rápido)",
+        "gemini-1.5-pro" to "Gemini 1.5 Pro (Inteligente)",
+        "gemini-2.0-flash-exp" to "Gemini 2.0 Flash (Exp)",
         "gemini-flash-latest" to "Flash Latest"
     )
 
