@@ -89,8 +89,110 @@ import coil.compose.AsyncImage
 import com.example.data.model.DocumentType
 import com.example.ui.screens.converter.FormatConverterDialog
 import com.example.ui.viewmodel.OmniViewModel
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import org.json.JSONArray
 import org.json.JSONObject
+
+private suspend fun resolveSlideImageUrl(input: String): String? =
+    withContext(Dispatchers.IO) {
+        val source = input.trim()
+
+        if (source.isBlank()) {
+            return@withContext null
+        }
+
+        try {
+            val connection = URL(source).openConnection() as HttpURLConnection
+
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 15_000
+            connection.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 OmniStudio"
+            )
+
+            connection.connect()
+
+            val contentType = connection.contentType.orEmpty().lowercase()
+
+            // Si ya es una imagen directa
+            if (
+                connection.responseCode in 200..399 &&
+                contentType.startsWith("image/")
+            ) {
+                return@withContext connection.url.toString()
+            }
+
+            // Si es una página HTML, buscar la imagen principal
+            val html = connection.inputStream
+                .bufferedReader()
+                .use { it.readText() }
+                .take(750_000)
+
+            val metaTags = Regex(
+                "(?is)<meta\\s+[^>]*>"
+            ).findAll(html)
+                .map { it.value }
+                .toList()
+
+            fun attribute(
+                tag: String,
+                name: String
+            ): String? {
+                return Regex(
+                    "(?i)$name\\s*=\\s*[\"']([^\"']+)[\"']"
+                )
+                    .find(tag)
+                    ?.groupValues
+                    ?.get(1)
+            }
+
+            val imageCandidate = metaTags.firstNotNullOfOrNull { tag ->
+                val property =
+                    attribute(tag, "property")
+                        ?: attribute(tag, "name")
+
+                if (
+                    property.equals("og:image", ignoreCase = true) ||
+                    property.equals("twitter:image", ignoreCase = true)
+                ) {
+                    attribute(tag, "content")
+                } else {
+                    null
+                }
+            } ?: Regex(
+                "(?is)<img\\s+[^>]*src\\s*=\\s*[\"']([^\"']+)[\"']"
+            )
+                .find(html)
+                ?.groupValues
+                ?.get(1)
+
+            val cleanedUrl = imageCandidate
+                ?.replace("&amp;", "&")
+                ?.replace("&quot;", "\"")
+                ?.replace("&#x27;", "'")
+                ?.trim()
+                ?.takeIf {
+                    it.startsWith("http://") ||
+                    it.startsWith("https://") ||
+                    it.startsWith("/")
+                }
+
+            if (cleanedUrl != null) {
+                URL(connection.url, cleanedUrl).toString()
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
 data class SlideModel(
     val title: String,
@@ -112,6 +214,7 @@ fun DocEditorScreen(
     val converterDoc by viewModel.converterDoc.collectAsState()
     val docAutoSaveStatus by viewModel.docAutoSaveStatus.collectAsState()
     val isDocSaving by viewModel.isDocSaving.collectAsState()
+    val imageResolutionScope = rememberCoroutineScope()
 
     val doc = currentDoc ?: run {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -405,6 +508,8 @@ fun DocEditorScreen(
         val currentImg = slidesList.getOrNull(activeSlideIndex)?.imageUrl ?: ""
         var selectedPresetUrl by remember { mutableStateOf(currentImg) }
         var customUrlText by remember { mutableStateOf(currentImg) }
+        var isResolvingImage by remember { mutableStateOf(false) }
+        var imageResolutionError by remember { mutableStateOf<String?>(null) }
 
         val imagePresets = listOf(
             Triple("📊 Crecimiento & KPIs", "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&q=80", "Finanzas y Métricas"),
@@ -492,7 +597,13 @@ fun DocEditorScreen(
                             customUrlText = it
                             selectedPresetUrl = it
                         },
-                        label = { Text("URL de la imagen (https://...)") },
+                        label = { Text("URL de imagen o página (https://...)") },
+                        isError = imageResolutionError != null,
+                        supportingText = {
+                            if (imageResolutionError != null) {
+                                Text(imageResolutionError!!, color = Color.Red, fontSize = 10.sp)
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("input_slide_image_url")
                     )
@@ -516,15 +627,49 @@ fun DocEditorScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val targetUrl = customUrlText.trim().ifEmpty { selectedPresetUrl.trim() }
-                        if (targetUrl.isNotBlank()) {
-                            viewModel.updateSlideImage(activeSlideIndex, targetUrl)
+                        val targetUrl = customUrlText
+                            .trim()
+                            .ifEmpty { selectedPresetUrl.trim() }
+
+                        if (targetUrl.isBlank()) {
+                            imageResolutionError =
+                                "Escribe una URL o selecciona una imagen."
+                        } else if (!isResolvingImage) {
+                            isResolvingImage = true
+                            imageResolutionError = null
+
+                            imageResolutionScope.launch {
+                                val resolvedUrl =
+                                    resolveSlideImageUrl(targetUrl)
+
+                                if (resolvedUrl != null) {
+                                    viewModel.updateSlideImage(
+                                        activeSlideIndex,
+                                        resolvedUrl
+                                    )
+
+                                    showInsertImageModal = false
+                                } else {
+                                    imageResolutionError =
+                                        "No se encontró una imagen pública en ese enlace."
+                                }
+
+                                isResolvingImage = false
+                            }
                         }
-                        showInsertImageModal = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                    enabled = !isResolvingImage,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFEA580C)
+                    )
                 ) {
-                    Text("Insertar Imagen")
+                    Text(
+                        if (isResolvingImage) {
+                            "Buscando imagen..."
+                        } else {
+                            "Insertar Imagen"
+                        }
+                    )
                 }
             },
             dismissButton = {
