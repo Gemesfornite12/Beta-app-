@@ -79,7 +79,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import coil.request.ImageRequest
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -899,8 +901,17 @@ private fun SlideEditorView(
                                 .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
                                 .clickable { onInsertImage() }
                         ) {
+                            val imageRequest = ImageRequest.Builder(LocalContext.current)
+                                .data(currentSlide.imageUrl)
+                                .setHeader(
+                                    "User-Agent",
+                                    "Mozilla/5.0 OmniStudio"
+                                )
+                                .crossfade(true)
+                                .build()
+
                             AsyncImage(
-                                model = currentSlide.imageUrl,
+                                model = imageRequest,
                                 contentDescription = "Imagen de la diapositiva",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -1022,8 +1033,17 @@ private fun SlideEditorView(
                         ) {
                             // Mini title preview or Image preview
                             if (slide.imageUrl.isNotBlank()) {
+                                val thumbRequest = ImageRequest.Builder(LocalContext.current)
+                                    .data(slide.imageUrl)
+                                    .setHeader(
+                                        "User-Agent",
+                                        "Mozilla/5.0 OmniStudio"
+                                    )
+                                    .crossfade(true)
+                                    .build()
+
                                 AsyncImage(
-                                    model = slide.imageUrl,
+                                    model = thumbRequest,
                                     contentDescription = slide.title,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
