@@ -370,7 +370,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _aiChatHistory.value = emptyList()
     }
 
-    private val _selectedGeminiModel = MutableStateFlow("models/gemini-1.5-flash")
+    private val _selectedGeminiModel = MutableStateFlow("")
     val selectedGeminiModel: StateFlow<String> = _selectedGeminiModel.asStateFlow()
 
     private val _availableGeminiModels = MutableStateFlow<List<com.example.data.api.GeminiModelInfo>>(emptyList())
@@ -392,6 +392,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     it.supportedGenerationMethods?.contains("generateContent") == true 
                 }
                 _availableGeminiModels.value = filtered
+                
+                // Auto-select first model if none is selected
+                if (_selectedGeminiModel.value.isEmpty() && filtered.isNotEmpty()) {
+                    _selectedGeminiModel.value = filtered.first().name
+                }
             } catch (e: Exception) {
                 Log.e("OmniViewModel", "Error fetching models: ${e.message}")
             }
