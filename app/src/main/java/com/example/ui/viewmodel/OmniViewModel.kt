@@ -320,25 +320,50 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val db = AppDatabase.getInstance(application)
         repo = OmniRepository(db)
 
-        documents = repo.allDocuments.stateIn(
+        documents = combine(repo.allDocuments, firestoreChatService.listenToAllDocuments()) { local, cloud ->
+            val cloudMap = cloud.associateBy { it.firestoreId }
+            val merged = local.toMutableList()
+            cloud.forEach { c ->
+                if (local.none { l -> l.firestoreId == c.firestoreId }) {
+                    merged.add(c)
+                }
+            }
+            merged.sortedByDescending { it.lastModified }
+        }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
         )
 
-        audioProjects = repo.allAudioProjects.stateIn(
+        audioProjects = combine(repo.allAudioProjects, firestoreChatService.listenToPublicAudioProjects()) { local, cloud ->
+            val merged = local.toMutableList()
+            cloud.forEach { c ->
+                if (local.none { l -> l.firestoreId == c.firestoreId }) {
+                    merged.add(c)
+                }
+            }
+            merged.sortedByDescending { it.lastModified }
+        }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
         )
 
-        publicAudioProjects = repo.publicAudioProjects.stateIn(
+        publicAudioProjects = firestoreChatService.listenToPublicAudioProjects().stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
         )
 
-        allUsers = repo.allUsers.stateIn(
+        allUsers = combine(repo.allUsers, firestoreChatService.listenToAllUsers()) { local, cloud ->
+            val merged = local.toMutableList()
+            cloud.forEach { c ->
+                if (local.none { l -> l.email.equals(c.email, ignoreCase = true) }) {
+                    merged.add(c)
+                }
+            }
+            merged.sortedBy { it.displayName }
+        }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
@@ -1750,52 +1775,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // GESTIÓN AVANZADA DE CANALES, CHAT PRIVADO, GRUPOS Y PERMISOS
 
     fun startDirectChat(peerEmail: String, peerName: String, peerAvatar: String = "") {
-        val currentUser = _authUiState.value.currentUser
-        val currentUserEmail = currentUser?.email ?: "gonzalez24029@gmail.com"
-        val currentUserName = currentUser?.displayName ?: "Alex González"
-        val currentUserAvatar = currentUser?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
-
-        // Generar un ID de canal simétrico basado en la ordenación alfabética de los correos
-        val email1 = if (currentUserEmail < peerEmail) currentUserEmail else peerEmail
-        val email2 = if (currentUserEmail < peerEmail) peerEmail else currentUserEmail
-        val cleanId = "directo-" + email1.replace("@", "-at-").replace(".", "-") + "_and_" + email2.replace("@", "-at-").replace(".", "-")
-
-        val existing = _availableChannels.value.firstOrNull { it.id == cleanId }
-        if (existing != null) {
-            loadChannelMessages(existing.id)
-            return
-        }
-
-        val newDirect = ChannelInfo(
-            id = cleanId,
-            name = peerName,
-            description = "Chat privado con $peerName",
-            iconEmoji = "💬",
-            isDirect = true,
-            groupPhotoUrl = peerAvatar,
-            members = listOf(
-                GroupMember(
-                    email = currentUserEmail,
-                    name = currentUserName,
-                    avatarUrl = currentUserAvatar,
-                    role = "admin"
-                ),
-                GroupMember(
-                    email = peerEmail,
-                    name = peerName,
-                    avatarUrl = peerAvatar,
-                    role = "member"
-                )
-            ),
-            creatorEmail = currentUserEmail,
-            creatorName = currentUserName
-        )
-
-        _availableChannels.value = _availableChannels.value + newDirect
         viewModelScope.launch {
-            firestoreChatService.saveOrUpdateChannel(newDirect)
+            val directId = firestoreChatService.createOrGetDirectChat(peerEmail, peerName)
+            if (directId != null) {
+                loadChannelMessages(directId)
+            }
         }
-        loadChannelMessages(cleanId)
     }
 
     fun createGroupChannel(
