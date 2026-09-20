@@ -78,11 +78,12 @@ class FirestoreChatService(private val context: Context) {
 
     private val rtdbInstance: FirebaseDatabase? by lazy {
         try {
-            val db = FirebaseDatabase.getInstance()
+            // Usar la URL explícita para asegurar consistencia con RealtimeDatabaseService
+            val db = FirebaseDatabase.getInstance("https://omnistudio-caaf5-default-rtdb.firebaseio.com")
             try { db.setPersistenceEnabled(true) } catch (_: Exception) {}
             db
         } catch (e: Exception) {
-            Log.e(TAG, "Error inicializando RTDB: ${e.message}")
+            Log.e(TAG, "Error inicializando RTDB con URL explícita: ${e.message}")
             null
         }
     }
@@ -778,10 +779,13 @@ class FirestoreChatService(private val context: Context) {
         val rtdb = rtdbRef
         val db = getDb()
         val docId = if (doc.firestoreId.isNotBlank()) doc.firestoreId else "doc_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        val auth = FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
         val cleanAuthor = doc.authorEmail.replace(".", "_").replace("@", "_at_")
         val data = hashMapOf(
             "firestoreId" to docId,
             "localId" to doc.id,
+            "ownerUid" to uid,
             "title" to doc.title,
             "content" to doc.content,
             "docType" to doc.docType.name,
@@ -796,7 +800,15 @@ class FirestoreChatService(private val context: Context) {
         var saved = false
         if (rtdb != null) {
             try {
+                // Guardar en nodo global (si las reglas lo permiten)
                 rtdb.child("documents").child(docId).setValue(data).await()
+                
+                // Guardar en nodo de usuario por UID (Estructura recomendada)
+                if (!uid.isNullOrBlank()) {
+                    rtdb.child("documents").child(uid).child(docId).setValue(data).await()
+                }
+                
+                // Guardar en nodo de autor (email-based) para retrocompatibilidad
                 if (cleanAuthor.isNotBlank()) {
                     rtdb.child("user_documents").child(cleanAuthor).child(docId).setValue(data).await()
                 }

@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONArray
 import org.json.JSONObject
@@ -827,22 +828,41 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerAutoSaveDocument() {
         val doc = _currentEditingDoc.value ?: return
         viewModelScope.launch {
-            _isDocSaving.value = true
-            _docAutoSaveStatus.value = "Sincronizando con Firestore..."
-            repo.updateDocument(doc)
-            val fsId = firestoreChatService.syncDocument(doc)
-            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-            if (!fsId.isNullOrBlank()) {
-                _currentEditingDoc.value = _currentEditingDoc.value?.copy(
-                    firestoreId = fsId,
-                    lastSyncedFirestore = System.currentTimeMillis()
-                )
-                _docAutoSaveStatus.value = "Sincronizado con Firestore ($timeStr)"
-            } else {
-                _docAutoSaveStatus.value = "Guardado en caché local ($timeStr)"
+            try {
+                _isDocSaving.value = true
+                _docAutoSaveStatus.value = "Sincronizando con Firestore..."
+                
+                // Actualizar localmente primero
+                repo.updateDocument(doc)
+                
+                // Sincronizar con la nube con un tiempo de espera para evitar bloqueos
+                val fsId = withTimeoutOrNull(10_000) {
+                    firestoreChatService.syncDocument(doc)
+                }
+                
+                val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                
+                if (fsId != null && fsId.isNotBlank()) {
+                    _currentEditingDoc.value = _currentEditingDoc.value?.copy(
+                        firestoreId = fsId,
+                        lastSyncedFirestore = System.currentTimeMillis()
+                    )
+                    _docAutoSaveStatus.value = "Sincronizado con Firebase ($timeStr)"
+                } else {
+                    if (fsId == null) {
+                        _docAutoSaveStatus.value = "Guardado local • Reintentando nube ($timeStr)"
+                    } else {
+                        _docAutoSaveStatus.value = "Guardado en caché local ($timeStr)"
+                    }
+                }
+                docDirty = false
+            } catch (e: Exception) {
+                val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                _docAutoSaveStatus.value = "Error al sincronizar ($timeStr)"
+                Log.e("OmniViewModel", "Error en auto-save: ${e.message}")
+            } finally {
+                _isDocSaving.value = false
             }
-            docDirty = false
-            _isDocSaving.value = false
         }
     }
 
