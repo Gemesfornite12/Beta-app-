@@ -6,8 +6,20 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
+import retrofit2.http.Path
 import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
+
+object OrsProfiles {
+    const val DRIVING_CAR = "driving-car"
+    const val CYCLING_REGULAR = "cycling-regular"
+    const val CYCLING_ROAD = "cycling-road"
+    const val CYCLING_MOUNTAIN = "cycling-mountain"
+    const val CYCLING_ELECTRIC = "cycling-electric"
+    const val FOOT_WALKING = "foot-walking"
+    const val FOOT_HIKING = "foot-hiking"
+    const val WHEELCHAIR = "wheelchair"
+}
 
 @Serializable
 data class OrsGeocodeResponse(
@@ -82,8 +94,9 @@ interface OpenRouteServiceApi {
         @Query("size") size: Int = 5
     ): OrsGeocodeResponse
 
-    @GET("v2/directions/driving-car")
-    suspend fun drivingRoute(
+    @GET("v2/directions/{profile}")
+    suspend fun route(
+        @Path("profile") profile: String,
         @Query("api_key") apiKey: String,
         @Query("start") start: String,
         @Query("end") end: String,
@@ -112,4 +125,3 @@ object OpenRouteServiceClient {
             .create(OpenRouteServiceApi::class.java)
     }
 }
-
