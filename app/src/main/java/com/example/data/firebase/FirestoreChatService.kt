@@ -537,7 +537,7 @@ class FirestoreChatService(private val context: Context) {
      * Convierte un DocumentSnapshot de Firestore a un objeto ChatMessage de la aplicación.
      */
     private fun docToChatMessage(doc: DocumentSnapshot, defaultChannelId: String): ChatMessage? {
-        val text = doc.getString("text") ?: return null
+        val text = doc.getString("text") ?: ""
         val senderName = doc.getString("senderName") ?: "Usuario"
         val senderEmail = doc.getString("senderEmail") ?: "usuario@omnistudio.io"
         val channelId = doc.getString("channelId") ?: defaultChannelId
@@ -588,7 +588,7 @@ class FirestoreChatService(private val context: Context) {
      */
     private fun snapshotToChatMessage(snap: DataSnapshot, defaultChannelId: String): ChatMessage? {
         val map = snap.value as? Map<*, *> ?: return null
-        val text = map["text"] as? String ?: return null
+        val text = map["text"] as? String ?: ""
         val senderName = (map["senderName"] as? String) ?: "Usuario"
         val senderEmail = (map["senderEmail"] as? String) ?: "usuario@omnistudio.io"
         val channelId = (map["channelId"] as? String) ?: defaultChannelId

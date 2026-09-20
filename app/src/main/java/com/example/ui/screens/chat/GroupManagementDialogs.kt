@@ -54,10 +54,14 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.example.ui.viewmodel.OmniViewModel
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -437,20 +441,20 @@ fun StartDirectChatDialog(
     }
 
     val contacts = remember(allUsers, searchResults, currentUserEmail, searchQuery) {
-        if (searchQuery.isBlank()) {
-            allUsers.filter { it.email != currentUserEmail }.take(10)
+        val list: List<UserAccount> = if (searchQuery.isBlank()) {
+            allUsers.filter { user -> user.email != currentUserEmail }.take(10)
         } else {
             // Combinamos locales y resultados de busqueda global
-            val filteredLocal = allUsers.filter { it.email != currentUserEmail }
-                .filter {
-                    val name = it.displayName.ifBlank { it.username }
+            val filteredLocal = allUsers.filter { user -> user.email != currentUserEmail }
+                .filter { user ->
+                    val name = user.displayName.ifBlank { user.username }
                     name.contains(searchQuery, ignoreCase = true) ||
-                            it.email.contains(searchQuery, ignoreCase = true)
+                            user.email.contains(searchQuery, ignoreCase = true)
                 }
             
-            val merged = (filteredLocal + searchResults).distinctBy { it.email }.filter { it.email != currentUserEmail }
-            merged
+            (filteredLocal + searchResults).distinctBy { user -> user.email }.filter { user -> user.email != currentUserEmail }
         }
+        list
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -665,7 +669,7 @@ fun GroupManageDialog(
 
     val nonMemberUsers = remember(allUsers, channel.members) {
         val currentMemberEmails = channel.members.map { it.email }.toSet()
-        allUsers.filter { it.email !in currentMemberEmails }
+        allUsers.filter { user -> user.email !in currentMemberEmails }
     }
 
     Dialog(
