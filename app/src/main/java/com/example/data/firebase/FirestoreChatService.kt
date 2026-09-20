@@ -800,20 +800,14 @@ class FirestoreChatService(private val context: Context) {
         var saved = false
         if (rtdb != null) {
             try {
-                // Guardar en nodo global (si las reglas lo permiten)
-                rtdb.child("documents").child(docId).setValue(data).await()
-                
-                // Guardar en nodo de usuario por UID (Estructura recomendada)
+                // Sincronizar con RTDB siguiendo las reglas de seguridad: documents/{uid}/{docId}
                 if (!uid.isNullOrBlank()) {
                     rtdb.child("documents").child(uid).child(docId).setValue(data).await()
+                    saved = true
+                    Log.d(TAG, "Documento sincronizado en RTDB (user path): $docId")
+                } else {
+                    Log.w(TAG, "No se pudo sincronizar con RTDB: UID nulo o vacío")
                 }
-                
-                // Guardar en nodo de autor (email-based) para retrocompatibilidad
-                if (cleanAuthor.isNotBlank()) {
-                    rtdb.child("user_documents").child(cleanAuthor).child(docId).setValue(data).await()
-                }
-                saved = true
-                Log.d(TAG, "Documento sincronizado en RTDB: $docId")
             } catch (e: Exception) {
                 Log.e(TAG, "Error guardando documento en RTDB: ${e.message}")
             }

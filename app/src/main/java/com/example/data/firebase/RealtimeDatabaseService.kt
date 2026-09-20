@@ -212,21 +212,24 @@ class RealtimeDatabaseService {
     }
 
     /**
-     * Observa en tiempo real todos los documentos de todos los usuarios en el nodo global 'documents'.
+     * Observa en tiempo real los documentos del usuario actual en 'documents/{uid}'.
      */
     fun listenToAllDocuments(): Flow<List<Map<String, Any>>> = callbackFlow {
-        val docsRef = database.child("documents")
+        val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
+        
+        if (uid.isNullOrBlank()) {
+            trySendBlocking(emptyList())
+            close()
+            return@callbackFlow
+        }
+        
+        val docsRef = database.child("documents").child(uid)
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
-                val allDocs = mutableListOf<Map<String, Any>>()
-                for (userFolder in snapshot.children) {
-                    for (docSnap in userFolder.children) {
-                        val doc = docSnap.value as? Map<String, Any>
-                        if (doc != null) {
-                            allDocs.add(doc)
-                        }
-                    }
+                val allDocs = snapshot.children.mapNotNull { docSnap ->
+                    docSnap.value as? Map<String, Any>
                 }
                 trySendBlocking(allDocs)
             }
