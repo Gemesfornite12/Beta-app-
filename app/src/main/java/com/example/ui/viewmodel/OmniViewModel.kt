@@ -41,10 +41,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import android.content.Context
 import android.widget.Toast
+import com.example.BuildConfig
 import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 data class AuthUiState(
     val currentUser: UserAccount? = null,
@@ -279,6 +281,77 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun archiveChannel(channelId: String) {
         _archivedChannelIds.value = _archivedChannelIds.value + channelId
+    }
+
+    // --- Gemini AI State ---
+    private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
+
+    private val _isAiLoading = MutableStateFlow(false)
+    val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
+
+    fun sendAiMessage(text: String) {
+        if (text.isBlank()) return
+        
+        val userMsg = ChatMessage(
+            channelId = "ai_assistant",
+            senderEmail = "Tu",
+            senderName = "Yo",
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+        _aiChatHistory.value = _aiChatHistory.value + userMsg
+        
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            try {
+                val apiKey = BuildConfig.GEMINI_API_KEY
+                if (apiKey == "MY_GEMINI_API_KEY" || apiKey.isBlank()) {
+                    val errorMsg = ChatMessage(
+                        channelId = "ai_assistant",
+                        senderEmail = "gemini",
+                        senderName = "Gemini",
+                        text = "Configura tu GEMINI_API_KEY en el panel de Secrets de AI Studio para usar esta función.",
+                        timestamp = System.currentTimeMillis()
+                    )
+                    _aiChatHistory.value = _aiChatHistory.value + errorMsg
+                    return@launch
+                }
+
+                val request = com.example.data.api.GenerateContentRequest(
+                    contents = listOf(com.example.data.api.Content(parts = listOf(com.example.data.api.Part(text = text))))
+                )
+                
+                val response = com.example.data.api.GeminiRetrofitClient.service.generateContent(apiKey, request)
+                val aiText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
+                    ?: response.error?.message
+                    ?: "No pude procesar tu solicitud."
+                
+                val aiMsg = ChatMessage(
+                    channelId = "ai_assistant",
+                    senderEmail = "gemini",
+                    senderName = "Gemini",
+                    text = aiText,
+                    timestamp = System.currentTimeMillis()
+                )
+                _aiChatHistory.value = _aiChatHistory.value + aiMsg
+            } catch (e: Exception) {
+                val errorMsg = ChatMessage(
+                    channelId = "ai_assistant",
+                    senderEmail = "gemini",
+                    senderName = "Gemini",
+                    text = "Error de conexión: ${e.message}",
+                    timestamp = System.currentTimeMillis()
+                )
+                _aiChatHistory.value = _aiChatHistory.value + errorMsg
+            } finally {
+                _isAiLoading.value = false
+            }
+        }
+    }
+
+    fun clearAiChat() {
+        _aiChatHistory.value = emptyList()
     }
 
     fun unarchiveChannel(channelId: String) {

@@ -30,12 +30,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Person
@@ -144,6 +146,24 @@ enum class HashRoute(
         icon = Icons.Default.Lock,
         accentColor = Color(0xFFEC4899),
         description = "Inicio de sesión y recuperación de clave"
+    ),
+    AI_ASSISTANT(
+        hash = "#/ai",
+        routeKey = "ai_assistant",
+        displayName = "Asistente AI",
+        shortName = "AI",
+        icon = Icons.Default.AutoAwesome,
+        accentColor = Color(0xFF818CF8),
+        description = "Asistente inteligente potenciado por Gemini"
+    ),
+    MAPS(
+        hash = "#/maps",
+        routeKey = "maps",
+        displayName = "Explorador Mapas",
+        shortName = "Mapas",
+        icon = Icons.Default.Map,
+        accentColor = Color(0xFF10B981),
+        description = "Visualización de mapas y ubicaciones"
     );
 
     companion object {
@@ -158,6 +178,8 @@ enum class HashRoute(
                 normalized.contains("editor") || normalized.contains("doc") -> DOC_EDITOR
                 normalized.contains("music") || normalized.contains("beat") || normalized.contains("studio") -> MUSIC_STUDIO
                 normalized.contains("chat") || normalized.contains("msg") -> CHAT
+                normalized.contains("ai") || normalized.contains("gemini") || normalized.contains("asistente") -> AI_ASSISTANT
+                normalized.contains("maps") || normalized.contains("mapas") -> MAPS
                 normalized.contains("profile") || normalized.contains("user") -> PROFILE
                 normalized.contains("auth") || normalized.contains("login") -> AUTH
                 normalized.contains("home") -> HOME

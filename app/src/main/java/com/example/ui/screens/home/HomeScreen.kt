@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
@@ -100,7 +101,9 @@ fun HomeScreen(
     onOpenDocEditor: () -> Unit,
     onOpenMusicStudio: () -> Unit,
     onOpenChat: () -> Unit,
-    onOpenProfile: () -> Unit
+    onOpenProfile: () -> Unit,
+    onOpenAiAssistant: () -> Unit,
+    onOpenMaps: () -> Unit
 ) {
     val authState by viewModel.authUiState.collectAsState()
     val documents by viewModel.documents.collectAsState()
@@ -371,6 +374,30 @@ fun HomeScreen(
                             onOpenDocEditor()
                         }
                     )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    QuickToolItem(
+                        icon = Icons.Default.AutoAwesome,
+                        label = "Asistente AI",
+                        bgColor = Color(0xFF818CF8),
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenAiAssistant
+                    )
+                    QuickToolItem(
+                        icon = Icons.Default.Map,
+                        label = "Mapas",
+                        bgColor = Color(0xFF10B981),
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenMaps
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
 

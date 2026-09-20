@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+  kotlin("plugin.serialization") version "2.1.0"
 }
 
 android {
@@ -114,6 +115,9 @@ dependencies {
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
+  implementation(libs.kotlinx.serialization.json)
+  implementation(libs.play.services.maps)
+  implementation(libs.maps.compose)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
@@ -121,6 +125,7 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  implementation(libs.converter.kotlinx.serialization)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
