@@ -1,7 +1,11 @@
 package com.example.ui.screens.maps
 
-import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,20 +82,24 @@ private val orsRouteProfiles = listOf(
     OrsProfiles.WHEELCHAIR to "Silla de ruedas"
 )
 
+@SuppressLint("MissingPermission")
 @Composable
 fun MapsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val startPoint = LatLng(9.9951797, -84.1403642)
+    val defaultLocation = LatLng(9.9951797, -84.1403642)
     val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(startPoint, 12f)
+        position = CameraPosition.fromLatLngZoom(defaultLocation, 12f)
+    }
+    val locationManager = remember {
+        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     }
 
     var hasLocationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
                 context,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                android.Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
@@ -99,9 +108,14 @@ fun MapsScreen(onBack: () -> Unit) {
     ) { granted -> hasLocationPermission = granted }
 
     LaunchedEffect(Unit) {
-        if (!hasLocationPermission) permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (!hasLocationPermission) {
+            permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }
     }
 
+    var currentLocation by remember { mutableStateOf(defaultLocation) }
+    var locationLabel by remember { mutableStateOf("Buscando tu ubicación...") }
+    var hasRealLocation by remember { mutableStateOf(false) }
     var destination by remember { mutableStateOf("") }
     var selectedProfile by remember { mutableStateOf(orsRouteProfiles.first()) }
     var profileMenuOpen by remember { mutableStateOf(false) }
@@ -114,6 +128,66 @@ fun MapsScreen(onBack: () -> Unit) {
         BuildConfig.MAPS_API_KEY != "MY_MAPS_API_KEY"
     val orsKeyAvailable = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
         BuildConfig.OPENROUTESERVICE_API_KEY != "MY_OPENROUTESERVICE_API_KEY"
+
+    fun updateCurrentLocation(location: Location) {
+        val point = LatLng(location.latitude, location.longitude)
+        currentLocation = point
+        hasRealLocation = true
+        locationLabel = String.format(
+            Locale.getDefault(),
+            "%.5f, %.5f",
+            location.latitude,
+            location.longitude
+        )
+        cameraPositionState.position = CameraPosition.fromLatLngZoom(point, 15f)
+        if (orsKeyAvailable) {
+            scope.launch {
+                try {
+                    val response = withContext(Dispatchers.IO) {
+                        OpenRouteServiceClient.api.reverseGeocode(
+                            apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
+                            longitude = point.longitude,
+                            latitude = point.latitude,
+                            size = 1
+                        )
+                    }
+                    response.features.firstOrNull()?.properties?.label?.let {
+                        locationLabel = it
+                    }
+                } catch (_: Exception) {
+                    // Keep showing coordinates when reverse geocoding is unavailable.
+                }
+            }
+        }
+    }
+
+    DisposableEffect(hasLocationPermission) {
+        if (!hasLocationPermission) {
+            locationLabel = "Permiso de ubicación requerido"
+            return@DisposableEffect onDispose { }
+        }
+
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                updateCurrentLocation(location)
+            }
+        }
+        val providers = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER
+        ).filter { provider ->
+            try { locationManager.isProviderEnabled(provider) } catch (_: Exception) { false }
+        }
+        try {
+            providers.forEach { provider ->
+                locationManager.requestLocationUpdates(provider, 3000L, 5f, listener)
+                locationManager.getLastKnownLocation(provider)?.let { updateCurrentLocation(it) }
+            }
+        } catch (_: SecurityException) {
+            locationLabel = "No se pudo acceder a la ubicación"
+        }
+        onDispose { locationManager.removeUpdates(listener) }
+    }
 
     fun calculateRoute() {
         if (destination.isBlank() || isLoading) return
@@ -135,12 +209,11 @@ fun MapsScreen(onBack: () -> Unit) {
                         ?: error("No encontré ese destino.")
                     val coordinates = place.geometry.coordinates
                     if (coordinates.size < 2) error("El destino no tiene coordenadas válidas.")
-                    val end = "${coordinates[0]},${coordinates[1]}"
                     OpenRouteServiceClient.api.route(
                         profile = selectedProfile.first,
                         apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
-                        start = "${startPoint.longitude},${startPoint.latitude}",
-                        end = end,
+                        start = "${currentLocation.longitude},${currentLocation.latitude}",
+                        end = "${coordinates[0]},${coordinates[1]}",
                         instructions = true
                     )
                 }
@@ -182,6 +255,23 @@ fun MapsScreen(onBack: () -> Unit) {
         containerColor = Color(0xFF0F172A)
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            Surface(
+                color = if (hasRealLocation) Color(0xFF14532D) else Color(0xFF334155),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = null, tint = Color.White)
+                    Spacer(Modifier.size(8.dp))
+                    Column {
+                        Text("Tu ubicación actual", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(locationLabel, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                    }
+                }
+            }
+
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (mapsKeyAvailable) {
                     GoogleMap(
@@ -194,9 +284,9 @@ fun MapsScreen(onBack: () -> Unit) {
                         uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission)
                     ) {
                         Marker(
-                            state = MarkerState(startPoint),
-                            title = "Inicio",
-                            snippet = "San Francisco, Heredia"
+                            state = MarkerState(position = currentLocation),
+                            title = "Tu ubicación",
+                            snippet = locationLabel
                         )
                     }
                 } else {
@@ -255,12 +345,6 @@ fun MapsScreen(onBack: () -> Unit) {
                             }
                         }
                     }
-                    Text(
-                        "Inicio predeterminado: San Francisco, Heredia",
-                        color = Color.LightGray,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
                     routeError?.let {
                         Text(it, color = Color(0xFFFCA5A5), modifier = Modifier.padding(top = 6.dp))
                     }
