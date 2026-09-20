@@ -34,16 +34,32 @@ fun AiAssistantScreen(
 ) {
     val chatHistory by viewModel.aiChatHistory.collectAsState()
     val isLoading by viewModel.isAiLoading.collectAsState()
+    val selectedModel by viewModel.selectedGeminiModel.collectAsState()
     var inputText by remember { mutableStateOf("") }
+    var showModelMenu by remember { mutableStateOf(false) }
+
+    val models = listOf(
+        "gemini-3.8-flash" to "Flash 3.8 (Rápido)",
+        "gemini-1.5-flash" to "Flash 1.5 (Estable)",
+        "gemini-1.5-pro" to "Pro 1.5 (Inteligente)",
+        "gemini-flash-latest" to "Flash Latest"
+    )
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(24.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Asistente AI (Gemini)", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Asistente AI", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        }
+                        Text(
+                            text = models.find { it.first == selectedModel }?.second ?: selectedModel,
+                            fontSize = 11.sp,
+                            color = Color(0xFF818CF8).copy(alpha = 0.8f)
+                        )
                     }
                 },
                 navigationIcon = {
@@ -52,6 +68,31 @@ fun AiAssistantScreen(
                     }
                 },
                 actions = {
+                    Box {
+                        IconButton(onClick = { showModelMenu = true }) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = "Cambiar modelo", tint = Color.White)
+                        }
+                        DropdownMenu(
+                            expanded = showModelMenu,
+                            onDismissRequest = { showModelMenu = false },
+                            modifier = Modifier.background(Color(0xFF1E293B))
+                        ) {
+                            models.forEach { (id, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label, color = Color.White) },
+                                    onClick = {
+                                        viewModel.updateSelectedModel(id)
+                                        showModelMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (selectedModel == id) {
+                                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = { viewModel.clearAiChat() }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Limpiar chat", tint = Color(0xFFF87171))
                     }

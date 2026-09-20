@@ -322,7 +322,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     contents = listOf(com.example.data.api.Content(parts = listOf(com.example.data.api.Part(text = text))))
                 )
                 
-                val response = com.example.data.api.GeminiRetrofitClient.service.generateContent(apiKey, request)
+                val response = com.example.data.api.GeminiRetrofitClient.service.generateContent(
+                    _selectedGeminiModel.value,
+                    apiKey,
+                    request
+                )
                 val aiText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
                     ?: response.error?.message
                     ?: "No pude procesar tu solicitud."
@@ -352,6 +356,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearAiChat() {
         _aiChatHistory.value = emptyList()
+    }
+
+    private val _selectedGeminiModel = MutableStateFlow("gemini-3.8-flash")
+    val selectedGeminiModel: StateFlow<String> = _selectedGeminiModel.asStateFlow()
+
+    fun updateSelectedModel(model: String) {
+        _selectedGeminiModel.value = model
     }
 
     fun unarchiveChannel(channelId: String) {
