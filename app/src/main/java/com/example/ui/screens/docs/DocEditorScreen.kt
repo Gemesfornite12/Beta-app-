@@ -87,6 +87,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import com.example.data.model.DocumentType
 import com.example.ui.screens.converter.FormatConverterDialog
@@ -201,7 +208,13 @@ data class SlideModel(
     val subtitle: String,
     val bg: String = "#1E293B",
     val imageUrl: String = "",
-    val tableData: String = ""
+    val tableData: String = "",
+    val imageScale: Float = 1.0f,
+    val imageOffsetX: Float = 0f,
+    val imageOffsetY: Float = 0f,
+    val imageRotation: Float = 0f,
+    val imageCornerRadius: Float = 8f,
+    val imageAspectRatio: Float? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -238,6 +251,7 @@ fun DocEditorScreen(
     // Dialogs for inserting Image and Table into slides
     var showInsertImageModal by remember { mutableStateOf(false) }
     var showInsertTableModal by remember { mutableStateOf(false) }
+    var showImageAdjustDialog by remember { mutableStateOf(false) }
 
     // Parse slides if slide document
     val slidesList = remember(doc.slidesJson) {
@@ -251,7 +265,17 @@ fun DocEditorScreen(
                 val bg = obj.optString("bg", "#1E293B")
                 val imageUrl = obj.optString("imageUrl", "")
                 val tableData = obj.optString("tableData", "")
-                list.add(SlideModel(title, subtitle, bg, imageUrl, tableData))
+                val imageScale = obj.optDouble("imageScale", 1.0).toFloat()
+                val imageOffsetX = obj.optDouble("imageOffsetX", 0.0).toFloat()
+                val imageOffsetY = obj.optDouble("imageOffsetY", 0.0).toFloat()
+                val imageRotation = obj.optDouble("imageRotation", 0.0).toFloat()
+                val imageCornerRadius = obj.optDouble("imageCornerRadius", 8.0).toFloat()
+                val imageAspectRatio = if (obj.has("imageAspectRatio")) obj.optDouble("imageAspectRatio").toFloat() else null
+                
+                list.add(SlideModel(
+                    title, subtitle, bg, imageUrl, tableData,
+                    imageScale, imageOffsetX, imageOffsetY, imageRotation, imageCornerRadius, imageAspectRatio
+                ))
             }
         } catch (_: Exception) {
             list.add(SlideModel("Double-tap to add title", "Double-tap to add subtitle", "#1E293B"))
@@ -420,7 +444,8 @@ fun DocEditorScreen(
                     },
                     onInsertImage = { showInsertImageModal = true },
                     onInsertTable = { showInsertTableModal = true },
-                    onPlayPresentation = { isPresentationPlaying = true }
+                    onPlayPresentation = { isPresentationPlaying = true },
+                    onAdjustImage = { showImageAdjustDialog = true }
                 )
             } else {
                 // RICH DOCUMENT / TEXT EDITOR
@@ -680,6 +705,128 @@ fun DocEditorScreen(
         )
     }
 
+    // Image Adjustment Modal
+    if (showImageAdjustDialog) {
+        val slide = slidesList.getOrNull(activeSlideIndex)
+        if (slide != null && slide.imageUrl.isNotBlank()) {
+            var scale by remember { mutableStateOf(slide.imageScale) }
+            var offsetX by remember { mutableStateOf(slide.imageOffsetX) }
+            var offsetY by remember { mutableStateOf(slide.imageOffsetY) }
+            var cornerRadius by remember { mutableStateOf(slide.imageCornerRadius) }
+            var keepProportion by remember { mutableStateOf(slide.imageAspectRatio == null) }
+            
+            AlertDialog(
+                onDismissRequest = { showImageAdjustDialog = false },
+                title = { Text("Ajustar Imagen", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // Preview Area with gestures
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .clip(RoundedCornerShape(cornerRadius.dp))
+                                .background(Color(0xFFF1F5F9))
+                                .pointerInput(Unit) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        scale *= zoom
+                                        offsetX += pan.x
+                                        offsetY += pan.y
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val imgReq = ImageRequest.Builder(LocalContext.current)
+                                .data(slide.imageUrl)
+                                .crossfade(true)
+                                .build()
+                            
+                            AsyncImage(
+                                model = imgReq,
+                                contentDescription = null,
+                                contentScale = if (keepProportion) ContentScale.Fit else ContentScale.FillBounds,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(
+                                        scaleX = scale,
+                                        scaleY = scale,
+                                        translationX = offsetX,
+                                        translationY = offsetY
+                                    )
+                            )
+                            
+                            // Visual guides for "cropping"
+                            Box(modifier = Modifier.fillMaxSize().border(2.dp, Color(0xFFEA580C).copy(alpha = 0.3f), RoundedCornerShape(cornerRadius.dp)))
+                        }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Text("Redondeo de esquinas: ${cornerRadius.toInt()}dp", fontSize = 12.sp)
+                        Slider(
+                            value = cornerRadius,
+                            onValueChange = { cornerRadius = it },
+                            valueRange = 0f..50f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Mantener proporción", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Switch(checked = keepProportion, onCheckedChange = { keepProportion = it })
+                        }
+                        
+                        Text("Zoom: ${(scale * 100).toInt()}%", fontSize = 11.sp, color = Color.Gray)
+                        Slider(
+                            value = scale,
+                            onValueChange = { scale = it },
+                            valueRange = 0.5f..3.0f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(onClick = {
+                                scale = 1.0f
+                                offsetX = 0f
+                                offsetY = 0f
+                                cornerRadius = 8f
+                                keepProportion = true
+                            }) {
+                                Text("Restablecer", color = Color(0xFFEA580C))
+                            }
+                            
+                            TextButton(onClick = {
+                                showImageAdjustDialog = false
+                                showInsertImageModal = true
+                            }) {
+                                Text("Cambiar Imagen", color = Color(0xFF64748B))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.updateSlideImageTransform(
+                                activeSlideIndex,
+                                scale,
+                                offsetX,
+                                offsetY,
+                                cornerRadius,
+                                if (keepProportion) null else 1f // Dummy aspect ratio for FillBounds
+                            )
+                            showImageAdjustDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                    ) {
+                        Text("Guardar Cambios")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showImageAdjustDialog = false }) { Text("Cancelar") }
+                }
+            )
+        }
+    }
+
     // Insert Table Modal
     if (showInsertTableModal) {
         val tablePresets = listOf(
@@ -835,7 +982,8 @@ private fun SlideEditorView(
     onEditSlideContent: (String, String) -> Unit,
     onInsertImage: () -> Unit,
     onInsertTable: () -> Unit,
-    onPlayPresentation: () -> Unit
+    onPlayPresentation: () -> Unit,
+    onAdjustImage: () -> Unit
 ) {
     val currentSlide = slides.getOrNull(activeSlideIndex) ?: slides.firstOrNull() ?: SlideModel("Title", "Subtitle", "#1E293B")
 
@@ -897,9 +1045,9 @@ private fun SlideEditorView(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(120.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(8.dp))
-                                .clickable { onInsertImage() }
+                                .clip(RoundedCornerShape(currentSlide.imageCornerRadius.dp))
+                                .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(currentSlide.imageCornerRadius.dp))
+                                .clickable { onAdjustImage() }
                         ) {
                             val imageRequest = ImageRequest.Builder(LocalContext.current)
                                 .data(currentSlide.imageUrl)
@@ -913,8 +1061,16 @@ private fun SlideEditorView(
                             AsyncImage(
                                 model = imageRequest,
                                 contentDescription = "Imagen de la diapositiva",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
+                                contentScale = if (currentSlide.imageAspectRatio == null) ContentScale.Fit else ContentScale.FillBounds,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(
+                                        scaleX = currentSlide.imageScale,
+                                        scaleY = currentSlide.imageScale,
+                                        translationX = currentSlide.imageOffsetX,
+                                        translationY = currentSlide.imageOffsetY,
+                                        rotationZ = currentSlide.imageRotation
+                                    )
                             )
                             Surface(
                                 shape = RoundedCornerShape(bottomStart = 6.dp),
@@ -927,7 +1083,7 @@ private fun SlideEditorView(
                                 ) {
                                     Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
                                     Spacer(modifier = Modifier.width(3.dp))
-                                    Text("Cambiar", color = Color.White, fontSize = 9.sp)
+                                    Text("Ajustar", color = Color.White, fontSize = 9.sp)
                                 }
                             }
                         }
@@ -1045,8 +1201,16 @@ private fun SlideEditorView(
                                 AsyncImage(
                                     model = thumbRequest,
                                     contentDescription = slide.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
+                                    contentScale = if (slide.imageAspectRatio == null) ContentScale.Fit else ContentScale.FillBounds,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(slide.imageCornerRadius.dp / 4)) // Scaled down radius
+                                        .graphicsLayer(
+                                            scaleX = slide.imageScale,
+                                            scaleY = slide.imageScale,
+                                            translationX = slide.imageOffsetX / 4, // Scaled down offsets
+                                            translationY = slide.imageOffsetY / 4
+                                        )
                                 )
                             } else {
                                 Column(

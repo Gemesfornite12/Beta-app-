@@ -928,6 +928,36 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {}
     }
 
+    fun updateSlideImageTransform(
+        slideIndex: Int,
+        scale: Float,
+        offsetX: Float,
+        offsetY: Float,
+        cornerRadius: Float,
+        aspectRatio: Float?
+    ) {
+        val doc = _currentEditingDoc.value ?: return
+        try {
+            val jsonArray = JSONArray(doc.slidesJson)
+            if (slideIndex in 0 until jsonArray.length()) {
+                val slideObj = jsonArray.getJSONObject(slideIndex)
+                slideObj.put("imageScale", scale.toDouble())
+                slideObj.put("imageOffsetX", offsetX.toDouble())
+                slideObj.put("imageOffsetY", offsetY.toDouble())
+                slideObj.put("imageCornerRadius", cornerRadius.toDouble())
+                if (aspectRatio == null) {
+                    slideObj.remove("imageAspectRatio")
+                } else {
+                    slideObj.put("imageAspectRatio", aspectRatio.toDouble())
+                }
+                
+                val updatedDoc = doc.copy(slidesJson = jsonArray.toString(), lastModified = System.currentTimeMillis())
+                _currentEditingDoc.value = updatedDoc
+                scheduleDocAutoSave()
+            }
+        } catch (_: Exception) {}
+    }
+
     fun updateSlideTable(slideIndex: Int, tableData: String?) {
         val doc = _currentEditingDoc.value ?: return
         try {
