@@ -1,5 +1,10 @@
 package com.example.data.firebase
 
+import com.example.data.firebase.ChannelInfo
+import com.example.data.firebase.GroupMember
+import com.example.data.firebase.PresenceUser
+import com.example.data.model.ChatMessage
+import com.example.data.model.UserAccount
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
@@ -42,7 +47,7 @@ class RealtimeDatabaseService {
     /**
      * Observa en tiempo real todos los chats y conversaciones del nodo 'chats'.
      */
-    fun listenToChats(): Flow<List<Map<String, Any>>> = callbackFlow {
+    fun listenToChats(): Flow<List<ChannelInfo>> = callbackFlow {
         val chatsRef = database?.child("chats")
         if (chatsRef == null) {
             trySendBlocking(emptyList())
@@ -54,10 +59,8 @@ class RealtimeDatabaseService {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
                 val chats = snapshot.children.mapNotNull { child ->
-                    val map = child.value as? Map<String, Any>
-                    if (map != null) {
-                        map + ("id" to (child.key ?: ""))
-                    } else null
+                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                    mapToChannelInfo(child.key ?: "", map)
                 }
                 trySendBlocking(chats)
             }
@@ -71,10 +74,39 @@ class RealtimeDatabaseService {
         awaitClose { chatsRef.removeEventListener(listener) }
     }
 
+    private fun mapToChannelInfo(id: String, map: Map<String, Any>): ChannelInfo {
+        val membersList = (map["members"] as? List<Map<String, Any>>)?.map { m ->
+            GroupMember(
+                email = (m["email"] as? String) ?: "",
+                name = (m["name"] as? String) ?: "",
+                role = (m["role"] as? String) ?: "member",
+                canSendMessages = (m["canSendMessages"] as? Boolean) ?: true,
+                canSendMedia = (m["canSendMedia"] as? Boolean) ?: true,
+                canInviteMembers = (m["canInviteMembers"] as? Boolean) ?: true,
+                avatarUrl = (m["avatarUrl"] as? String) ?: ""
+            )
+        } ?: emptyList()
+
+        return ChannelInfo(
+            id = id,
+            name = (map["name"] as? String) ?: "Chat",
+            description = (map["description"] as? String) ?: "",
+            iconEmoji = (map["iconEmoji"] as? String) ?: "💬",
+            isDirect = (map["isDirect"] as? Boolean) ?: false,
+            isGroup = (map["isGroup"] as? Boolean) ?: false,
+            groupPhotoUrl = (map["groupPhotoUrl"] as? String) ?: "",
+            creatorEmail = (map["creatorEmail"] as? String) ?: "",
+            creatorName = (map["creatorName"] as? String) ?: "",
+            members = membersList,
+            pendingDeletionTimestamp = (map["pendingDeletionTimestamp"] as? Number)?.toLong(),
+            isDeleting = (map["isDeleting"] as? Boolean) ?: false
+        )
+    }
+
     /**
      * Observa en tiempo real los mensajes de un chat específico dentro de 'chats/{chatId}/messages'.
      */
-    fun listenToMessages(chatId: String): Flow<List<Map<String, Any>>> = callbackFlow {
+    fun listenToMessages(chatId: String): Flow<List<ChatMessage>> = callbackFlow {
         val messagesRef = database?.child("chats")?.child(chatId)?.child("messages")
         if (messagesRef == null) {
             trySendBlocking(emptyList())
@@ -86,8 +118,9 @@ class RealtimeDatabaseService {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
                 val messages = snapshot.children.mapNotNull { child ->
-                    child.value as? Map<String, Any>
-                }
+                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                    mapToChatMessage(child.key ?: "", chatId, map)
+                }.sortedBy { it.timestamp }
                 trySendBlocking(messages)
             }
 
@@ -100,11 +133,39 @@ class RealtimeDatabaseService {
         awaitClose { messagesRef.removeEventListener(listener) }
     }
 
+    private fun mapToChatMessage(id: String, channelId: String, map: Map<String, Any>): ChatMessage {
+        val timestamp = (map["timestamp"] as? Number)?.toLong() ?: (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+        return ChatMessage(
+            id = id.hashCode().toLong(),
+            firestoreId = id,
+            channelId = channelId,
+            senderName = (map["senderName"] as? String) ?: "Usuario",
+            senderEmail = (map["senderEmail"] as? String) ?: "usuario@omnistudio.io",
+            text = (map["text"] as? String) ?: "",
+            timestamp = timestamp,
+            attachedDocId = (map["attachedDocId"] as? Number)?.toLong(),
+            attachedDocTitle = map["attachedDocTitle"] as? String,
+            attachedAudioId = (map["attachedAudioId"] as? Number)?.toLong(),
+            attachedAudioTitle = map["attachedAudioTitle"] as? String,
+            mediaType = (map["mediaType"] as? String) ?: "",
+            mediaUrl = map["mediaUrl"] as? String,
+            mediaThumbnail = map["mediaThumbnail"] as? String,
+            callDurationSec = (map["callDurationSec"] as? Number)?.toInt() ?: 0,
+            reactions = (map["reactions"] as? String) ?: "",
+            isSyncedFirestore = true,
+            deliveryStatus = (map["deliveryStatus"] as? String) ?: "enviado",
+            sentTimestamp = (map["sentTimestamp"] as? Number)?.toLong() ?: timestamp,
+            deliveredTimestamp = (map["deliveredTimestamp"] as? Number)?.toLong() ?: 0L,
+            seenTimestamp = (map["seenTimestamp"] as? Number)?.toLong() ?: 0L,
+            seenBy = (map["seenBy"] as? String) ?: ""
+        )
+    }
+
     // Alias para compatibilidad previa
-    fun listenToChannelMessages(channelId: String): Flow<List<Map<String, Any>>> = listenToMessages(channelId)
+    fun listenToChannelMessages(channelId: String): Flow<List<ChatMessage>> = listenToMessages(channelId)
 
     // Alias para canales personalizados
-    fun listenToCustomChannels(): Flow<List<Map<String, Any>>> = listenToChats()
+    fun listenToCustomChannels(): Flow<List<ChannelInfo>> = listenToChats()
 
     /**
      * Observa en tiempo real los documentos del usuario en 'documents/{uid}'.
@@ -223,40 +284,48 @@ class RealtimeDatabaseService {
             .await()
     }
 
-    suspend fun sendMessage(
-        chatId: String,
-        text: String,
-        mediaUrl: String? = null,
-        mediaType: String? = null
-    ): String {
+    suspend fun sendMessage(message: ChatMessage): String {
         val user = auth.currentUser
             ?: error("Usuario no autenticado")
         val db = database ?: error("Base de datos no disponible")
 
-        val messageRef = db
-            .child("chats")
-            .child(chatId)
-            .child("messages")
-            .push()
+        val docId = if (message.firestoreId.isNotBlank()) message.firestoreId else db.child("chats").child(message.channelId).child("messages").push().key ?: "msg_${System.currentTimeMillis()}"
 
-        val messageId = messageRef.key
-            ?: error("No se pudo crear el ID del mensaje")
-
-        val message = mapOf(
-            "messageId" to messageId,
+        val messageData = mapOf(
+            "messageId" to docId,
             "senderId" to user.uid,
-            "senderEmail" to (user.email ?: ""),
-            "text" to text,
-            "mediaUrl" to mediaUrl,
-            "mediaType" to mediaType,
-            "createdAt" to System.currentTimeMillis()
+            "senderName" to message.senderName,
+            "senderEmail" to message.senderEmail,
+            "text" to message.text,
+            "timestamp" to message.timestamp,
+            "attachedDocId" to message.attachedDocId,
+            "attachedDocTitle" to message.attachedDocTitle,
+            "attachedAudioId" to message.attachedAudioId,
+            "attachedAudioTitle" to message.attachedAudioTitle,
+            "mediaType" to message.mediaType,
+            "mediaUrl" to message.mediaUrl,
+            "mediaThumbnail" to message.mediaThumbnail,
+            "callDurationSec" to message.callDurationSec,
+            "reactions" to message.reactions,
+            "deliveryStatus" to message.deliveryStatus,
+            "sentTimestamp" to (if (message.sentTimestamp > 0) message.sentTimestamp else message.timestamp),
+            "deliveredTimestamp" to message.deliveredTimestamp,
+            "seenTimestamp" to message.seenTimestamp,
+            "seenBy" to message.seenBy
         )
 
-        messageRef
-            .setValue(message)
-            .await()
+        db.child("chats").child(message.channelId).child("messages").child(docId).setValue(messageData).await()
 
-        return messageId
+        // Actualizar metadatos del canal
+        val channelMeta = mapOf(
+            "lastMessageText" to message.text,
+            "lastMessageTimestamp" to message.timestamp,
+            "lastMessageSender" to message.senderName,
+            "lastUpdated" to System.currentTimeMillis()
+        )
+        db.child("chats").child(message.channelId).updateChildren(channelMeta).await()
+
+        return docId
     }
 
     suspend fun saveDocument(
@@ -301,6 +370,12 @@ class RealtimeDatabaseService {
             .await()
     }
 
+    suspend fun addReaction(chatId: String, messageId: String, emoji: String, currentReactions: String) {
+        val db = database ?: error("Base de datos no disponible")
+        val updatedReactions = if (currentReactions.isBlank()) emoji else "$currentReactions,$emoji"
+        db.child("chats").child(chatId).child("messages").child(messageId).child("reactions").setValue(updatedReactions).await()
+    }
+
     // --- CHAT PRIVADO (DIRECTO) ---
     suspend fun createOrGetDirectChat(targetEmail: String, targetName: String): String {
         val user = auth.currentUser ?: error("Usuario no autenticado")
@@ -324,6 +399,46 @@ class RealtimeDatabaseService {
         val db = database ?: error("Base de datos no disponible")
         db.child("chats").child(directChatId).updateChildren(chatData).await()
         return directChatId
+    }
+
+    suspend fun saveOrUpdateChannel(channel: ChannelInfo) {
+        val db = database ?: error("Base de datos no disponible")
+        val membersList = channel.members.map { m ->
+            mapOf(
+                "email" to m.email,
+                "name" to m.name,
+                "role" to m.role,
+                "canSendMessages" to m.canSendMessages,
+                "canSendMedia" to m.canSendMedia,
+                "canInviteMembers" to m.canInviteMembers,
+                "avatarUrl" to m.avatarUrl
+            )
+        }
+
+        val chatData = mutableMapOf(
+            "id" to channel.id,
+            "name" to channel.name,
+            "description" to channel.description,
+            "iconEmoji" to channel.iconEmoji,
+            "isDirect" to channel.isDirect,
+            "isGroup" to channel.isGroup,
+            "groupPhotoUrl" to channel.groupPhotoUrl,
+            "creatorEmail" to channel.creatorEmail,
+            "creatorName" to channel.creatorName,
+            "members" to membersList,
+            "isDeleting" to channel.isDeleting,
+            "lastUpdated" to System.currentTimeMillis()
+        )
+        if (channel.pendingDeletionTimestamp != null) {
+            chatData["pendingDeletionTimestamp"] = channel.pendingDeletionTimestamp
+        }
+
+        db.child("chats").child(channel.id).updateChildren(chatData as Map<String, Any>).await()
+    }
+
+    suspend fun deleteChannel(channelId: String) {
+        val db = database ?: error("Base de datos no disponible")
+        db.child("chats").child(channelId).removeValue().await()
     }
 
     // --- INDICADORES DE ESCRITURA Y PRESENCIA ---
@@ -370,7 +485,7 @@ class RealtimeDatabaseService {
         db.child("presence").child(chatId).child(safeEmail).setValue(presenceData).await()
     }
 
-    fun listenToPresence(chatId: String): Flow<List<Map<String, Any>>> = callbackFlow {
+    fun listenToPresence(chatId: String): Flow<List<PresenceUser>> = callbackFlow {
         val ref = database?.child("presence")?.child(chatId)
         if (ref == null) {
             trySendBlocking(emptyList())
@@ -380,7 +495,16 @@ class RealtimeDatabaseService {
         val listener = object : ValueEventListener {
             @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
-                val users = snapshot.children.mapNotNull { it.value as? Map<String, Any> }
+                val now = System.currentTimeMillis()
+                val users = snapshot.children.mapNotNull { child ->
+                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                    val email = (map["email"] as? String) ?: return@mapNotNull null
+                    val name = (map["name"] as? String) ?: email
+                    val lastActive = (map["lastActive"] as? Number)?.toLong() ?: 0L
+                    if (now - lastActive < 120000) {
+                        PresenceUser(email, name, lastActive)
+                    } else null
+                }
                 trySendBlocking(users)
             }
             override fun onCancelled(error: DatabaseError) {
@@ -389,5 +513,46 @@ class RealtimeDatabaseService {
         }
         ref.addValueEventListener(listener)
         awaitClose { ref.removeEventListener(listener) }
+    }
+
+    /**
+     * Observa en tiempo real todos los perfiles de usuario en 'users'.
+     */
+    fun listenToAllUsers(): Flow<List<UserAccount>> = callbackFlow {
+        val usersRef = database?.child("users")
+        if (usersRef == null) {
+            trySendBlocking(emptyList())
+            channel.close()
+            return@callbackFlow
+        }
+        val listener = object : ValueEventListener {
+            @Suppress("UNCHECKED_CAST")
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val users = snapshot.children.mapNotNull { child ->
+                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                    val email = (map["email"] as? String) ?: ""
+                    if (email.isBlank()) return@mapNotNull null
+                    
+                    UserAccount(
+                        email = email,
+                        uid = (map["uid"] as? String) ?: child.key ?: "",
+                        username = (map["username"] as? String) ?: email.substringBefore("@"),
+                        displayName = (map["displayName"] as? String) ?: (map["name"] as? String) ?: email.substringBefore("@"),
+                        passwordHash = (map["passwordHash"] as? String) ?: "dummy_hash",
+                        isGoogleAccount = (map["isGoogleAccount"] as? Boolean) ?: true,
+                        avatarUrl = (map["avatarUrl"] as? String) ?: "",
+                        cloudStorageUsedMb = (map["cloudStorageUsedMb"] as? Number)?.toInt() ?: 1420,
+                        cloudStorageTotalMb = (map["cloudStorageTotalMb"] as? Number)?.toInt() ?: 15360,
+                        lastLoginTimestamp = (map["lastLoginTimestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                    )
+                }
+                trySendBlocking(users)
+            }
+            override fun onCancelled(error: DatabaseError) {
+                trySendBlocking(emptyList())
+            }
+        }
+        usersRef.addValueEventListener(listener)
+        awaitClose { usersRef.removeEventListener(listener) }
     }
 }

@@ -15,6 +15,7 @@ import com.example.data.firebase.FirestoreChatService
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
+import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.local.AppDatabase
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
@@ -165,6 +166,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     // Chat & Messaging State (Firebase Firestore Real-Time)
     val firestoreChatService = FirestoreChatService(application)
+    val rtdbService = RealtimeDatabaseService()
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
     private val _availableChannels = MutableStateFlow<List<ChannelInfo>>(firestoreChatService.availableChannels)
     val availableChannels: StateFlow<List<ChannelInfo>> = combine(_availableChannels, _authUiState) { channels, auth ->
@@ -355,7 +357,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         )
 
-        allUsers = combine(repo.allUsers, firestoreChatService.listenToAllUsers()) { local, cloud ->
+        allUsers = combine(repo.allUsers, rtdbService.listenToAllUsers()) { local, cloud ->
             val merged = local.toMutableList()
             cloud.forEach { c ->
                 if (local.none { l -> l.email.equals(c.email, ignoreCase = true) }) {
@@ -414,9 +416,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             initDefaultSequencerTracks()
         }
 
-        // Escuchar canales y grupos personalizados creados y guardados en Firestore
+        // Escuchar canales y grupos personalizados creados y guardados en RTDB
         viewModelScope.launch {
-            firestoreChatService.listenToCustomChannels()
+            rtdbService.listenToCustomChannels()
                 .combine(_authUiState) { channels, auth -> channels to auth.currentUser?.email }
                 .collect { (customChannels, currentUserEmail) ->
                     val defaultChannels = firestoreChatService.availableChannels
@@ -1600,18 +1602,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 3. Escuchar en tiempo real desde Firebase Firestore para ESTE canal
+        // 3. Escuchar en tiempo real desde Firebase Realtime Database para ESTE canal
         channelMessagesJob = viewModelScope.launch {
-            firestoreChatService.listenToChannelMessages(channelId).collect { firestoreMsgs ->
+            rtdbService.listenToMessages(channelId).collect { rtdbMsgs ->
                 if (_currentChannel.value == channelId) {
-                    if (firestoreMsgs.isNotEmpty()) {
-                        _chatMessages.value = firestoreMsgs
-                        repo.insertChatMessages(firestoreMsgs)
+                    if (rtdbMsgs.isNotEmpty()) {
+                        _chatMessages.value = rtdbMsgs
+                        repo.insertChatMessages(rtdbMsgs)
                         viewModelScope.launch {
                             firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
                         }
                     } else {
-                        // Si el canal no tiene mensajes en Firestore aún, verificar si hay mensajes locales en Room
+                        // Si el canal no tiene mensajes en RTDB aún, verificar si hay mensajes locales en Room
                         repo.getMessagesForChannel(channelId).collect { localMsgs ->
                             if (_currentChannel.value == channelId) {
                                 _chatMessages.value = localMsgs
@@ -1624,16 +1626,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         // 4. Escuchar indicadores de escritura en tiempo real
         typingJob = viewModelScope.launch {
-            firestoreChatService.listenToTyping(channelId, currentUserEmail).collect { typers ->
+            rtdbService.listenToTyping(channelId).collect { typers ->
                 if (_currentChannel.value == channelId) {
-                    _typingUsers.value = typers
+                    _typingUsers.value = typers.filter { it != currentUserName }
                 }
             }
         }
 
         // 5. Presencia de colaboradores activos en el canal
         presenceJob = viewModelScope.launch {
-            firestoreChatService.listenToPresence(channelId).collect { users ->
+            rtdbService.listenToPresence(channelId).collect { users ->
                 if (_currentChannel.value == channelId) {
                     _onlineUsers.value = users
                 }
@@ -1642,25 +1644,22 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         // Enviar latido de presencia inicial
         viewModelScope.launch {
-            firestoreChatService.updatePresence(channelId, currentUserEmail, currentUserName)
+            rtdbService.updatePresence(channelId)
         }
     }
 
     fun onChatInputChanged(text: String) {
         _chatInputText.value = text
-        val user = _authUiState.value.currentUser
-        val userEmail = user?.email ?: "gonzalez24029@gmail.com"
-        val userName = user?.displayName ?: "Alex González"
         val channelId = _currentChannel.value
 
         typingDebounceJob?.cancel()
         typingDebounceJob = viewModelScope.launch {
             if (text.isNotBlank()) {
-                firestoreChatService.setTypingStatus(channelId, userEmail, userName, true)
+                rtdbService.setTyping(channelId, true)
                 delay(3500)
-                firestoreChatService.setTypingStatus(channelId, userEmail, userName, false)
+                rtdbService.setTyping(channelId, false)
             } else {
-                firestoreChatService.setTypingStatus(channelId, userEmail, userName, false)
+                rtdbService.setTyping(channelId, false)
             }
         }
     }
@@ -1693,7 +1692,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         // Cancelar estado de escritura
         typingDebounceJob?.cancel()
         viewModelScope.launch {
-            firestoreChatService.setTypingStatus(channelId, senderEmail, senderName, false)
+            rtdbService.setTyping(channelId, false)
         }
 
         val now = System.currentTimeMillis()
@@ -1725,11 +1724,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
             }
 
-            // Publicar en Firebase Firestore en tiempo real (Estado: Enviado)
-            val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            // Publicar en Firebase RTDB en tiempo real (Estado: Enviado)
+            val firestoreId = rtdbService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            
+            // Backup opcional en Firestore
+            viewModelScope.launch {
+                firestoreChatService.sendMessage(initialMsg.copy(firestoreId = firestoreId, deliveryStatus = "enviado", isSyncedFirestore = true))
+            }
+
             val sentMsg = initialMsg.copy(
-                firestoreId = firestoreId ?: "",
-                isSyncedFirestore = !firestoreId.isNullOrBlank(),
+                firestoreId = firestoreId,
+                isSyncedFirestore = firestoreId.isNotBlank(),
                 deliveryStatus = "enviado"
             )
             repo.updateChatMessage(sentMsg)
@@ -1759,6 +1764,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.updateChatMessage(msg.copy(reactions = currentReactions))
             if (msg.firestoreId.isNotBlank()) {
+                rtdbService.addReaction(msg.channelId, msg.firestoreId, emoji, msg.reactions)
                 firestoreChatService.addReaction(msg.channelId, msg.firestoreId, emoji, msg.reactions)
             }
         }
@@ -1771,6 +1777,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.deleteChatMessage(msg.id)
             if (msg.firestoreId.isNotBlank()) {
+                rtdbService.deleteMessage(msg.channelId, msg.firestoreId)
                 firestoreChatService.deleteMessage(msg.channelId, msg.firestoreId)
                 repo.deleteChatMessageByFirestoreId(msg.firestoreId)
             }
@@ -1784,8 +1791,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startDirectChat(peerEmail: String, peerName: String, peerAvatar: String = "") {
         viewModelScope.launch {
-            val directId = firestoreChatService.createOrGetDirectChat(peerEmail, peerName)
-            if (directId != null) {
+            val directId = rtdbService.createOrGetDirectChat(peerEmail, peerName)
+            if (directId.isNotBlank()) {
+                // Sincronizar con Firestore también
+                firestoreChatService.createOrGetDirectChat(peerEmail, peerName)
                 loadChannelMessages(directId)
             }
         }
@@ -1842,6 +1851,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         _availableChannels.value = _availableChannels.value + newGroup
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(newGroup)
             firestoreChatService.saveOrUpdateChannel(newGroup)
         }
         sendSystemChatMessage(newGroupId, "$ownerName creó el grupo '$name' con ${allGroupMembers.size} participantes.")
@@ -1878,6 +1888,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
 
@@ -1908,6 +1919,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "$finalName fue añadido al grupo.")
@@ -1926,6 +1938,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "${member?.name ?: memberEmail} fue retirado del grupo por el creador.")
@@ -1963,6 +1976,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "El creador actualizó los permisos de ${existingMember.name}.")
@@ -1990,6 +2004,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "El creador deshizo las restricciones y restauró los permisos de ${existingMember.name}.")
@@ -2007,6 +2022,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "$userName abandonó el grupo.")
@@ -2026,6 +2042,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         _groupDeletionCountdownSeconds.value = _groupDeletionCountdownSeconds.value + (channelId to totalSeconds)
@@ -2061,6 +2078,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (it.id == channelId) updatedChannel else it
         }
         viewModelScope.launch {
+            rtdbService.saveOrUpdateChannel(updatedChannel)
             firestoreChatService.saveOrUpdateChannel(updatedChannel)
         }
         sendSystemChatMessage(channelId, "✅ Eliminación cancelada: El dueño ha cancelado la cuenta regresiva y conservado el grupo.")
@@ -2075,6 +2093,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repo.deleteMessagesForChannel(channelId)
+            rtdbService.deleteChannel(channelId)
             firestoreChatService.deleteChannelFromFirestore(channelId)
         }
 
@@ -2098,7 +2117,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             if (_currentChannel.value == channelId) {
                 _chatMessages.value = (_chatMessages.value + msg.copy(id = localId)).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
             }
-            firestoreChatService.sendMessage(msg.copy(id = localId))
+            val firestoreId = rtdbService.sendMessage(msg.copy(id = localId))
+            firestoreChatService.sendMessage(msg.copy(id = localId, firestoreId = firestoreId))
         }
     }
 
@@ -2225,11 +2245,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
             }
 
-            val firestoreId = firestoreChatService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            val firestoreId = rtdbService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
+            
+            viewModelScope.launch {
+                firestoreChatService.sendMessage(initialMsg.copy(firestoreId = firestoreId, deliveryStatus = "enviado", isSyncedFirestore = true))
+            }
+
             val sentMsg = initialMsg.copy(
-                firestoreId = firestoreId ?: "",
-                isSyncedFirestore = !firestoreId.isNullOrBlank(),
-                deliveryStatus = if (!firestoreId.isNullOrBlank()) "enviado" else "error"
+                firestoreId = firestoreId,
+                isSyncedFirestore = firestoreId.isNotBlank(),
+                deliveryStatus = if (firestoreId.isNotBlank()) "enviado" else "error"
             )
             
             repo.updateChatMessage(sentMsg)
