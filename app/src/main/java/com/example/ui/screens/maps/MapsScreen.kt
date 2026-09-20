@@ -1,14 +1,46 @@
 package com.example.ui.screens.maps
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -17,19 +49,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import android.Manifest
-import android.content.pm.PackageManager
 import com.example.BuildConfig
+import com.example.data.api.OpenRouteServiceClient
+import com.example.data.api.OrsProfiles
+import com.example.data.api.OrsRouteSummary
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.*
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapType
+import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.rememberCameraPositionState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val orsRouteProfiles = listOf(
+    OrsProfiles.DRIVING_CAR to "Automóvil",
+    OrsProfiles.FOOT_WALKING to "Caminar",
+    OrsProfiles.CYCLING_REGULAR to "Bicicleta",
+    OrsProfiles.CYCLING_ELECTRIC to "Bicicleta eléctrica",
+    OrsProfiles.FOOT_HIKING to "Senderismo",
+    OrsProfiles.WHEELCHAIR to "Silla de ruedas"
+)
+
 @Composable
-fun MapsScreen(
-    onBack: () -> Unit
-) {
+fun MapsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val startPoint = LatLng(9.9951797, -84.1403642)
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(startPoint, 12f)
+    }
+
     var hasLocationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -38,33 +94,67 @@ fun MapsScreen(
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            hasLocationPermission = isGranted
-        }
-    )
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> hasLocationPermission = granted }
 
     LaunchedEffect(Unit) {
-        if (!hasLocationPermission) {
-            launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (!hasLocationPermission) permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    var destination by remember { mutableStateOf("") }
+    var selectedProfile by remember { mutableStateOf(orsRouteProfiles.first()) }
+    var profileMenuOpen by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var routeSummary by remember { mutableStateOf<OrsRouteSummary?>(null) }
+    var instructions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var routeError by remember { mutableStateOf<String?>(null) }
+
+    val mapsKeyAvailable = BuildConfig.MAPS_API_KEY.isNotBlank() &&
+        BuildConfig.MAPS_API_KEY != "MY_MAPS_API_KEY"
+    val orsKeyAvailable = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
+        BuildConfig.OPENROUTESERVICE_API_KEY != "MY_OPENROUTESERVICE_API_KEY"
+
+    fun calculateRoute() {
+        if (destination.isBlank() || isLoading) return
+        scope.launch {
+            isLoading = true
+            routeError = null
+            routeSummary = null
+            instructions = emptyList()
+            try {
+                if (!orsKeyAvailable) {
+                    routeError = "Configura OPENROUTESERVICE_API_KEY en los Secrets de compilación."
+                    return@launch
+                }
+                val result = withContext(Dispatchers.IO) {
+                    val place = OpenRouteServiceClient.api
+                        .geocode(BuildConfig.OPENROUTESERVICE_API_KEY, destination.trim(), 1)
+                        .features
+                        .firstOrNull()
+                        ?: error("No encontré ese destino.")
+                    val coordinates = place.geometry.coordinates
+                    if (coordinates.size < 2) error("El destino no tiene coordenadas válidas.")
+                    val end = "${coordinates[0]},${coordinates[1]}"
+                    OpenRouteServiceClient.api.route(
+                        profile = selectedProfile.first,
+                        apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
+                        start = "${startPoint.longitude},${startPoint.latitude}",
+                        end = end,
+                        instructions = true
+                    )
+                }
+                val feature = result.features.firstOrNull() ?: error("No se pudo calcular la ruta.")
+                routeSummary = feature.properties.summary
+                instructions = feature.properties.segments.flatMap { segment ->
+                    segment.steps.map { step -> step.instruction }
+                }
+            } catch (error: Exception) {
+                routeError = error.message ?: "No se pudo calcular la ruta."
+            } finally {
+                isLoading = false
+            }
         }
-    }
-
-    val singapore = LatLng(1.35, 103.87)
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(singapore, 10f)
-    }
-
-    var uiSettings by remember(hasLocationPermission) { 
-        mutableStateOf(MapUiSettings(myLocationButtonEnabled = hasLocationPermission)) 
-    }
-    var properties by remember(hasLocationPermission) { 
-        mutableStateOf(MapProperties(
-            mapType = MapType.NORMAL,
-            isMyLocationEnabled = hasLocationPermission
-        )) 
     }
 
     Scaffold(
@@ -72,9 +162,9 @@ fun MapsScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Map, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(24.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Explorador de Mapas", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Icon(Icons.Default.Map, contentDescription = null, tint = Color(0xFF10B981))
+                        Spacer(Modifier.size(8.dp))
+                        Text("Mapas y rutas", fontWeight = FontWeight.Bold)
                     }
                 },
                 navigationIcon = {
@@ -91,63 +181,109 @@ fun MapsScreen(
         },
         containerColor = Color(0xFF0F172A)
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            val apiKey = BuildConfig.MAPS_API_KEY
-            if (apiKey == "MY_MAPS_API_KEY" || apiKey.isBlank()) {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.Gray)
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "Configuración de Mapas Requerida",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (mapsKeyAvailable) {
+                    GoogleMap(
+                        modifier = Modifier.fillMaxSize(),
+                        cameraPositionState = cameraPositionState,
+                        properties = MapProperties(
+                            mapType = MapType.NORMAL,
+                            isMyLocationEnabled = hasLocationPermission
+                        ),
+                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission)
+                    ) {
+                        Marker(
+                            state = MarkerState(startPoint),
+                            title = "Inicio",
+                            snippet = "San Francisco, Heredia"
+                        )
+                    }
+                } else {
+                    Column(
+                        Modifier.fillMaxSize().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.Gray)
+                        Text("El mapa visual requiere configuración de mapas.", color = Color.White)
+                        Text("Las rutas gratuitas usan OpenRouteService.", color = Color.Gray)
+                    }
+                }
+            }
+
+            Surface(color = Color(0xFF1E293B), shadowElevation = 8.dp) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    OutlinedTextField(
+                        value = destination,
+                        onValueChange = { destination = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Destino") },
+                        placeholder = { Text("Ej. Parque Central de Heredia") }
                     )
                     Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box {
+                            Button(onClick = { profileMenuOpen = true }) {
+                                Text(selectedProfile.second)
+                            }
+                            DropdownMenu(
+                                expanded = profileMenuOpen,
+                                onDismissRequest = { profileMenuOpen = false }
+                            ) {
+                                orsRouteProfiles.forEach { profile ->
+                                    DropdownMenuItem(
+                                        text = { Text(profile.second) },
+                                        onClick = {
+                                            selectedProfile = profile
+                                            profileMenuOpen = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.size(8.dp))
+                        Button(
+                            onClick = ::calculateRoute,
+                            enabled = destination.isNotBlank() && !isLoading
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text("Calcular ruta")
+                            }
+                        }
+                    }
                     Text(
-                        "Para usar esta función, debes configurar tu MAPS_API_KEY en el panel de Secrets de AI Studio.",
-                        color = Color.Gray,
-                        modifier = Modifier.padding(horizontal = 16.dp)
+                        "Inicio predeterminado: San Francisco, Heredia",
+                        color = Color.LightGray,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 6.dp)
                     )
-                }
-            } else {
-                GoogleMap(
-                    modifier = Modifier.fillMaxSize(),
-                    cameraPositionState = cameraPositionState,
-                    properties = properties,
-                    uiSettings = uiSettings
-                ) {
-                    Marker(
-                        state = MarkerState(position = singapore),
-                        title = "Singapur",
-                        snippet = "Marcador de ejemplo"
-                    )
-                }
-                
-                // Overlay controls
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    SmallFloatingActionButton(
-                        onClick = { 
-                            properties = properties.copy(
-                                mapType = if (properties.mapType == MapType.NORMAL) MapType.SATELLITE else MapType.NORMAL
-                            )
-                        },
-                        containerColor = Color(0xFF1E293B),
-                        contentColor = Color.White
-                    ) {
-                        Icon(
-                            if (properties.mapType == MapType.NORMAL) Icons.Default.Map else Icons.Default.MyLocation,
-                            contentDescription = "Cambiar tipo de mapa"
+                    routeError?.let {
+                        Text(it, color = Color(0xFFFCA5A5), modifier = Modifier.padding(top = 6.dp))
+                    }
+                    routeSummary?.let { summary ->
+                        val distance = String.format(Locale.getDefault(), "%.1f km", summary.distance / 1000.0)
+                        val duration = "${(summary.duration / 60.0).roundToInt()} min"
+                        Text(
+                            "$distance • $duration • ${selectedProfile.second}",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 8.dp)
                         )
+                    }
+                    if (instructions.isNotEmpty()) {
+                        LazyColumn(
+                            contentPadding = PaddingValues(top = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.height(110.dp)
+                        ) {
+                            items(instructions) { instruction ->
+                                Text("• $instruction", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
                     }
                 }
             }
