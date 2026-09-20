@@ -2200,6 +2200,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
                 "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
                 "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
+                "sticker" -> if (caption.isNotBlank()) caption else "✨ Sticker"
+                "document" -> if (caption.isNotBlank()) caption else "📄 Archivo adjunto"
                 else -> caption
             }
 
@@ -2235,7 +2237,33 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // CALLING SYSTEM (Audio & Video Calling, Timeouts, Sounds, Vibrations & Notifications)
+    private val _userSearchResults = MutableStateFlow<List<UserAccount>>(emptyList())
+    val userSearchResults: StateFlow<List<UserAccount>> = _userSearchResults.asStateFlow()
+
+    private val _isSearchingUsers = MutableStateFlow(false)
+    val isSearchingUsers: StateFlow<Boolean> = _isSearchingUsers.asStateFlow()
+
+    fun searchUsersGlobally(query: String) {
+        if (query.isBlank()) {
+            _userSearchResults.value = emptyList()
+            return
+        }
+        _isSearchingUsers.value = true
+        viewModelScope.launch {
+            try {
+                val results = firestoreChatService.searchUsers(query)
+                _userSearchResults.value = results
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "Error searching users: ${e.message}")
+            } finally {
+                _isSearchingUsers.value = false
+            }
+        }
+    }
+
+    fun clearUserSearchResults() {
+        _userSearchResults.value = emptyList()
+    }
     fun setCallTimeoutMinutes(minutes: Int) {
         val validMin = if (minutes in listOf(1, 3, 4, 5)) minutes else 5
         _callTimeoutMinutes.value = validMin

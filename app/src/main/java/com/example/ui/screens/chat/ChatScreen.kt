@@ -1474,7 +1474,7 @@ fun ChatScreen(
     // Diálogo para Iniciar Chat Privado Directo
     if (showStartDirectChatDialog) {
         StartDirectChatDialog(
-            allUsers = allUsers,
+            viewModel = viewModel,
             currentUserEmail = currentUserEmail,
             onDismiss = { showStartDirectChatDialog = false },
             onSelectUser = { email, name ->
@@ -2247,6 +2247,52 @@ private fun MessageBubble(
                                     }
                                 ) {
                                     Text("Llamar", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    // Renderizado de DOCUMENTOS (Archivos genéricos subidos)
+                    if (message.mediaType == "document" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                    intent.data = android.net.Uri.parse(message.mediaUrl)
+                                    context.startActivity(intent)
+                                }
+                                .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                        ) {
+                            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF475569),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Default.AttachFile,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text("Toca para descargar/abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
                                 }
                             }
                         }

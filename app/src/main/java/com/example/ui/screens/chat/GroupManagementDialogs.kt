@@ -416,21 +416,41 @@ fun CreateGroupDialog(
  */
 @Composable
 fun StartDirectChatDialog(
-    allUsers: List<UserAccount>,
+    viewModel: OmniViewModel,
     currentUserEmail: String,
     onDismiss: () -> Unit,
     onSelectUser: (userEmail: String, userName: String) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    val allUsers by viewModel.allUsers.collectAsState()
+    val searchResults by viewModel.userSearchResults.collectAsState()
+    val isSearchingUsers by viewModel.isSearchingUsers.collectAsState()
 
-    val contacts = remember(allUsers, currentUserEmail, searchQuery) {
-        allUsers.filter { it.email != currentUserEmail }
-            .filter {
-                val name = it.displayName.ifBlank { it.username }
-                if (searchQuery.isBlank()) true
-                else name.contains(searchQuery, ignoreCase = true) ||
-                        it.email.contains(searchQuery, ignoreCase = true)
-            }
+    // Efecto para buscar globalmente cuando cambia el query
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotBlank()) {
+            kotlinx.coroutines.delay(500) // Debounce
+            viewModel.searchUsersGlobally(searchQuery)
+        } else {
+            viewModel.clearUserSearchResults()
+        }
+    }
+
+    val contacts = remember(allUsers, searchResults, currentUserEmail, searchQuery) {
+        if (searchQuery.isBlank()) {
+            allUsers.filter { it.email != currentUserEmail }.take(10)
+        } else {
+            // Combinamos locales y resultados de busqueda global
+            val filteredLocal = allUsers.filter { it.email != currentUserEmail }
+                .filter {
+                    val name = it.displayName.ifBlank { it.username }
+                    name.contains(searchQuery, ignoreCase = true) ||
+                            it.email.contains(searchQuery, ignoreCase = true)
+                }
+            
+            val merged = (filteredLocal + searchResults).distinctBy { it.email }.filter { it.email != currentUserEmail }
+            merged
+        }
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -480,8 +500,17 @@ fun StartDirectChatDialog(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Buscar usuario para chatear en privado...") },
+                    placeholder = { Text("Email o nombre de usuario...", color = Color(0xFF64748B)) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF94A3B8)) },
+                    trailingIcon = {
+                        if (isSearchingUsers) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color(0xFF0284C7),
+                                strokeWidth = 2.dp
+                            )
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -497,7 +526,7 @@ fun StartDirectChatDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Selecciona un contacto:",
+                    text = if (searchQuery.isBlank()) "Sugerencias:" else "Resultados de búsqueda:",
                     color = Color(0xFF94A3B8),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
@@ -511,10 +540,10 @@ fun StartDirectChatDialog(
                         .heightIn(max = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (contacts.isEmpty()) {
+                    if (contacts.isEmpty() && !isSearchingUsers) {
                         item {
                             Text(
-                                "No se encontraron contactos disponibles.",
+                                "No se encontraron usuarios para \"$searchQuery\".",
                                 color = Color(0xFF64748B),
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(vertical = 16.dp)

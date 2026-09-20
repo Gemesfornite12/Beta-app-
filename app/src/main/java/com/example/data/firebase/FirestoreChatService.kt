@@ -1188,6 +1188,60 @@ class FirestoreChatService(private val context: Context) {
     }
 
     /**
+     * Busca usuarios en Firestore por email o nombre de usuario.
+     */
+    suspend fun searchUsers(query: String): List<UserAccount> {
+        val db = getDb() ?: return emptyList()
+        return try {
+            val results = mutableListOf<UserAccount>()
+            val q = query.trim()
+            
+            // 1. Buscar por email exacto
+            val byEmail = db.collection("user_profiles")
+                .whereEqualTo("email", q)
+                .get()
+                .await()
+            
+            byEmail.documents.forEach { doc ->
+                results.add(docToUserAccount(doc))
+            }
+            
+            // 2. Buscar por displayName que empiece por...
+            if (q.isNotEmpty()) {
+                val byName = db.collection("user_profiles")
+                    .whereGreaterThanOrEqualTo("displayName", q)
+                    .whereLessThanOrEqualTo("displayName", q + "\uf8ff")
+                    .limit(10)
+                    .get()
+                    .await()
+                    
+                byName.documents.forEach { doc ->
+                    val user = docToUserAccount(doc)
+                    if (results.none { it.email == user.email }) {
+                        results.add(user)
+                    }
+                }
+            }
+            
+            results
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in searchUsers: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun docToUserAccount(doc: com.google.firebase.firestore.DocumentSnapshot): UserAccount {
+        val email = doc.getString("email") ?: ""
+        return UserAccount(
+            email = email,
+            username = email.substringBefore("@"),
+            displayName = doc.getString("displayName") ?: email,
+            avatarUrl = doc.getString("avatarUrl") ?: "",
+            passwordHash = ""
+        )
+    }
+
+    /**
      * Escucha todos los perfiles de usuario registrados en la nube.
      */
     fun listenToAllUsers(): Flow<List<UserAccount>> = callbackFlow {
