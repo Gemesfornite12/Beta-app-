@@ -243,6 +243,38 @@ class RealtimeDatabaseService {
         awaitClose { docsRef.removeEventListener(listener) }
     }
 
+    /**
+     * Observa en tiempo real los proyectos de música del usuario actual en 'audio_projects/{uid}'.
+     */
+    fun listenToAudioProjects(): Flow<List<Map<String, Any>>> = callbackFlow {
+        val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
+        
+        if (uid.isNullOrBlank()) {
+            trySendBlocking(emptyList())
+            close()
+            return@callbackFlow
+        }
+        
+        val audioRef = database.child("audio_projects").child(uid)
+        val listener = object : ValueEventListener {
+            @Suppress("UNCHECKED_CAST")
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val allProjects = snapshot.children.mapNotNull { projectSnap ->
+                    projectSnap.value as? Map<String, Any>
+                }
+                trySendBlocking(allProjects)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySendBlocking(emptyList())
+            }
+        }
+        
+        audioRef.addValueEventListener(listener)
+        awaitClose { audioRef.removeEventListener(listener) }
+    }
+
     // --- ESCRITURAS ---
     suspend fun saveUser(
         firstName: String,

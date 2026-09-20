@@ -833,8 +833,12 @@ class FirestoreChatService(private val context: Context) {
         val rtdb = rtdbRef
         val db = getDb()
         val docId = if (project.firestoreId.isNotBlank()) project.firestoreId else "audio_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        val auth = FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
+        
         val data = hashMapOf(
             "firestoreId" to docId,
+            "ownerUid" to uid,
             "localId" to project.id,
             "title" to project.title,
             "description" to project.description,
@@ -854,9 +858,14 @@ class FirestoreChatService(private val context: Context) {
         var saved = false
         if (rtdb != null) {
             try {
-                rtdb.child("audio_projects").child(docId).setValue(data).await()
-                saved = true
-                Log.d(TAG, "Audio project sincronizado en RTDB: $docId")
+                if (!uid.isNullOrBlank()) {
+                    // Guardar en la ruta estructurada por UID
+                    rtdb.child("audio_projects").child(uid).child(docId).setValue(data).await()
+                    saved = true
+                    Log.d(TAG, "Audio project sincronizado en RTDB (user path): $docId")
+                } else {
+                    Log.w(TAG, "No se pudo sincronizar Audio: UID nulo")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error guardando audio en RTDB: ${e.message}")
             }
@@ -1162,12 +1171,8 @@ class FirestoreChatService(private val context: Context) {
         val rtdb = rtdbRef
         if (rtdb != null) {
             try {
-                // Intentar guardar bajo el UID (mejor para reglas de seguridad)
+                // Solo guardar bajo el UID (obligatorio según las nuevas reglas de seguridad)
                 rtdb.child("users").child(effectiveUid).setValue(data).await()
-                // También guardar bajo email para compatibilidad con búsquedas antiguas si es necesario
-                if (effectiveUid != cleanEmail) {
-                    try { rtdb.child("users").child(cleanEmail).setValue(data).await() } catch (_: Exception) {}
-                }
                 success = true
                 Log.d(TAG, "Perfil de usuario sincronizado en RTDB: $displayName ($email)")
             } catch (e: Exception) {
@@ -1408,7 +1413,10 @@ class FirestoreChatService(private val context: Context) {
      */
     fun listenToAllDocuments(): Flow<List<DocumentItem>> = callbackFlow {
         val rtdb = rtdbRef
-        val docsRef = rtdb?.child("documents")
+        val auth = FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
+        
+        val docsRef = if (uid != null) rtdb?.child("documents")?.child(uid) else null
         
         val rtdbListener = docsRef?.addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -1431,6 +1439,29 @@ class FirestoreChatService(private val context: Context) {
         awaitClose {
             if (docsRef != null && rtdbListener != null) docsRef.removeEventListener(rtdbListener)
             fsReg?.remove()
+        }
+    }
+
+    /**
+     * Escucha en tiempo real los proyectos de audio del usuario actual.
+     */
+    fun listenToUserAudioProjects(): Flow<List<AudioProject>> = callbackFlow {
+        val rtdb = rtdbRef
+        val auth = FirebaseAuth.getInstance()
+        val uid = auth.currentUser?.uid
+        
+        val audioRef = if (uid != null) rtdb?.child("audio_projects")?.child(uid) else null
+        
+        val rtdbListener = audioRef?.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val list = snapshot.children.mapNotNull { snapshotToAudioProject(it) }
+                trySendBlocking(list)
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+
+        awaitClose {
+            if (audioRef != null && rtdbListener != null) audioRef.removeEventListener(rtdbListener)
         }
     }
 
@@ -1461,36 +1492,51 @@ class FirestoreChatService(private val context: Context) {
 
     /**
      * Escucha en tiempo real todos los proyectos de audio públicos.
+     * Nota: Con las nuevas reglas de RTDB, la lectura global de 'audio_projects' está restringida.
+     * Por ahora, se prioriza Firestore para proyectos públicos si RTDB falla o está restringido.
      */
     fun listenToPublicAudioProjects(): Flow<List<AudioProject>> = callbackFlow {
         val rtdb = rtdbRef
-        val audioRef = rtdb?.child("audio_projects")
-        
-        val rtdbListener = audioRef?.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val list = snapshot.children.mapNotNull { snapshotToAudioProject(it) }
-                    .filter { it.isPublic }
-                trySendBlocking(list)
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        })
-
         val db = getDb()
-        val fsReg = if (db != null && audioRef == null) {
-            db.collection("cloud_audio_projects").whereEqualTo("isPublic", true)
-                .addSnapshotListener { snapshot, _ ->
+        
+        // El acceso directo a 'audio_projects' fallará en RTDB por reglas de seguridad (solo lectura por UID)
+        // Por lo tanto, para proyectos "Públicos" de otros usuarios, debemos usar Firestore.
+        
+        val fsReg = if (db != null) {
+            db.collection("cloud_audio_projects")
+                .whereEqualTo("isPublic", true)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.w(TAG, "Error escuchando proyectos públicos en Firestore: ${error.message}")
+                        return@addSnapshotListener
+                    }
                     if (snapshot != null) {
                         val list = snapshot.documents.mapNotNull { doc ->
-                            // Simplificado: usar lógica similar a docToDocumentItem
-                            null // TODO: Implementar docToAudioProject si es crítico
+                            try {
+                                val map = doc.data ?: return@mapNotNull null
+                                AudioProject(
+                                    id = (map["localId"] as? Long) ?: 0L,
+                                    firestoreId = doc.id,
+                                    title = (map["title"] as? String) ?: "Sin título",
+                                    description = (map["description"] as? String) ?: "",
+                                    genre = (map["genre"] as? String) ?: "General",
+                                    bpm = (map["bpm"] as? Long)?.toInt() ?: 120,
+                                    patternDataJson = (map["patternDataJson"] as? String) ?: "[]",
+                                    authorEmail = (map["authorEmail"] as? String) ?: "",
+                                    authorName = (map["authorName"] as? String) ?: "Anónimo",
+                                    isPublic = true,
+                                    lastModified = (map["lastModified"] as? Long) ?: System.currentTimeMillis()
+                                )
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
-                        // trySendBlocking(list)
+                        trySendBlocking(list)
                     }
                 }
         } else null
 
         awaitClose {
-            if (audioRef != null && rtdbListener != null) audioRef.removeEventListener(rtdbListener)
             fsReg?.remove()
         }
     }

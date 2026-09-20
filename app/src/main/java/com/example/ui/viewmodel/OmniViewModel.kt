@@ -338,7 +338,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         )
 
-        audioProjects = combine(repo.allAudioProjects, firestoreChatService.listenToPublicAudioProjects()) { local, cloud ->
+        audioProjects = combine(repo.allAudioProjects, firestoreChatService.listenToUserAudioProjects()) { local, cloud ->
             val merged = local.toMutableList()
             cloud.forEach { c ->
                 if (local.none { l -> l.firestoreId == c.firestoreId }) {
@@ -843,10 +843,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                 
                 if (fsId != null && fsId.isNotBlank()) {
-                    _currentEditingDoc.value = _currentEditingDoc.value?.copy(
+                    val updatedDoc = doc.copy(
                         firestoreId = fsId,
                         lastSyncedFirestore = System.currentTimeMillis()
                     )
+                    _currentEditingDoc.value = updatedDoc
+                    repo.updateDocument(updatedDoc) // Guardar el ID de Firestore localmente
                     _docAutoSaveStatus.value = "Sincronizado con Firebase ($timeStr)"
                 } else {
                     if (fsId == null) {
@@ -1153,7 +1155,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
             val fsId = firestoreChatService.syncAudioProject(projectToSave.copy(id = savedId))
             val updated = repo.getAudioProjectById(savedId)?.let {
-                if (!fsId.isNullOrBlank()) it.copy(firestoreId = fsId, lastSyncedFirestore = System.currentTimeMillis()) else it
+                if (!fsId.isNullOrBlank()) {
+                    val syncedProject = it.copy(firestoreId = fsId, lastSyncedFirestore = System.currentTimeMillis())
+                    repo.updateAudioProject(syncedProject) // Persistir ID de la nube localmente
+                    syncedProject
+                } else it
             }
             _activeAudioProject.value = updated
 
