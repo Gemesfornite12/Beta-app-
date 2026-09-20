@@ -35,15 +35,13 @@ fun AiAssistantScreen(
     val chatHistory by viewModel.aiChatHistory.collectAsState()
     val isLoading by viewModel.isAiLoading.collectAsState()
     val selectedModel by viewModel.selectedGeminiModel.collectAsState()
+    val availableModels by viewModel.availableGeminiModels.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var showModelMenu by remember { mutableStateOf(false) }
 
-    val models = listOf(
-        "gemini-1.5-flash" to "Gemini 1.5 Flash (Rápido)",
-        "gemini-1.5-pro" to "Gemini 1.5 Pro (Inteligente)",
-        "gemini-2.0-flash-exp" to "Gemini 2.0 Flash (Exp)",
-        "gemini-flash-latest" to "Flash Latest"
-    )
+    LaunchedEffect(Unit) {
+        viewModel.fetchAvailableModels()
+    }
 
     Scaffold(
         topBar = {
@@ -56,7 +54,9 @@ fun AiAssistantScreen(
                             Text("Asistente AI", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         }
                         Text(
-                            text = models.find { it.first == selectedModel }?.second ?: selectedModel,
+                            text = availableModels.find { it.name == selectedModel }?.displayName 
+                                ?: availableModels.find { it.name == selectedModel }?.name 
+                                ?: selectedModel.removePrefix("models/"),
                             fontSize = 11.sp,
                             color = Color(0xFF818CF8).copy(alpha = 0.8f)
                         )
@@ -77,15 +77,29 @@ fun AiAssistantScreen(
                             onDismissRequest = { showModelMenu = false },
                             modifier = Modifier.background(Color(0xFF1E293B))
                         ) {
-                            models.forEach { (id, label) ->
+                            if (availableModels.isEmpty()) {
                                 DropdownMenuItem(
-                                    text = { Text(label, color = Color.White) },
+                                    text = { Text("Cargando modelos...", color = Color.Gray) },
+                                    onClick = { },
+                                    enabled = false
+                                )
+                            }
+                            availableModels.forEach { modelInfo ->
+                                DropdownMenuItem(
+                                    text = { 
+                                        Column {
+                                            Text(modelInfo.displayName ?: modelInfo.name, color = Color.White)
+                                            if (!modelInfo.version.isNullOrBlank()) {
+                                                Text(modelInfo.version, color = Color.Gray, fontSize = 10.sp)
+                                            }
+                                        }
+                                    },
                                     onClick = {
-                                        viewModel.updateSelectedModel(id)
+                                        viewModel.updateSelectedModel(modelInfo.name)
                                         showModelMenu = false
                                     },
                                     leadingIcon = {
-                                        if (selectedModel == id) {
+                                        if (selectedModel == modelInfo.name) {
                                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
                                         }
                                     }

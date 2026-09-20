@@ -322,8 +322,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     contents = listOf(com.example.data.api.Content(parts = listOf(com.example.data.api.Part(text = text))))
                 )
                 
+                val currentModel = _selectedGeminiModel.value
+                val modelPath = if (currentModel.startsWith("models/")) currentModel else "models/$currentModel"
+                
                 val response = com.example.data.api.GeminiRetrofitClient.service.generateContent(
-                    _selectedGeminiModel.value,
+                    modelPath,
                     apiKey,
                     request
                 )
@@ -367,11 +370,32 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _aiChatHistory.value = emptyList()
     }
 
-    private val _selectedGeminiModel = MutableStateFlow("gemini-1.5-flash")
+    private val _selectedGeminiModel = MutableStateFlow("models/gemini-1.5-flash")
     val selectedGeminiModel: StateFlow<String> = _selectedGeminiModel.asStateFlow()
+
+    private val _availableGeminiModels = MutableStateFlow<List<com.example.data.api.GeminiModelInfo>>(emptyList())
+    val availableGeminiModels: StateFlow<List<com.example.data.api.GeminiModelInfo>> = _availableGeminiModels.asStateFlow()
 
     fun updateSelectedModel(model: String) {
         _selectedGeminiModel.value = model
+    }
+
+    fun fetchAvailableModels() {
+        viewModelScope.launch {
+            try {
+                val apiKey = BuildConfig.GEMINI_API_KEY
+                if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") return@launch
+                
+                val response = com.example.data.api.GeminiRetrofitClient.service.listModels(apiKey)
+                // Filter models that support content generation
+                val filtered = response.models.filter { 
+                    it.supportedGenerationMethods?.contains("generateContent") == true 
+                }
+                _availableGeminiModels.value = filtered
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "Error fetching models: ${e.message}")
+            }
+        }
     }
 
     fun unarchiveChannel(channelId: String) {

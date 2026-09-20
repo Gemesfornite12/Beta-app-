@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -58,13 +59,32 @@ data class GeminiError(
     val status: String
 )
 
+@Serializable
+data class ListModelsResponse(
+    val models: List<GeminiModelInfo>
+)
+
+@Serializable
+data class GeminiModelInfo(
+    val name: String,
+    val version: String? = null,
+    val displayName: String? = null,
+    val description: String? = null,
+    val supportedGenerationMethods: List<String>? = null
+)
+
 interface GeminiApiService {
-    @POST("v1beta/models/{model}:generateContent")
+    @POST("v1beta/{model}:generateContent")
     suspend fun generateContent(
-        @Path("model") model: String,
+        @Path(value = "model", encoded = true) model: String,
         @Query("key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
+
+    @GET("v1beta/models")
+    suspend fun listModels(
+        @Query("key") apiKey: String
+    ): ListModelsResponse
 }
 
 object GeminiRetrofitClient {
