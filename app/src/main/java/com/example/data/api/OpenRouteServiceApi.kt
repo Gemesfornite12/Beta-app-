@@ -94,6 +94,14 @@ interface OpenRouteServiceApi {
         @Query("size") size: Int = 5
     ): OrsGeocodeResponse
 
+    @GET("geocode/reverse")
+    suspend fun reverseGeocode(
+        @Query("api_key") apiKey: String,
+        @Query("point.lon") longitude: Double,
+        @Query("point.lat") latitude: Double,
+        @Query("size") size: Int = 1
+    ): OrsGeocodeResponse
+
     @GET("v2/directions/{profile}")
     suspend fun route(
         @Path("profile") profile: String,
