@@ -60,7 +60,7 @@ data class GeminiError(
 )
 
 @Serializable
-data class ListModelsResponse(
+data class ModelsResponse(
     val models: List<GeminiModelInfo>
 )
 
@@ -84,7 +84,7 @@ interface GeminiApiService {
     @GET("v1beta/models")
     suspend fun listModels(
         @Query("key") apiKey: String
-    ): ListModelsResponse
+    ): ModelsResponse
 }
 
 object GeminiRetrofitClient {
