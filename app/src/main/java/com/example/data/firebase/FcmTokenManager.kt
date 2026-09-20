@@ -64,6 +64,13 @@ object FcmTokenManager {
                     .addOnCompleteListener { task ->
                         if (!task.isSuccessful) {
                             Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.message}")
+                            
+                            // Si es un error de registro (hard failure), desactivar auto-init para evitar spam de reintentos
+                            try {
+                                FirebaseMessaging.getInstance().isAutoInitEnabled = false
+                                Log.d(TAG, "FCM Auto-init disabled due to registration failure")
+                            } catch (_: Exception) {}
+
                             // Si falla en emulador sin Play Services, generar un token local válido para testing
                             val fallbackToken = "fcm_token_${System.currentTimeMillis()}_${context.packageName.takeLast(6)}"
                             _currentToken.value = fallbackToken
@@ -77,6 +84,12 @@ object FcmTokenManager {
                         // Obtener nuevo token FCM
                         val token = task.result
                         Log.d(TAG, "FCM Registration Token received: ${token.take(20)}...")
+                        
+                        // Habilitar auto-init ahora que sabemos que el registro funciona
+                        try {
+                            FirebaseMessaging.getInstance().isAutoInitEnabled = true
+                        } catch (_: Exception) {}
+
                         _currentToken.value = token
                         ChatNotificationManager.saveFcmToken(context, token)
 
@@ -84,12 +97,16 @@ object FcmTokenManager {
                             syncTokenToFirestore(context, userEmail, token)
                         }
                         _isPushSubscribed.value = true
-                    }
 
-                // Suscribirse al tema general de avisos
-                FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
-                    .addOnCompleteListener {
-                        Log.d(TAG, "Subscribed to all_users_omnistudio topic")
+                        // Suscribirse al tema general de avisos solo si tenemos token real
+                        FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
+                            .addOnCompleteListener { subscribeTask ->
+                                if (subscribeTask.isSuccessful) {
+                                    Log.d(TAG, "Subscribed to all_users_omnistudio topic")
+                                } else {
+                                    Log.w(TAG, "Failed to subscribe to topic: ${subscribeTask.exception?.message}")
+                                }
+                            }
                     }
 
             } catch (e: Throwable) {
