@@ -39,6 +39,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import android.content.Context
+import android.widget.Toast
+import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
 import org.json.JSONArray
 import org.json.JSONObject
@@ -156,6 +159,74 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // Global Theme State
     private val _isDarkTheme = MutableStateFlow(true)
     val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
+
+    fun downloadDocument(
+        context: Context,
+        document: DocumentItem
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val safeName = document.title
+                .replace(Regex("[^A-Za-z0-9áéíóúÁÉÍÓÚñÑ _-]"), "")
+                .trim()
+                .ifBlank { "documento" }
+
+            val isSlide = document.docType == DocumentType.SLIDE
+
+            val fileName = if (isSlide) {
+                "$safeName.slides.json"
+            } else {
+                "$safeName.txt"
+            }
+
+            val content = if (isSlide) {
+                document.slidesJson
+            } else {
+                document.content
+            }
+
+            val uri = DeviceDownloadManager.saveText(
+                context = context,
+                fileName = fileName,
+                content = content,
+                mimeType = "text/plain"
+            )
+
+            viewModelScope.launch(Dispatchers.Main) {
+                if (uri != null) {
+                    Toast.makeText(context, "Archivo guardado en Descargas: $fileName", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Error al guardar el archivo", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun downloadAudioProject(
+        context: Context,
+        project: AudioProject
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val safeName = project.title
+                .replace(Regex("[^A-Za-z0-9áéíóúÁÉÍÓÚñÑ _-]"), "")
+                .trim()
+                .ifBlank { "proyecto-musical" }
+
+            val uri = DeviceDownloadManager.saveText(
+                context = context,
+                fileName = "$safeName.audio.json",
+                content = project.patternDataJson,
+                mimeType = "application/json"
+            )
+
+            viewModelScope.launch(Dispatchers.Main) {
+                if (uri != null) {
+                    Toast.makeText(context, "Proyecto guardado en Descargas: $safeName.audio.json", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Error al guardar el proyecto musical", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     fun toggleTheme() {
         _isDarkTheme.value = !_isDarkTheme.value

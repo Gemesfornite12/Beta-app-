@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lock
@@ -71,6 +72,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.os.Build
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,6 +111,28 @@ fun HomeScreen(
 
     var showCreateSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
+    val context = LocalContext.current
+
+    // Permission launcher for storage (legacy devices)
+    var pendingDownloadAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            pendingDownloadAction?.invoke()
+        }
+        pendingDownloadAction = null
+    }
+
+    fun handleDownload(action: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            action()
+        } else {
+            // Need WRITE_EXTERNAL_STORAGE for legacy
+            pendingDownloadAction = action
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
 
     val filteredDocs = remember(documents, searchQuery, activeFilter) {
         documents.filter { doc ->
@@ -407,6 +435,9 @@ fun HomeScreen(
                         viewModel.openAudioProject(audio)
                         onOpenMusicStudio()
                     },
+                    onDownload = {
+                        handleDownload { viewModel.downloadAudioProject(context, audio) }
+                    },
                     onShareToChat = {
                         viewModel.sendChatMessage(attachedAudio = audio)
                         onOpenChat()
@@ -425,6 +456,9 @@ fun HomeScreen(
                     onClick = {
                         viewModel.openDocument(doc)
                         onOpenDocEditor()
+                    },
+                    onDownload = {
+                        handleDownload { viewModel.downloadDocument(context, doc) }
                     },
                     onConvertFormat = {
                         viewModel.openFormatConverter(doc)
@@ -565,6 +599,7 @@ private fun QuickToolItem(
 private fun DocumentItemCard(
     doc: DocumentItem,
     onClick: () -> Unit,
+    onDownload: () -> Unit,
     onConvertFormat: () -> Unit,
     onShareToChat: () -> Unit,
     onDelete: () -> Unit
@@ -636,6 +671,10 @@ private fun DocumentItemCard(
                 Icon(Icons.Default.AutoAwesome, contentDescription = "Cambiar formato", tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp))
             }
 
+            IconButton(onClick = onDownload) {
+                Icon(Icons.Default.Download, contentDescription = "Descargar", tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
+            }
+
             Box {
                 IconButton(onClick = { showMenu = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = "Más opciones", tint = Color(0xFF94A3B8))
@@ -660,6 +699,14 @@ private fun DocumentItemCard(
                         onClick = {
                             showMenu = false
                             onConvertFormat()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Descargar", color = Color(0xFF38BDF8)) },
+                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = Color(0xFF38BDF8)) },
+                        onClick = {
+                            showMenu = false
+                            onDownload()
                         }
                     )
                     DropdownMenuItem(
@@ -689,6 +736,7 @@ private fun AudioProjectCard(
     project: AudioProject,
     isOwner: Boolean,
     onClick: () -> Unit,
+    onDownload: () -> Unit,
     onShareToChat: () -> Unit,
     onTogglePublic: () -> Unit,
     onDelete: () -> Unit
@@ -781,6 +829,10 @@ private fun AudioProjectCard(
                 Icon(Icons.Default.Send, contentDescription = "Compartir en chat", tint = Color(0xFFC084FC), modifier = Modifier.size(18.dp))
             }
 
+            IconButton(onClick = onDownload) {
+                Icon(Icons.Default.Download, contentDescription = "Descargar", tint = Color(0xFF34D399), modifier = Modifier.size(20.dp))
+            }
+
             Box {
                 IconButton(onClick = { showMenu = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = "Más", tint = Color(0xFF94A3B8))
@@ -797,6 +849,14 @@ private fun AudioProjectCard(
                         onClick = {
                             showMenu = false
                             onClick()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Descargar", color = Color(0xFF34D399)) },
+                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = Color(0xFF34D399)) },
+                        onClick = {
+                            showMenu = false
+                            onDownload()
                         }
                     )
                     DropdownMenuItem(
