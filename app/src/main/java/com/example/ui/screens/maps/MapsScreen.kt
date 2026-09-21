@@ -56,6 +56,8 @@ import androidx.compose.material.icons.filled.TurnSharpLeft
 import androidx.compose.material.icons.filled.TurnSharpRight
 import androidx.compose.material.icons.filled.TurnSlightLeft
 import androidx.compose.material.icons.filled.TurnSlightRight
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -82,7 +84,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -145,9 +146,6 @@ private val profiles = listOf(
 )
 
 private const val STYLE = "https://tiles.openfreemap.org/styles/liberty"
-private const val AUTO_STEP_DISTANCE_METERS = 30f
-private const val ROUTE_MATCH_DISTANCE_METERS = 45f
-private const val MANUAL_OVERRIDE_WINDOW_MS = 5_000L
 
 private fun getManeuverIcon(instruction: String): ImageVector {
     val l = instruction.lowercase()
@@ -348,8 +346,7 @@ fun MapsScreen(onBack: () -> Unit) {
     var distanceToNextManeuver by remember { mutableFloatStateOf(0f) }
     var isRecalculating by remember { mutableStateOf(false) }
     var offRouteCount by remember { mutableIntStateOf(0) }
-    // A manual tap takes precedence briefly, so GPS cannot immediately undo it.
-    var manualOverrideUntil by remember { mutableLongStateOf(0L) }
+    var voiceEnabled by remember { mutableStateOf(true) }
 
     val tts = remember {
         var instance: TextToSpeech? = null
@@ -438,7 +435,8 @@ fun MapsScreen(onBack: () -> Unit) {
         } catch (_: Exception) {}
     }
 
-    fun speakInstruction(text: String) {
+    fun speakInstruction(text: String, force: Boolean = false) {
+        if (!voiceEnabled && !force) return
         if (text.isNotBlank()) {
             val translated = translateInstructionToSpanish(text)
             try {
@@ -457,9 +455,9 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
-    fun speakCurrentInstruction() {
+    fun speakCurrentInstruction(force: Boolean = false) {
         routeSteps.getOrNull(step)?.let {
-            speakInstruction(it.instruction)
+            speakInstruction(it.instruction, force)
         }
     }
 
@@ -497,7 +495,6 @@ fun MapsScreen(onBack: () -> Unit) {
                         points = newPts
                         step = 0
                         offRouteCount = 0
-                        manualOverrideUntil = 0L
                         redraw()
                         speakCurrentInstruction()
                     }
@@ -510,29 +507,29 @@ fun MapsScreen(onBack: () -> Unit) {
     }
 
     /**
-     * Advances the active ORS instruction from the live GPS position.
-     *
-     * ORS returns one route geometry plus each step's way_points (indexes into
-     * that geometry), rather than a separate geometry for every step.  The
-     * route geometry and the step end waypoint therefore provide a stable
-     * maneuver target even when GPS updates are sparse.
+     * Comprueba la posición del usuario respecto a la ruta y avanza de paso AUTOMÁTICAMENTE:
+     * - Calcula distancia a la maniobra del paso actual.
+     * - Si está a menos de 30m de la maniobra o si superó el índice del waypoint, avanza al paso siguiente.
+     * - Si el usuario se desvía más de 45 metros de la ruta trazada, recalcula automáticamente la ruta.
      */
     fun checkAutoStepProgression(newPos: LatLng) {
         if (!navigating || routeSteps.isEmpty() || points.isEmpty() || isRecalculating) return
 
-        var minDistanceToRoute = Float.MAX_VALUE
-        var closestRoutePoint = 0
-        points.forEachIndexed { index, point ->
-            val distance = distanceMeters(newPos, point)
-            if (distance < minDistanceToRoute) {
-                minDistanceToRoute = distance
-                closestRoutePoint = index
+        // 1. Detección de desviación de ruta (Off-route): distancia al punto más cercano de la ruta
+        var minDistanceToPolyline = Float.MAX_VALUE
+        var closestIdx = 0
+        points.forEachIndexed { idx, pt ->
+            val d = distanceMeters(newPos, pt)
+            if (d < minDistanceToPolyline) {
+                minDistanceToPolyline = d
+                closestIdx = idx
             }
         }
 
-        // Keep the GPS off-route check independent from the manual controls.
-        if (minDistanceToRoute > ROUTE_MATCH_DISTANCE_METERS) {
+        // Si el usuario se aleja más de 45 metros de la ruta trazada
+        if (minDistanceToPolyline > 45f) {
             offRouteCount++
+            // Si confirma 2 lecturas consecutivas fuera de ruta, recalcular
             if (offRouteCount >= 2) {
                 recalculateRoute(newPos)
                 return
@@ -541,42 +538,33 @@ fun MapsScreen(onBack: () -> Unit) {
             offRouteCount = 0
         }
 
-        val currentStep = routeSteps.getOrNull(step) ?: return
-        val endWaypoint = currentStep.way_points
-            .getOrNull(1)
-            ?.takeIf { it in points.indices }
-        val maneuverPoint = endWaypoint?.let { points[it] }
+        // 2. Cálculo de distancia a la maniobra actual
+        val currentStepObj = routeSteps.getOrNull(step) ?: return
+        val endWpIdx = currentStepObj.way_points.getOrNull(1)
 
-        // Always expose the live distance when the ORS waypoint is available.
-        distanceToNextManeuver = maneuverPoint?.let { distanceMeters(newPos, it) } ?: 0f
+        if (endWpIdx != null && endWpIdx in points.indices) {
+            val maneuverPoint = points[endWpIdx]
+            val dist = distanceMeters(newPos, maneuverPoint)
+            distanceToNextManeuver = dist
 
-        // A tap on Anterior/Siguiente is a manual override.  It remains visible
-        // for a short window before the next GPS fix is allowed to advance again.
-        if (System.currentTimeMillis() < manualOverrideUntil) return
-
-        if (maneuverPoint != null &&
-            distanceToNextManeuver <= AUTO_STEP_DISTANCE_METERS &&
-            step < routeSteps.lastIndex
-        ) {
-            step++
-            return
+            // Si está dentro de 30 metros de la intersección o giro, pasar automáticamente al siguiente paso
+            if (dist <= 30f && step < routeSteps.lastIndex) {
+                step++
+                return
+            }
         }
 
-        // If a GPS update skips over a maneuver, use the current route geometry
-        // index to catch up to the step containing that position.  Requiring the
-        // current step's end waypoint prevents advancing on the route start.
-        if (endWaypoint != null &&
-            closestRoutePoint >= endWaypoint &&
-            step < routeSteps.lastIndex
-        ) {
-            val nextStep = routeSteps.indices
-                .filter { it > step }
-                .firstOrNull { candidate ->
-                    val start = routeSteps[candidate].way_points.getOrNull(0) ?: return@firstOrNull false
-                    val end = routeSteps[candidate].way_points.getOrNull(1) ?: return@firstOrNull false
-                    closestRoutePoint in start..end
+        // 3. Avance automático si el usuario avanzó a tramos posteriores
+        if (minDistanceToPolyline < 45f) {
+            for (sIdx in (step + 1)..routeSteps.lastIndex) {
+                val st = routeSteps[sIdx]
+                val startWp = st.way_points.getOrNull(0) ?: 0
+                val endWp = st.way_points.getOrNull(1) ?: (points.size - 1)
+                if (closestIdx in startWp..endWp) {
+                    step = sIdx
+                    break
                 }
-            if (nextStep != null) step = nextStep
+            }
         }
     }
 
@@ -665,10 +653,6 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
-    fun markManualStepOverride() {
-        manualOverrideUntil = System.currentTimeMillis() + MANUAL_OVERRIDE_WINDOW_MS
-    }
-
     fun route() {
         if (destination.isBlank() || loading) return
         scope.launch {
@@ -680,7 +664,6 @@ fun MapsScreen(onBack: () -> Unit) {
             navigating = false
             step = 0
             offRouteCount = 0
-            manualOverrideUntil = 0L
             try {
                 if (!ors) error("Configura OPENROUTESERVICE_API_KEY en Secrets.")
                 val result = withContext(Dispatchers.IO) {
@@ -884,8 +867,7 @@ fun MapsScreen(onBack: () -> Unit) {
                                 // Indicador GPS en vivo
                                 Surface(
                                     color = if (isRecalculating) Color(0xFFEAB308).copy(alpha = 0.25f) else Color(0xFF10B981).copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier.padding(end = 8.dp)
+                                    shape = RoundedCornerShape(16.dp)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -908,19 +890,74 @@ fun MapsScreen(onBack: () -> Unit) {
                                         )
                                     }
                                 }
+                            }
+                        }
 
-                                // Botón de repetir audio TTS
-                                IconButton(
-                                    onClick = ::speakCurrentInstruction,
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                        // Dos botones arriba: Voz activa vs Voz silenciada
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp, bottom = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Botón 1: 🔊 Voz activa
+                            Surface(
+                                onClick = {
+                                    voiceEnabled = true
+                                    speakCurrentInstruction(force = true)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (voiceEnabled) Color(0xFF10B981) else Color.White.copy(alpha = 0.12f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
                                 ) {
                                     Icon(
-                                        Icons.Default.VolumeUp,
-                                        contentDescription = "Repetir indicación por voz",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
+                                        Icons.AutoMirrored.Filled.VolumeUp,
+                                        contentDescription = "Voz activa",
+                                        tint = if (voiceEnabled) Color.White else Color.White.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "Voz activa",
+                                        color = if (voiceEnabled) Color.White else Color.White.copy(alpha = 0.75f),
+                                        fontSize = 12.sp,
+                                        fontWeight = if (voiceEnabled) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
+                            }
+
+                            // Botón 2: 🔇 Voz silenciada
+                            Surface(
+                                onClick = {
+                                    voiceEnabled = false
+                                    tts?.stop()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (!voiceEnabled) Color(0xFFEF4444) else Color.White.copy(alpha = 0.12f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.VolumeOff,
+                                        contentDescription = "Voz silenciada",
+                                        tint = if (!voiceEnabled) Color.White else Color.White.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "Voz silenciada",
+                                        color = if (!voiceEnabled) Color.White else Color.White.copy(alpha = 0.75f),
+                                        fontSize = 12.sp,
+                                        fontWeight = if (!voiceEnabled) FontWeight.Bold else FontWeight.Medium
                                     )
                                 }
                             }
@@ -955,10 +992,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    if (step > 0) {
-                                        step--
-                                        markManualStepOverride()
-                                    }
+                                    if (step > 0) step--
                                 },
                                 enabled = step > 0,
                                 colors = ButtonDefaults.outlinedButtonColors(
@@ -976,13 +1010,10 @@ fun MapsScreen(onBack: () -> Unit) {
                                 onClick = {
                                     if (step < routeSteps.lastIndex) {
                                         step++
-                                        markManualStepOverride()
                                     } else {
-                                        // Keep Siguiente available on the final
-                                        // instruction; Finalizar remains the
-                                        // explicit action for ending navigation.
-                                        speakCurrentInstruction()
-                                        markManualStepOverride()
+                                        navigating = false
+                                        step = 0
+                                        redraw()
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(
@@ -992,13 +1023,13 @@ fun MapsScreen(onBack: () -> Unit) {
                                 modifier = Modifier.weight(1.3f)
                             ) {
                                 Text(
-                                    "Siguiente",
+                                    if (step < routeSteps.lastIndex) "Siguiente" else "¡Llegaste!",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Icon(
-                                    Icons.Default.ArrowForward,
+                                    if (step < routeSteps.lastIndex) Icons.Default.ArrowForward else Icons.Default.CheckCircle,
                                     null,
                                     Modifier.size(16.dp)
                                 )
@@ -1279,4 +1310,3 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 }
-
