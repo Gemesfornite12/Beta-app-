@@ -19,17 +19,34 @@ import java.util.concurrent.TimeUnit
 data class GenerateContentRequest(
     val contents: List<Content>,
     val generationConfig: GenerationConfig? = null,
+    val tools: List<ToolConfig>? = null,
     val systemInstruction: Content? = null
 )
 
 @Serializable
+data class ToolConfig(
+    val googleSearch: GoogleSearchConfig? = null
+)
+
+@Serializable
+class GoogleSearchConfig
+
+@Serializable
 data class Content(
-    val parts: List<Part>
+    val parts: List<Part>,
+    val role: String? = null
 )
 
 @Serializable
 data class Part(
-    val text: String? = null
+    val text: String? = null,
+    val inlineData: InlineData? = null
+)
+
+@Serializable
+data class InlineData(
+    val mimeType: String,
+    val data: String
 )
 
 @Serializable
@@ -38,7 +55,31 @@ data class GenerationConfig(
     val topP: Float? = null,
     val topK: Int? = null,
     val maxOutputTokens: Int? = null,
-    val responseMimeType: String? = null
+    val responseMimeType: String? = null,
+    val responseModalities: List<String>? = null,
+    val imageConfig: ImageConfig? = null,
+    val speechConfig: SpeechConfig? = null
+)
+
+@Serializable
+data class ImageConfig(
+    val aspectRatio: String? = "1:1",
+    val imageSize: String? = "1K"
+)
+
+@Serializable
+data class SpeechConfig(
+    val voiceConfig: VoiceConfig? = null
+)
+
+@Serializable
+data class VoiceConfig(
+    val prebuiltVoiceConfig: PrebuiltVoiceConfig? = null
+)
+
+@Serializable
+data class PrebuiltVoiceConfig(
+    val voiceName: String = "Kore"
 )
 
 @Serializable
@@ -49,7 +90,32 @@ data class GenerateContentResponse(
 
 @Serializable
 data class Candidate(
-    val content: Content
+    val content: Content? = null,
+    val groundingMetadata: GroundingMetadata? = null,
+    val finishReason: String? = null
+)
+
+@Serializable
+data class GroundingMetadata(
+    val webSearchQueries: List<String>? = null,
+    val searchEntryPoint: SearchEntryPoint? = null,
+    val groundingChunks: List<GroundingChunk>? = null
+)
+
+@Serializable
+data class SearchEntryPoint(
+    val renderedContent: String? = null
+)
+
+@Serializable
+data class GroundingChunk(
+    val web: WebSource? = null
+)
+
+@Serializable
+data class WebSource(
+    val uri: String? = null,
+    val title: String? = null
 )
 
 @Serializable
@@ -73,6 +139,21 @@ data class GeminiModelInfo(
     val supportedGenerationMethods: List<String>? = null
 )
 
+// Veo Video Generation Models
+@Serializable
+data class GenerateVideosRequest(
+    val prompt: String,
+    val image: InlineData? = null,
+    val config: VeoConfig? = null
+)
+
+@Serializable
+data class VeoConfig(
+    val numberOfVideos: Int? = 1,
+    val resolution: String? = "1080p",
+    val aspectRatio: String = "16:9"
+)
+
 interface GeminiApiService {
     @POST("v1beta/{model}:generateContent")
     suspend fun generateContent(
@@ -80,6 +161,19 @@ interface GeminiApiService {
         @Query("key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
+
+    @POST("v1beta/{model}:generateVideos")
+    suspend fun generateVideos(
+        @Path(value = "model", encoded = true) model: String,
+        @Query("key") apiKey: String,
+        @Body request: GenerateVideosRequest
+    ): JsonObject
+
+    @GET("v1beta/{operation}")
+    suspend fun getOperation(
+        @Path(value = "operation", encoded = true) operation: String,
+        @Query("key") apiKey: String
+    ): JsonObject
 
     @GET("v1beta/models")
     suspend fun listModels(
@@ -91,14 +185,15 @@ object GeminiRetrofitClient {
     private const val BASE_URL = "https://generativelanguage.googleapis.com/"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { 
         ignoreUnknownKeys = true 
         explicitNulls = false
+        encodeDefaults = false
     }
 
     val service: GeminiApiService by lazy {

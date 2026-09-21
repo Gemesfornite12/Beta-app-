@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -205,8 +207,8 @@ fun MediaPickerSheet(
             }
             .build()
     }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Fotos, 1: Videos, 2: GIFs, 3: Música/Audio, 4: Archivos
-    val tabs = listOf("📷 Fotos", "🎥 Videos", "🎭 GIFs", "🎵 Música/Audio", "📁 Archivos")
+    var selectedTab by remember { mutableStateOf(0) } // 0: Fotos, 1: Videos, 2: GIFs, 3: Música/Audio, 4: YouTube, 5: Archivos
+    val tabs = listOf("📷 Fotos", "🎥 Videos", "🎭 GIFs", "🎵 Música/Audio", "▶️ YouTube", "📁 Archivos")
 
     // Estados de GIPHY & KLIPY Live API
     var activeGifProvider by remember { mutableStateOf("giphy") } // "giphy" or "klipy"
@@ -220,8 +222,46 @@ fun MediaPickerSheet(
     var isKlipyLoading by remember { mutableStateOf(false) }
     var klipyError by remember { mutableStateOf<String?>(null) }
 
+    // Estados de YouTube API & Search
+    var youtubeSearchQuery by remember { mutableStateOf("") }
+    var youtubeActiveCategory by remember { mutableStateOf("🔥 Tendencias") }
+    var youtubeVideos by remember { mutableStateOf<List<com.example.data.youtube.YouTubeVideo>>(com.example.data.youtube.YouTubeClient.CURATED_PRESETS) }
+    var isYouTubeLoading by remember { mutableStateOf(false) }
+    var directYouTubeUrlInput by remember { mutableStateOf("") }
+
     val giphyApiKey = try { com.example.BuildConfig.GIPHY_API_KEY } catch (_: Exception) { "" }
     val klipyApiKey = try { com.example.BuildConfig.KLIPY_API_KEY } catch (_: Exception) { "" }
+    val youtubeApiKey = try {
+        val key = com.example.BuildConfig.GEMINI_API_KEY
+        if (key.isNotBlank()) key else ""
+    } catch (_: Exception) { "" }
+
+    LaunchedEffect(youtubeSearchQuery, youtubeActiveCategory) {
+        isYouTubeLoading = true
+        try {
+            val query = if (youtubeSearchQuery.isNotBlank()) {
+                youtubeSearchQuery
+            } else {
+                when (youtubeActiveCategory) {
+                    "🔥 Tendencias" -> ""
+                    "🎵 Música" -> "musica en vivo official"
+                    "🤖 IA & Tech" -> "google ai gemini tech"
+                    "🎧 Lo-Fi Beats" -> "lofi hip hop radio beats"
+                    "💻 Android & Dev" -> "android jetpack compose kotlin"
+                    "🎙️ Podcasts" -> "podcast tech ai"
+                    "🎬 Trailers" -> "movie trailers official 4k"
+                    else -> youtubeActiveCategory
+                }
+            }
+            val results = com.example.data.youtube.YouTubeClient.search(query, youtubeApiKey)
+            youtubeVideos = results
+        } catch (e: Exception) {
+            android.util.Log.w("MediaPickerSheet", "Error buscando en YouTube: ${e.message}")
+            youtubeVideos = com.example.data.youtube.YouTubeClient.CURATED_PRESETS
+        } finally {
+            isYouTubeLoading = false
+        }
+    }
 
     LaunchedEffect(giphySearchQuery, giphyType, activeGifProvider) {
         if (activeGifProvider == "giphy") {
@@ -983,6 +1023,268 @@ fun MediaPickerSheet(
                         }
 
                         4 -> {
+                            // PESTAÑA: YOUTUBE (Buscador y Enlaces Directos)
+                            Column {
+                                // Header explicativo de YouTube
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFFFF0000).copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, Color(0xFFFF0000).copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFFFF0000),
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PlayArrow,
+                                                    contentDescription = "YouTube",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Integración YouTube API v3",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                            Text(
+                                                text = if (youtubeApiKey.isNotBlank()) "Búsqueda en vivo conectada con Google API" else "Explorador de videos y reproductor interactivo",
+                                                color = Color(0xFFFCA5A5),
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // Campo de búsqueda de YouTube
+                                OutlinedTextField(
+                                    value = youtubeSearchQuery,
+                                    onValueChange = { youtubeSearchQuery = it },
+                                    placeholder = { Text("Buscar videos en YouTube...", color = Color(0xFF94A3B8), fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFFFF0000))
+                                    },
+                                    trailingIcon = {
+                                        if (youtubeSearchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { youtubeSearchQuery = "" }) {
+                                                Icon(Icons.Default.Close, contentDescription = "Limpiar", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color(0xFF0F172A),
+                                        unfocusedContainerColor = Color(0xFF0F172A),
+                                        focusedBorderColor = Color(0xFFFF0000),
+                                        unfocusedBorderColor = Color(0xFF334155),
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("input_youtube_search"),
+                                    singleLine = true
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Categorías rápidas de YouTube
+                                val ytCategories = listOf("🔥 Tendencias", "🎵 Música", "💻 Android & Dev", "🤖 IA & Tech", "🎧 Lo-Fi Beats", "🎙️ Podcasts", "🎬 Trailers")
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(ytCategories) { cat ->
+                                        val isSelected = youtubeActiveCategory == cat && youtubeSearchQuery.isBlank()
+                                        Surface(
+                                            shape = RoundedCornerShape(14.dp),
+                                            color = if (isSelected) Color(0xFFFF0000) else Color(0xFF334155),
+                                            modifier = Modifier.clickable {
+                                                youtubeSearchQuery = ""
+                                                youtubeActiveCategory = cat
+                                            }
+                                        ) {
+                                            Text(
+                                                text = cat,
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Campo rápido para pegar enlace directo
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFF0F172A), RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedTextField(
+                                        value = directYouTubeUrlInput,
+                                        onValueChange = { directYouTubeUrlInput = it },
+                                        placeholder = { Text("O pega enlace https://youtu.be/...", color = Color(0xFF64748B), fontSize = 11.sp) },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            focusedBorderColor = Color.Transparent,
+                                            unfocusedBorderColor = Color.Transparent,
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White
+                                        ),
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true
+                                    )
+                                    if (directYouTubeUrlInput.isNotBlank()) {
+                                        TextButton(
+                                            onClick = {
+                                                val videoId = com.example.data.youtube.YouTubeClient.extractVideoId(directYouTubeUrlInput)
+                                                if (videoId != null) {
+                                                    onSendMedia(
+                                                        "youtube",
+                                                        "https://www.youtube.com/watch?v=$videoId",
+                                                        "▶️ Video de YouTube ($videoId)"
+                                                    )
+                                                    onDismiss()
+                                                }
+                                            },
+                                            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                                                contentColor = Color(0xFFFF0000)
+                                            )
+                                        ) {
+                                            Text("Enviar", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                if (isYouTubeLoading) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(140.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(color = Color(0xFFFF0000), modifier = Modifier.size(28.dp))
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier.height(220.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        items(youtubeVideos) { video ->
+                                            Card(
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        onSendMedia("youtube", video.videoUrl, video.title)
+                                                        onDismiss()
+                                                    }
+                                                    .testTag("youtube_card_${video.videoId}")
+                                            ) {
+                                                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    // Miniatura 16:9 con Badge de Play YouTube
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(110.dp)
+                                                            .height(65.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(Color.Black)
+                                                    ) {
+                                                        AsyncImage(
+                                                            model = video.thumbnailUrl,
+                                                            contentDescription = video.title,
+                                                            contentScale = ContentScale.Crop,
+                                                            modifier = Modifier.fillMaxSize()
+                                                        )
+                                                        Surface(
+                                                            shape = RoundedCornerShape(4.dp),
+                                                            color = Color(0xFFFF0000),
+                                                            modifier = Modifier
+                                                                .align(Alignment.Center)
+                                                                .size(24.dp)
+                                                        ) {
+                                                            Box(contentAlignment = Alignment.Center) {
+                                                                Icon(
+                                                                    Icons.Default.PlayArrow,
+                                                                    contentDescription = null,
+                                                                    tint = Color.White,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Spacer(modifier = Modifier.width(10.dp))
+
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = video.title,
+                                                            color = Color.White,
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Text(
+                                                            text = "📺 ${video.channelTitle}",
+                                                            color = Color(0xFF94A3B8),
+                                                            fontSize = 10.sp,
+                                                            maxLines = 1
+                                                        )
+                                                    }
+
+                                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                                    // Botón de Enviar
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = Color(0xFFFF0000),
+                                                        modifier = Modifier.clickable {
+                                                            onSendMedia("youtube", video.videoUrl, video.title)
+                                                            onDismiss()
+                                                        }
+                                                    ) {
+                                                        Text(
+                                                            text = "Enviar",
+                                                            color = Color.White,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        5 -> {
                             // PESTAÑA: ARCHIVOS (Documentos y Archivos locales)
                             Column {
                                 // Botón para cargar cualquier archivo del dispositivo
@@ -995,7 +1297,7 @@ fun MediaPickerSheet(
                                             filePickerLauncher.launch("*/*")
                                         }
                                         .testTag("btn_pick_device_file")
-                                ) {
+                                 ) {
                                     Row(
                                         modifier = Modifier.padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically

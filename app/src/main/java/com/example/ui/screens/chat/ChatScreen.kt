@@ -1,12 +1,14 @@
 package com.example.ui.screens.chat
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1070,6 +1072,32 @@ fun ChatScreen(
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
+                                    pendingMediaType == "youtube" -> {
+                                        val vId = com.example.data.youtube.YouTubeClient.extractVideoId(pendingMediaUrl ?: "")
+                                        val thumb = if (vId != null) "https://img.youtube.com/vi/$vId/hqdefault.jpg" else pendingMediaUrl
+                                        Box(modifier = Modifier.fillMaxSize()) {
+                                            AsyncImage(
+                                                model = thumb,
+                                                contentDescription = "Vista previa de YouTube",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = Color(0xFFFF0000),
+                                                modifier = Modifier.size(22.dp).align(Alignment.Center)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.PlayArrow,
+                                                        contentDescription = null,
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
                                     pendingMediaType == "video" -> {
                                         Box(modifier = Modifier.fillMaxSize()) {
                                             AsyncImage(
@@ -1113,6 +1141,7 @@ fun ChatScreen(
                                     pendingMediaType == "image" -> "📷 Imagen lista para enviar"
                                     pendingMediaType == "video" -> "🎥 Video listo para enviar"
                                     pendingMediaType == "gif" -> "🎭 GIF listo para enviar"
+                                    pendingMediaType == "youtube" -> "▶️ Video de YouTube listo para enviar"
                                     pendingDocItem != null -> "📁 Documento listo para enviar"
                                     pendingAudioProject != null -> "🎵 Audio del estudio listo para enviar"
                                     else -> "Adjunto listo"
@@ -2191,6 +2220,145 @@ private fun MessageBubble(
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
+                            }
+                        }
+                    }
+
+                    // Renderizado de Videos de YOUTUBE interactivos con YouTube API / Enlaces
+                    if (message.mediaType == "youtube" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val videoId = remember(message.mediaUrl) {
+                            com.example.data.youtube.YouTubeClient.extractVideoId(message.mediaUrl)
+                        }
+                        val ytThumbnail = remember(message.mediaThumbnail, videoId) {
+                            message.mediaThumbnail?.ifBlank { null }
+                                ?: if (videoId != null) "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
+                                else "https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=800&q=80"
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF0F172A),
+                            border = BorderStroke(1.dp, Color(0xFFFF0000).copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(message.mediaUrl))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                }
+                                .testTag("msg_youtube_${message.id}")
+                        ) {
+                            Column {
+                                // Miniatura de YouTube con botón Play
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(155.dp)
+                                        .background(Color.Black)
+                                ) {
+                                    AsyncImage(
+                                        model = ytThumbnail,
+                                        contentDescription = "Miniatura YouTube",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+
+                                    // Badge YouTube Rojo
+                                    Surface(
+                                        shape = RoundedCornerShape(bottomEnd = 8.dp),
+                                        color = Color(0xFFFF0000),
+                                        modifier = Modifier.align(Alignment.TopStart)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.PlayArrow,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "YOUTUBE",
+                                                color = Color.White,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    // Botón Central de Play Rojo de YouTube
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = Color(0xFFFF0000),
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .align(Alignment.Center)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "Reproducir en YouTube",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Barra inferior con acciones: Reproducir y Copiar
+                                Surface(
+                                    color = Color(0xFF1E293B),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (videoId != null) "ID: $videoId" else "YouTube Video",
+                                            color = Color(0xFFFCA5A5),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            TextButton(
+                                                onClick = {
+                                                    try {
+                                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                                        val clip = android.content.ClipData.newPlainText("YouTube Link", message.mediaUrl)
+                                                        clipboard?.setPrimaryClip(clip)
+                                                        android.widget.Toast.makeText(context, "Enlace de YouTube copiado", android.widget.Toast.LENGTH_SHORT).show()
+                                                    } catch (_: Exception) {}
+                                                },
+                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("Copiar link", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                            }
+
+                                            TextButton(
+                                                onClick = {
+                                                    try {
+                                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(message.mediaUrl))
+                                                        context.startActivity(intent)
+                                                    } catch (_: Exception) {}
+                                                },
+                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("Ver ▶", fontSize = 11.sp, color = Color(0xFFFF0000), fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

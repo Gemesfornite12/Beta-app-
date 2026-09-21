@@ -2472,8 +2472,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
                 "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
                 "sticker" -> if (caption.isNotBlank()) caption else "✨ Sticker"
+                "youtube" -> if (caption.isNotBlank()) caption else "▶️ Video de YouTube"
                 "document" -> if (caption.isNotBlank()) caption else "📄 Archivo adjunto"
-                else -> caption
+                else -> if (caption.isNotBlank()) caption else "Multimedia adjunta"
             }
 
             val now = System.currentTimeMillis()
