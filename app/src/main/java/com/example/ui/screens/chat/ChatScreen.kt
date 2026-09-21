@@ -63,6 +63,8 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Unarchive
+import com.example.ui.components.VideoPlayer
+import com.example.ui.components.YouTubeOverlayPlayerDialog
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -208,6 +210,7 @@ fun ChatScreen(
     var showStartDirectChatDialog by remember { mutableStateOf(false) }
     var showGroupManageDialog by remember { mutableStateOf(false) }
     var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
+    var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
@@ -1392,11 +1395,23 @@ fun ChatScreen(
                         },
                         onStartVideoCall = { peerName ->
                             viewModel.startVideoCall(peerName)
+                        },
+                        onOpenYouTubeOverlay = { vId, vTitle ->
+                            activeOverlayVideo = Pair(vId, vTitle)
                         }
                     )
                 }
             }
         }
+    }
+
+    // Modal de Reproductor Overlay de YouTube en pantalla del chat
+    if (activeOverlayVideo != null) {
+        YouTubeOverlayPlayerDialog(
+            videoId = activeOverlayVideo!!.first,
+            title = activeOverlayVideo!!.second,
+            onDismiss = { activeOverlayVideo = null }
+        )
     }
 
     // Modal de Detalle de Estado de Entrega (Enviado, Entregado, Visto en Firestore)
@@ -1804,7 +1819,8 @@ private fun MessageBubble(
     onOpenAttachedAudio: (Long) -> Unit,
     onPreviewMedia: (url: String, type: String) -> Unit,
     onStartVoiceCall: (peerName: String) -> Unit,
-    onStartVideoCall: (peerName: String) -> Unit
+    onStartVideoCall: (peerName: String) -> Unit,
+    onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val gifImageLoader = remember(context) {
@@ -2224,143 +2240,18 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de Videos de YOUTUBE interactivos con YouTube API / Enlaces
+                    // Renderizado de Videos de YOUTUBE interactivos con YouTube API y VideoPlayer
                     if (message.mediaType == "youtube" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        val videoId = remember(message.mediaUrl) {
-                            com.example.data.youtube.YouTubeClient.extractVideoId(message.mediaUrl)
-                        }
-                        val ytThumbnail = remember(message.mediaThumbnail, videoId) {
-                            message.mediaThumbnail?.ifBlank { null }
-                                ?: if (videoId != null) "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
-                                else "https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=800&q=80"
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF0F172A),
-                            border = BorderStroke(1.dp, Color(0xFFFF0000).copy(alpha = 0.5f)),
+                        VideoPlayer(
+                            videoUrl = message.mediaUrl,
+                            title = if (message.text.isNotBlank() && !message.text.startsWith("▶️ Video de YouTube")) message.text else "Video de YouTube",
+                            thumbnailUrl = message.mediaThumbnail,
+                            onLaunchOverlay = onOpenYouTubeOverlay,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    try {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(message.mediaUrl))
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {}
-                                }
                                 .testTag("msg_youtube_${message.id}")
-                        ) {
-                            Column {
-                                // Miniatura de YouTube con botón Play
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(155.dp)
-                                        .background(Color.Black)
-                                ) {
-                                    AsyncImage(
-                                        model = ytThumbnail,
-                                        contentDescription = "Miniatura YouTube",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-
-                                    // Badge YouTube Rojo
-                                    Surface(
-                                        shape = RoundedCornerShape(bottomEnd = 8.dp),
-                                        color = Color(0xFFFF0000),
-                                        modifier = Modifier.align(Alignment.TopStart)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.PlayArrow,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(12.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text(
-                                                text = "YOUTUBE",
-                                                color = Color.White,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-
-                                    // Botón Central de Play Rojo de YouTube
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = Color(0xFFFF0000),
-                                        modifier = Modifier
-                                            .size(46.dp)
-                                            .align(Alignment.Center)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Default.PlayArrow,
-                                                contentDescription = "Reproducir en YouTube",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(28.dp)
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // Barra inferior con acciones: Reproducir y Copiar
-                                Surface(
-                                    color = Color(0xFF1E293B),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = if (videoId != null) "ID: $videoId" else "YouTube Video",
-                                            color = Color(0xFFFCA5A5),
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            TextButton(
-                                                onClick = {
-                                                    try {
-                                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                                        val clip = android.content.ClipData.newPlainText("YouTube Link", message.mediaUrl)
-                                                        clipboard?.setPrimaryClip(clip)
-                                                        android.widget.Toast.makeText(context, "Enlace de YouTube copiado", android.widget.Toast.LENGTH_SHORT).show()
-                                                    } catch (_: Exception) {}
-                                                },
-                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                                            ) {
-                                                Text("Copiar link", fontSize = 11.sp, color = Color(0xFF94A3B8))
-                                            }
-
-                                            TextButton(
-                                                onClick = {
-                                                    try {
-                                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(message.mediaUrl))
-                                                        context.startActivity(intent)
-                                                    } catch (_: Exception) {}
-                                                },
-                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                                            ) {
-                                                Text("Ver ▶", fontSize = 11.sp, color = Color(0xFFFF0000), fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        )
                     }
 
                     // Renderizado de Registro de LLAMADAS (Voz o Video)
