@@ -3,10 +3,10 @@ package com.example.ui.screens.maps
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Button
@@ -60,21 +61,17 @@ import com.example.BuildConfig
 import com.example.data.api.OpenRouteServiceClient
 import com.example.data.api.OrsProfiles
 import com.example.data.api.OrsRouteSummary
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapProperties
-import com.google.maps.android.compose.MapType
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.Polyline
-import com.google.maps.android.compose.rememberCameraPositionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 import kotlin.math.roundToInt
+import java.util.Locale
+import org.maplibre.compose.camera.CameraPosition
+import org.maplibre.compose.camera.CameraUpdate
+import org.maplibre.compose.map.MaplibreMap
+import org.maplibre.compose.map.rememberMapState
+import org.maplibre.compose.style.BaseStyle
+import org.maplibre.spatialk.geojson.Position
 
 private val orsRouteProfiles = listOf(
     OrsProfiles.DRIVING_CAR to "Automóvil",
@@ -91,14 +88,18 @@ private val orsRouteProfiles = listOf(
 fun MapsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val startPoint = LatLng(9.9951797, -84.1403642)
+    val defaultLocation = Position(latitude = 9.9951797, longitude = -84.1403642)
     val locationManager = remember {
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     }
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(startPoint, 12f)
-    }
+    var currentLocation by remember { mutableStateOf(defaultLocation) }
+    var locationLabel by remember { mutableStateOf("Buscando tu ubicación...") }
+    var hasRealLocation by remember { mutableStateOf(false) }
 
+    val mapState = rememberMapState(
+        baseStyle = BaseStyle.Uri("https://tiles.openfreemap.org/styles/liberty"),
+        initialCameraPosition = CameraPosition(target = defaultLocation, zoom = 12.0)
+    )
     var hasLocationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -122,23 +123,16 @@ fun MapsScreen(onBack: () -> Unit) {
     var routeSummary by remember { mutableStateOf<OrsRouteSummary?>(null) }
     var instructions by remember { mutableStateOf<List<String>>(emptyList()) }
     var routeError by remember { mutableStateOf<String?>(null) }
-    var routePoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
-    var destinationPoint by remember { mutableStateOf<LatLng?>(null) }
-    var currentLocation by remember { mutableStateOf(startPoint) }
-    var locationLabel by remember { mutableStateOf("Buscando tu ubicación...") }
-    var hasRealLocation by remember { mutableStateOf(false) }
-
-    val mapsKeyAvailable = BuildConfig.MAPS_API_KEY.isNotBlank() &&
-        BuildConfig.MAPS_API_KEY != "MY_MAPS_API_KEY"
     val orsKeyAvailable = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
         BuildConfig.OPENROUTESERVICE_API_KEY != "MY_OPENROUTESERVICE_API_KEY"
 
     fun updateCurrentLocation(location: Location) {
-        val point = LatLng(location.latitude, location.longitude)
+        val point = Position(latitude = location.latitude, longitude = location.longitude)
         currentLocation = point
         hasRealLocation = true
-        locationLabel = String.format(Locale.getDefault(), "%.5f, %.5f", location.latitude, location.longitude)
-        cameraPositionState.position = CameraPosition.fromLatLngZoom(point, 15f)
+        locationLabel = String.format(
+            Locale.getDefault(), "%.5f, %.5f", location.latitude, location.longitude
+        )
         if (orsKeyAvailable) {
             scope.launch {
                 try {
@@ -151,9 +145,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         )
                     }
                     response.features.firstOrNull()?.properties?.label?.let { locationLabel = it }
-                } catch (_: Exception) {
-                    // Keep the last readable value or coordinates if the service is unavailable.
-                }
+                } catch (_: Exception) { }
             }
         }
     }
@@ -169,7 +161,9 @@ fun MapsScreen(onBack: () -> Unit) {
             }
         }
         val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .filter { provider -> try { locationManager.isProviderEnabled(provider) } catch (_: Exception) { false } }
+            .filter { provider ->
+                try { locationManager.isProviderEnabled(provider) } catch (_: Exception) { false }
+            }
         try {
             providers.forEach { provider ->
                 locationManager.requestLocationUpdates(provider, 3000L, 5f, listener)
@@ -181,6 +175,15 @@ fun MapsScreen(onBack: () -> Unit) {
         onDispose { locationManager.removeUpdates(listener) }
     }
 
+    LaunchedEffect(currentLocation) {
+        mapState.animateCamera(
+            CameraUpdate(
+                target = currentLocation,
+                zoom = 15.0
+            )
+        )
+    }
+
     fun calculateRoute() {
         if (destination.isBlank() || isLoading) return
         scope.launch {
@@ -188,8 +191,6 @@ fun MapsScreen(onBack: () -> Unit) {
             routeError = null
             routeSummary = null
             instructions = emptyList()
-            routePoints = emptyList()
-            destinationPoint = null
             try {
                 if (!orsKeyAvailable) {
                     routeError = "Configura OPENROUTESERVICE_API_KEY en los Secrets de compilación."
@@ -198,17 +199,15 @@ fun MapsScreen(onBack: () -> Unit) {
                 val result = withContext(Dispatchers.IO) {
                     val place = OpenRouteServiceClient.api
                         .geocode(BuildConfig.OPENROUTESERVICE_API_KEY, destination.trim(), 1)
-                        .features
-                        .firstOrNull()
+                        .features.firstOrNull()
                         ?: error("No encontré ese destino.")
                     val coordinates = place.geometry.coordinates
                     if (coordinates.size < 2) error("El destino no tiene coordenadas válidas.")
-                    val end = "${coordinates[0]},${coordinates[1]}"
                     OpenRouteServiceClient.api.route(
                         profile = selectedProfile.first,
                         apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
                         start = "${currentLocation.longitude},${currentLocation.latitude}",
-                        end = end,
+                        end = "${coordinates[0]},${coordinates[1]}",
                         instructions = true
                     )
                 }
@@ -216,19 +215,6 @@ fun MapsScreen(onBack: () -> Unit) {
                 routeSummary = feature.properties.summary
                 instructions = feature.properties.segments.flatMap { segment ->
                     segment.steps.map { step -> step.instruction }
-                }
-                val coords = feature.geometry.coordinates
-                if (coords.isNotEmpty()) {
-                    routePoints = coords.mapNotNull { pt ->
-                        if (pt.size >= 2) LatLng(pt[1], pt[0]) else null
-                    }
-                    val lastPt = coords.last()
-                    if (lastPt.size >= 2) {
-                        destinationPoint = LatLng(lastPt[1], lastPt[0])
-                        cameraPositionState.position = CameraPosition.fromLatLngZoom(
-                            LatLng(lastPt[1], lastPt[0]), 13f
-                        )
-                    }
                 }
             } catch (error: Exception) {
                 routeError = error.message ?: "No se pudo calcular la ruta."
@@ -280,49 +266,11 @@ fun MapsScreen(onBack: () -> Unit) {
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (mapsKeyAvailable) {
-                    GoogleMap(
-                        modifier = Modifier.fillMaxSize(),
-                        cameraPositionState = cameraPositionState,
-                        properties = MapProperties(
-                            mapType = MapType.NORMAL,
-                            isMyLocationEnabled = hasLocationPermission
-                        ),
-                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission)
-                    ) {
-                        Marker(
-                            state = MarkerState(currentLocation),
-                            title = "Tu ubicación actual",
-                            snippet = locationLabel
-                        )
-                        destinationPoint?.let { dest ->
-                            Marker(
-                                state = MarkerState(dest),
-                                title = "Destino",
-                                snippet = destination
-                            )
-                        }
-                        if (routePoints.isNotEmpty()) {
-                            Polyline(
-                                points = routePoints,
-                                color = Color(0xFF10B981),
-                                width = 10f
-                            )
-                        }
-                    }
-                } else {
-                    Column(
-                        Modifier.fillMaxSize().padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.Gray)
-                        Text("El mapa visual requiere configuración de mapas.", color = Color.White)
-                        Text("Las rutas gratuitas usan OpenRouteService.", color = Color.Gray)
-                    }
-                }
+                MaplibreMap(
+                    modifier = Modifier.fillMaxSize(),
+                    state = mapState
+                )
             }
-
             Surface(color = Color(0xFF1E293B), shadowElevation = 8.dp) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     OutlinedTextField(
@@ -336,9 +284,7 @@ fun MapsScreen(onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box {
-                            Button(onClick = { profileMenuOpen = true }) {
-                                Text(selectedProfile.second)
-                            }
+                            Button(onClick = { profileMenuOpen = true }) { Text(selectedProfile.second) }
                             DropdownMenu(
                                 expanded = profileMenuOpen,
                                 onDismissRequest = { profileMenuOpen = false }
@@ -354,7 +300,7 @@ fun MapsScreen(onBack: () -> Unit) {
                                 }
                             }
                         }
-                        Spacer(Modifier.size(8.dp))
+                        Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = ::calculateRoute,
                             enabled = destination.isNotBlank() && !isLoading
@@ -366,31 +312,20 @@ fun MapsScreen(onBack: () -> Unit) {
                             }
                         }
                     }
-                    Text(
-                        "Inicio: $locationLabel",
-                        color = Color.LightGray,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
+                    Text("Inicio: $locationLabel", color = Color.LightGray, fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 6.dp))
                     routeError?.let {
                         Text(it, color = Color(0xFFFCA5A5), modifier = Modifier.padding(top = 6.dp))
                     }
                     routeSummary?.let { summary ->
                         val distance = String.format(Locale.getDefault(), "%.1f km", summary.distance / 1000.0)
                         val duration = "${(summary.duration / 60.0).roundToInt()} min"
-                        Text(
-                            "$distance • $duration • ${selectedProfile.second}",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
+                        Text("$distance • $duration • ${selectedProfile.second}", color = Color.White,
+                            fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
                     }
                     if (instructions.isNotEmpty()) {
-                        LazyColumn(
-                            contentPadding = PaddingValues(top = 6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.height(110.dp)
-                        ) {
+                        LazyColumn(contentPadding = PaddingValues(top = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(110.dp)) {
                             items(instructions) { instruction ->
                                 Text("• $instruction", color = Color.White, style = MaterialTheme.typography.bodySmall)
                             }
