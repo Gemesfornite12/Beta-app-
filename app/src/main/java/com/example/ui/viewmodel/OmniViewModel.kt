@@ -2631,58 +2631,50 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             var finalUrl = mediaUrl
+            val isLocalMediaUri = mediaUrl.startsWith("content://", ignoreCase = true) ||
+                mediaUrl.startsWith("file://", ignoreCase = true)
 
-            // Si es un URI local (content:// o file://), aseguramos una copia interna persistente
-            if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
-                val inputUri = android.net.Uri.parse(mediaUrl)
-                var localFileUri: android.net.Uri = inputUri
-
+            // A local URI is only usable on the device that selected it. Upload it first and
+            // do not create a chat message until Firebase returns a valid public download URL.
+            if (isLocalMediaUri) {
                 try {
-                    if (mediaUrl.startsWith("content://")) {
-                        val mediaDir = java.io.File(context.filesDir, "media_cache").apply { mkdirs() }
-                        val ext = when (mediaType) {
-                            "image" -> "jpg"
-                            "video" -> "mp4"
-                            "audio" -> "mp3"
-                            else -> "bin"
-                        }
-                        val destFile = java.io.File(mediaDir, "media_${System.currentTimeMillis()}.$ext")
-                        context.contentResolver.openInputStream(inputUri)?.use { input ->
-                            destFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        if (destFile.exists() && destFile.length() > 0) {
-                            localFileUri = android.net.Uri.fromFile(destFile)
-                            finalUrl = localFileUri.toString()
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w("OmniViewModel", "No se pudo copiar archivo localmente: ${e.message}")
-                }
-
-                // Intentamos subir a Firebase Storage
-                try {
-                    val currentUser = FirebaseAuth.getInstance().currentUser
-                    val ownerUid = currentUser?.uid ?: user?.email ?: "local_user"
-                    val mimeType = context.contentResolver.getType(localFileUri) 
+                    val inputUri = android.net.Uri.parse(mediaUrl)
+                    val ownerUid = FirebaseAuth.getInstance().currentUser?.uid
+                        ?: throw IllegalStateException("No hay una sesión de Firebase activa")
+                    val mimeType = context.contentResolver.getType(inputUri)
                         ?: when (mediaType) {
                             "image" -> "image/jpeg"
                             "video" -> "video/mp4"
                             "audio" -> "audio/mpeg"
+                            "gif" -> "image/gif"
+                            "sticker" -> "image/webp"
                             else -> "application/octet-stream"
                         }
 
                     val uploaded = mediaStorageService.uploadMedia(
                         ownerUid = ownerUid,
-                        localUri = localFileUri,
+                        localUri = inputUri,
                         mediaType = mediaType,
                         mimeType = mimeType
                     )
-                    finalUrl = uploaded.downloadUrl
+                    val downloadUrl = uploaded.downloadUrl.trim()
+                    require(
+                        downloadUrl.isNotEmpty() &&
+                            downloadUrl.startsWith("https://") &&
+                            downloadUrl.contains("firebasestorage.googleapis.com")
+                    ) {
+                        "Firebase Storage no devolvió una URL de descarga válida"
+                    }
+                    finalUrl = downloadUrl
                 } catch (e: Exception) {
-                    Log.w("OmniViewModel", "Aviso: No se pudo subir a Firebase Storage (${e.message}). Se usará copia local.", e)
-                    // No hacemos return@launch, así la foto/video se envía de todos modos localmente
+                    val errorMessage = e.message ?: "error desconocido al subir el archivo"
+                    Log.e("OmniViewModel", "No se pudo subir el archivo multimedia a Firebase Storage: $errorMessage", e)
+                    Toast.makeText(
+                        context,
+                        "No se pudo enviar el archivo multimedia: $errorMessage",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
                 }
             }
 
@@ -3271,3 +3263,4 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         typingDebounceJob?.cancel()
     }
 }
+
