@@ -111,7 +111,8 @@ interface OpenRouteServiceApi {
         @Query("api_key") apiKey: String,
         @Query("start") start: String,
         @Query("end") end: String,
-        @Query("instructions") instructions: Boolean = true
+        @Query("instructions") instructions: Boolean = true,
+        @Query("language") language: String = "es"
     ): OrsDirectionsResponse
 }
 

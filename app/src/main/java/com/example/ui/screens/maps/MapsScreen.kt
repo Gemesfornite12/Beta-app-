@@ -12,6 +12,9 @@ import android.graphics.Path
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -123,6 +126,7 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.atan2
@@ -171,6 +175,60 @@ private fun calculateBearing(from: LatLng, to: LatLng): Float {
     val x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
     val radians = atan2(y, x)
     return ((Math.toDegrees(radians) + 360) % 360).toFloat()
+}
+
+/**
+ * Formatea la hora en formato estándar de 12 horas con indicador AM / PM (ej: 7:27 PM).
+ * Garantiza que nunca se muestre en formato militar/24 horas.
+ */
+private fun formatTime12Hour(timestamp: Long): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
+    val hour24 = cal.get(Calendar.HOUR_OF_DAY)
+    val minute = cal.get(Calendar.MINUTE)
+    val amPm = if (hour24 >= 12) "PM" else "AM"
+    val hour12 = when (val h = hour24 % 12) {
+        0 -> 12
+        else -> h
+    }
+    return String.format(Locale.US, "%d:%02d %s", hour12, minute, amPm)
+}
+
+/**
+ * Traduce y adapta instrucciones de navegación a un español claro y natural
+ * para que el motor de voz TTS las pronuncie con máxima inteligibilidad y volumen.
+ */
+private fun translateInstructionToSpanish(instruction: String): String {
+    var text = instruction
+    val replacements = listOf(
+        Regex("(?i)\\bHead\\s+northeast\\b") to "Dirígete al noreste",
+        Regex("(?i)\\bHead\\s+northwest\\b") to "Dirígete al noroeste",
+        Regex("(?i)\\bHead\\s+southeast\\b") to "Dirígete al sureste",
+        Regex("(?i)\\bHead\\s+southwest\\b") to "Dirígete al suroeste",
+        Regex("(?i)\\bHead\\s+north\\b") to "Dirígete al norte",
+        Regex("(?i)\\bHead\\s+south\\b") to "Dirígete al sur",
+        Regex("(?i)\\bHead\\s+east\\b") to "Dirígete al este",
+        Regex("(?i)\\bHead\\s+west\\b") to "Dirígete al oeste",
+        Regex("(?i)\\bTurn\\s+sharp\\s+left\\b") to "Gira pronunciadamente a la izquierda",
+        Regex("(?i)\\bTurn\\s+sharp\\s+right\\b") to "Gira pronunciadamente a la derecha",
+        Regex("(?i)\\bTurn\\s+slight\\s+left\\b") to "Gira levemente a la izquierda",
+        Regex("(?i)\\bTurn\\s+slight\\s+right\\b") to "Gira levemente a la derecha",
+        Regex("(?i)\\bTurn\\s+left\\b") to "Gira a la izquierda",
+        Regex("(?i)\\bTurn\\s+right\\b") to "Gira a la derecha",
+        Regex("(?i)\\bKeep\\s+left\\b") to "Mantente a la izquierda",
+        Regex("(?i)\\bKeep\\s+right\\b") to "Mantente a la derecha",
+        Regex("(?i)\\bContinue\\s+straight\\b") to "Continúa recto",
+        Regex("(?i)\\bContinue\\b") to "Continúa",
+        Regex("(?i)\\bonto\\b") to "hacia",
+        Regex("(?i)\\bon\\b") to "por",
+        Regex("(?i)\\btoward\\b") to "hacia",
+        Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Llegada a tu destino",
+        Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Has llegado a tu destino",
+        Regex("(?i)\\bRoundabout\\b") to "Rotonda"
+    )
+    for ((regex, replacement) in replacements) {
+        text = text.replace(regex, replacement)
+    }
+    return text
 }
 
 /**
@@ -292,7 +350,18 @@ fun MapsScreen(onBack: () -> Unit) {
         instance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 try {
-                    instance?.language = Locale("es", "ES")
+                    val spanish = Locale("es", "ES")
+                    val result = instance?.setLanguage(spanish)
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        instance?.language = Locale.getDefault()
+                    }
+                    val audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                    instance?.setAudioAttributes(audioAttributes)
+                    instance?.setSpeechRate(0.92f)
+                    instance?.setPitch(1.02f)
                 } catch (_: Exception) {}
             }
         }
@@ -365,7 +434,20 @@ fun MapsScreen(onBack: () -> Unit) {
 
     fun speakInstruction(text: String) {
         if (text.isNotBlank()) {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "omnistudio-nav")
+            val translated = translateInstructionToSpanish(text)
+            try {
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.let { am ->
+                    val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+                }
+            } catch (_: Exception) {}
+
+            val params = Bundle().apply {
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+                putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+            }
+            tts?.speak(translated, TextToSpeech.QUEUE_FLUSH, params, "omnistudio-nav")
         }
     }
 
@@ -719,7 +801,8 @@ fun MapsScreen(onBack: () -> Unit) {
                         .fillMaxWidth()
                 ) {
                     val currentStep = routeSteps.getOrNull(step)
-                    val instructionText = currentStep?.instruction?.ifBlank { "Continúa recto por la vía" } ?: "Continúa por la ruta"
+                    val rawInstruction = currentStep?.instruction?.ifBlank { "Continúa recto por la vía" } ?: "Continúa por la ruta"
+                    val instructionText = translateInstructionToSpanish(rawInstruction)
                     val stepDist = if (distanceToNextManeuver > 0f) {
                         if (distanceToNextManeuver >= 1000) String.format(Locale.getDefault(), "En %.1f km", distanceToNextManeuver / 1000.0)
                         else "En ${distanceToNextManeuver.roundToInt()} m"
@@ -931,9 +1014,7 @@ fun MapsScreen(onBack: () -> Unit) {
                             val d = String.format(Locale.getDefault(), "%.1f km", s.distance / 1000.0)
                             val t = "${(s.duration / 60.0).roundToInt()} min"
                             val a = remember(s) {
-                                SimpleDateFormat("h:mm a", Locale.getDefault()).format(
-                                    Date(System.currentTimeMillis() + s.duration.toLong() * 1000L)
-                                )
+                                formatTime12Hour(System.currentTimeMillis() + s.duration.toLong() * 1000L)
                             }
 
                             Row(
@@ -1095,9 +1176,7 @@ fun MapsScreen(onBack: () -> Unit) {
                                 val distanceStr = String.format(Locale.getDefault(), "%.1f km", s.distance / 1000.0)
                                 val durationStr = "${(s.duration / 60.0).roundToInt()} min"
                                 val etaStr = remember(s) {
-                                    SimpleDateFormat("h:mm a", Locale.getDefault()).format(
-                                        Date(System.currentTimeMillis() + s.duration.toLong() * 1000L)
-                                    )
+                                    formatTime12Hour(System.currentTimeMillis() + s.duration.toLong() * 1000L)
                                 }
 
                                 Surface(
