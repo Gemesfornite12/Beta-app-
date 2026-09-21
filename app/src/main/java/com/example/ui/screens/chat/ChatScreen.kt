@@ -69,6 +69,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.example.ui.components.MessageReactionMenuDialog
 import com.example.ui.components.MessageReactionsRow
+import com.example.ui.components.StandardVideoPlayerDialog
 import com.example.ui.components.VideoPlayer
 import com.example.ui.components.YouTubeOverlayPlayerDialog
 import androidx.compose.material.icons.filled.Videocam
@@ -217,6 +218,7 @@ fun ChatScreen(
     var showGroupManageDialog by remember { mutableStateOf(false) }
     var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
     var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
@@ -1406,6 +1408,9 @@ fun ChatScreen(
                         },
                         onOpenYouTubeOverlay = { vId, vTitle ->
                             activeOverlayVideo = Pair(vId, vTitle)
+                        },
+                        onOpenStandardVideo = { vUrl, vTitle ->
+                            activeStandardVideo = Pair(vUrl, vTitle)
                         }
                     )
                 }
@@ -1451,6 +1456,15 @@ fun ChatScreen(
             videoId = activeOverlayVideo!!.first,
             title = activeOverlayVideo!!.second,
             onDismiss = { activeOverlayVideo = null }
+        )
+    }
+
+    // Modal de Reproductor de Video Estándar (MP4, WebM, local/remoto) en pantalla del chat
+    if (activeStandardVideo != null) {
+        StandardVideoPlayerDialog(
+            videoUrl = activeStandardVideo!!.first,
+            title = activeStandardVideo!!.second,
+            onDismiss = { activeStandardVideo = null }
         )
     }
 
@@ -1631,114 +1645,104 @@ fun ChatScreen(
 
     // Modal de visualización ampliada de Multimedia (Fotos, Videos, GIFs)
     if (previewMediaUrl != null) {
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = {
-                previewMediaUrl = null
-                previewMediaType = null
-            },
-            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF0F172A),
-                modifier = Modifier
-                    .fillMaxWidth(0.95f)
-                    .padding(16.dp)
-                    .testTag("dialog_media_preview")
+        if (previewMediaType == "video") {
+            StandardVideoPlayerDialog(
+                videoUrl = previewMediaUrl!!,
+                title = "Video adjunto",
+                onDismiss = {
+                    previewMediaUrl = null
+                    previewMediaType = null
+                }
+            )
+        } else {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = {
+                    previewMediaUrl = null
+                    previewMediaType = null
+                },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF0F172A),
+                    modifier = Modifier
+                        .fillMaxWidth(0.95f)
+                        .padding(16.dp)
+                        .testTag("dialog_media_preview")
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = when (previewMediaType) {
-                                "image" -> "📷 Imagen Ampliada"
-                                "video" -> "🎥 Video en Reproducción"
-                                "gif" -> "🎭 Animación GIF"
-                                "sticker" -> "✨ Sticker Animado"
-                                else -> "Multimedia"
-                            },
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                        IconButton(
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = when (previewMediaType) {
+                                    "image" -> "📷 Imagen Ampliada"
+                                    "gif" -> "🎭 Animación GIF"
+                                    "sticker" -> "✨ Sticker Animado"
+                                    else -> "Multimedia"
+                                },
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                            IconButton(
+                                onClick = {
+                                    previewMediaUrl = null
+                                    previewMediaType = null
+                                },
+                                modifier = Modifier.testTag("btn_close_preview_x")
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1E293B),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 220.dp, max = 380.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                val safePreviewUrl = remember(previewMediaUrl) {
+                                    previewMediaUrl?.replace("http://", "https://")
+                                }
+                                AsyncImage(
+                                    model = safePreviewUrl,
+                                    contentDescription = "Vista previa multimedia",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 220.dp, max = 380.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Botón para cerrar la vista previa de la imagen
+                        Button(
                             onClick = {
                                 previewMediaUrl = null
                                 previewMediaType = null
                             },
-                            modifier = Modifier.testTag("btn_close_preview_x")
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF1E293B),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 220.dp, max = 380.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            val safePreviewUrl = remember(previewMediaUrl) {
-                                previewMediaUrl?.replace("http://", "https://")
-                            }
-                            AsyncImage(
-                                model = safePreviewUrl,
-                                contentDescription = "Vista previa multimedia",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 220.dp, max = 380.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (previewMediaType == "video") {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF4F46E5),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 12.dp)
+                                .testTag("btn_close_media_preview")
                         ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Reproduciendo streaming en vivo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Cerrar Vista Previa", color = Color.White, fontWeight = FontWeight.Bold)
                         }
-                    }
-
-                    // Botón para cerrar la vista previa de la imagen
-                    Button(
-                        onClick = {
-                            previewMediaUrl = null
-                            previewMediaType = null
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("btn_close_media_preview")
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Cerrar Vista Previa", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1862,7 +1866,8 @@ private fun MessageBubble(
     onPreviewMedia: (url: String, type: String) -> Unit,
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit,
-    onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> }
+    onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> },
+    onOpenStandardVideo: (videoUrl: String, title: String) -> Unit = { _, _ -> }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -2178,81 +2183,21 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de VIDEOS adjuntos
+                    // Renderizado de VIDEOS adjuntos (MP4, WebM, local o remoto)
                     if (message.mediaType == "video" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Box(
+                        VideoPlayer(
+                            videoUrl = message.mediaUrl,
+                            title = if (message.text.isNotBlank() && !message.text.startsWith("🎥 Video")) message.text else "Video",
+                            thumbnailUrl = message.mediaThumbnail,
+                            showActionButtons = true,
+                            onLaunchOverlay = onOpenYouTubeOverlay,
+                            onLaunchStandardVideo = onOpenStandardVideo,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF0F172A))
-                                .clickable { onPreviewMedia(message.mediaUrl, "video") }
-                        ) {
-                            if (!message.mediaThumbnail.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = message.mediaThumbnail,
-                                    contentDescription = "Video",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(160.dp)
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(140.dp)
-                                        .background(
-                                            Brush.linearGradient(
-                                                listOf(Color(0xFF1E293B), Color(0xFF312E81))
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Videocam,
-                                        contentDescription = null,
-                                        tint = Color(0xFFA5B4FC),
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                }
-                            }
-
-                            // Botón de reproducción de video
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xFF4F46E5).copy(alpha = 0.9f),
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .align(Alignment.Center)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Reproducir Video",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                            }
-
-                            // Badge de Video
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(0xFF7C3AED),
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(6.dp)
-                            ) {
-                                Text(
-                                    text = "VIDEO HD",
-                                    color = Color.White,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
+                                .testTag("msg_video_${message.id}")
+                        )
                     }
 
                     // Renderizado de GIFs y Stickers animados
@@ -2301,6 +2246,7 @@ private fun MessageBubble(
                             title = if (message.text.isNotBlank() && !message.text.startsWith("▶️ Video de YouTube")) message.text else "Video de YouTube",
                             thumbnailUrl = message.mediaThumbnail,
                             onLaunchOverlay = onOpenYouTubeOverlay,
+                            onLaunchStandardVideo = onOpenStandardVideo,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("msg_youtube_${message.id}")
