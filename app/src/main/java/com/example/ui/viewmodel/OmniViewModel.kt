@@ -2631,8 +2631,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             var finalUrl = mediaUrl
-            val isLocalMediaUri = mediaUrl.startsWith("content://", ignoreCase = true) ||
-                mediaUrl.startsWith("file://", ignoreCase = true)
+            val mediaUri = android.net.Uri.parse(mediaUrl)
+            val isLocalMediaUri = mediaUri.scheme?.lowercase() in setOf("content", "file", "android.resource")
 
             // A local URI is only usable on the device that selected it. Upload it first and
             // do not create a chat message until Firebase returns a valid public download URL.
@@ -2676,6 +2676,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     ).show()
                     return@launch
                 }
+            }
+
+            // Never persist a device URI or a demo/local fallback in a chat message.
+            val finalUri = android.net.Uri.parse(finalUrl)
+            val finalScheme = finalUri.scheme?.lowercase()
+            if (finalScheme != "https" || finalUrl.contains("gtv-videos-bucket", ignoreCase = true)) {
+                val errorMessage = "El archivo multimedia no tiene una URL HTTPS válida de Firebase Storage"
+                Log.e("OmniViewModel", "$errorMessage: $finalUrl")
+                Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
+                return@launch
             }
 
             val fallbackText = when (mediaType) {

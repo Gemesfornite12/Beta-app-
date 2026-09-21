@@ -30,9 +30,16 @@ data class UploadedMedia(
 )
 
 class FirebaseMediaStorageService(context: Context) {
+    companion object {
+        // Keep media uploads on the Storage bucket that belongs to omnistudio-caaf5.
+        // Do not rely on a stale/default bucket from a generated Firebase config.
+        private const val STORAGE_BUCKET_NAME = "omnistudio-caaf5.firebasestorage.app"
+        private const val STORAGE_BUCKET_URL = "gs://$STORAGE_BUCKET_NAME"
+    }
+
     private val app = FirebaseAppProvider.get(context)
     private val context = context.applicationContext
-    private val storage = FirebaseStorage.getInstance(app)
+    private val storage = FirebaseStorage.getInstance(app, STORAGE_BUCKET_URL)
     private val firestore = FirebaseFirestore.getInstance(app)
 
     /**
@@ -84,9 +91,35 @@ class FirebaseMediaStorageService(context: Context) {
                 "Firebase Storage terminó la subida con un archivo vacío"
             }
 
-            val downloadUrl = storageRef.downloadUrl.await().toString()
-            require(downloadUrl.startsWith("https://") && downloadUrl.contains("firebasestorage.googleapis.com")) {
-                "Firebase Storage no devolvió una URL de descarga válida"
+            // putFile() completes before the chat message is created, but verify the
+            // object through the same reference before asking for its download URL.
+            // This prevents a missing object (or a wrong bucket) from being persisted.
+            val storedMetadata = try {
+                storageRef.metadata.await()
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "La subida terminó, pero el objeto no existe en $STORAGE_BUCKET_URL/$storagePath",
+                    e
+                )
+            }
+            require(storedMetadata.sizeBytes > 0L) {
+                "Firebase Storage creó un objeto vacío en $STORAGE_BUCKET_URL/$storagePath"
+            }
+
+            val downloadUrl = try {
+                storageRef.downloadUrl.await().toString()
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "El objeto existe, pero Firebase Storage no pudo generar su URL de descarga " +
+                        "($STORAGE_BUCKET_URL/$storagePath)",
+                    e
+                )
+            }
+            require(
+                downloadUrl.startsWith("https://firebasestorage.googleapis.com/") &&
+                    downloadUrl.contains("/v0/b/$STORAGE_BUCKET_NAME/o/")
+            ) {
+                "Firebase Storage no devolvió una URL válida del bucket $STORAGE_BUCKET_NAME"
             }
 
             val mediaData = hashMapOf<String, Any?>(
@@ -97,7 +130,7 @@ class FirebaseMediaStorageService(context: Context) {
                 "fileName" to safeName,
                 "storagePath" to storagePath,
                 "downloadUrl" to downloadUrl,
-                "sizeBytes" to uploadSnapshot.totalByteCount,
+                "sizeBytes" to storedMetadata.sizeBytes,
                 "createdAt" to FieldValue.serverTimestamp()
             )
 
@@ -112,7 +145,7 @@ class FirebaseMediaStorageService(context: Context) {
                 downloadUrl = downloadUrl,
                 mediaType = mediaType,
                 mimeType = normalizedMimeType,
-                sizeBytes = uploadSnapshot.totalByteCount
+                sizeBytes = storedMetadata.sizeBytes
             )
         } finally {
             source.temporaryFile?.delete()
