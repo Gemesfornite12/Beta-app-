@@ -1,55 +1,574 @@
 package com.example.ui.screens.maps
+
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.*
+import android.content.Context
 import android.content.pm.PackageManager
-import android.location.*
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.*
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.BuildConfig
-import com.example.data.api.*
-import kotlinx.coroutines.*
+import com.example.data.api.OpenRouteServiceClient
+import com.example.data.api.OrsProfiles
+import com.example.data.api.OrsRouteSummary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
-import org.maplibre.android.annotations.*
-import org.maplibre.android.camera.*
-import org.maplibre.android.geometry.*
-import org.maplibre.android.maps.*
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.Polyline
+import org.maplibre.android.annotations.PolylineOptions
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
-private val profiles=listOf(OrsProfiles.DRIVING_CAR to "Automóvil",OrsProfiles.FOOT_WALKING to "Caminar",OrsProfiles.CYCLING_REGULAR to "Bicicleta",OrsProfiles.CYCLING_ELECTRIC to "Bicicleta eléctrica",OrsProfiles.FOOT_HIKING to "Senderismo",OrsProfiles.WHEELCHAIR to "Silla de ruedas")
-private const val STYLE="https://tiles.openfreemap.org/styles/liberty"
+
+private val profiles = listOf(
+    OrsProfiles.DRIVING_CAR to "Automóvil",
+    OrsProfiles.FOOT_WALKING to "Caminar",
+    OrsProfiles.CYCLING_REGULAR to "Bicicleta",
+    OrsProfiles.CYCLING_ELECTRIC to "Bicicleta eléctrica",
+    OrsProfiles.FOOT_HIKING to "Senderismo",
+    OrsProfiles.WHEELCHAIR to "Silla de ruedas"
+)
+
+private const val STYLE = "https://tiles.openfreemap.org/styles/liberty"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("MissingPermission")
-@Composable fun MapsScreen(onBack:()->Unit){
- val context=LocalContext.current; val scope=rememberCoroutineScope(); val owner=LocalLifecycleOwner.current
- val fallback=remember{LatLng(9.9951797,-84.1403642)}; val lm=remember{context.getSystemService(Context.LOCATION_SERVICE) as LocationManager}
- var map by remember{mutableStateOf<MapLibreMap?>(null)}; var marker by remember{mutableStateOf<Marker?>(null)}; var destMarker by remember{mutableStateOf<Marker?>(null)}; var line by remember{mutableStateOf<Polyline?>(null)}
- var permission by remember{mutableStateOf(ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)}
- val request=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){permission=it}; LaunchedEffect(Unit){if(!permission)request.launch(Manifest.permission.ACCESS_FINE_LOCATION)}
- var current by remember{mutableStateOf(fallback)}; var locationText by remember{mutableStateOf("Buscando tu ubicación...")}; var real by remember{mutableStateOf(false)}; var destination by remember{mutableStateOf("")}; var destinationPoint by remember{mutableStateOf<LatLng?>(null)}; var profile by remember{mutableStateOf(profiles.first())}; var menu by remember{mutableStateOf(false)}; var loading by remember{mutableStateOf(false)}; var summary by remember{mutableStateOf<OrsRouteSummary?>(null)}; var instructions by remember{mutableStateOf<List<String>>(emptyList())}; var points by remember{mutableStateOf<List<LatLng>>(emptyList())}; var error by remember{mutableStateOf<String?>(null)}; var navigating by remember{mutableStateOf(false)}; var step by remember{mutableStateOf(0)}
- val tts=remember{var instance:TextToSpeech?=null;instance=TextToSpeech(context){if(it==TextToSpeech.SUCCESS)try{instance?.language=Locale("es","ES")}catch(_:Exception){}};instance}; val ors=BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank()&&BuildConfig.OPENROUTESERVICE_API_KEY!="MY_OPENROUTESERVICE_API_KEY"
- fun redraw(){val m=map?:return;marker?.let{m.removeMarker(it)};marker=m.addMarker(MarkerOptions().position(current).title(if(real)"Tu ubicación (GPS)" else "Ubicación inicial").snippet(locationText));destinationPoint?.let{p->destMarker?.let{m.removeMarker(it)};destMarker=m.addMarker(MarkerOptions().position(p).title("Destino").snippet(destination))};line?.let{m.removePolyline(it)};if(points.isNotEmpty()){line=m.addPolyline(PolylineOptions().addAll(points).color(android.graphics.Color.parseColor("#10B981")).width(6f));try{val b=LatLngBounds.Builder();b.include(current);points.forEach{b.include(it)};m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(),120),1000)}catch(_:Exception){m.animateCamera(CameraUpdateFactory.newLatLngZoom(current,14.0))}}}
- fun update(loc:Location){current=LatLng(loc.latitude,loc.longitude);real=true;locationText=String.format(Locale.getDefault(),"%.5f, %.5f",loc.latitude,loc.longitude);redraw();if(ors)scope.launch{try{val r=withContext(Dispatchers.IO){OpenRouteServiceClient.api.reverseGeocode(BuildConfig.OPENROUTESERVICE_API_KEY,current.longitude,current.latitude,1)};r.features.firstOrNull()?.properties?.label?.let{locationText=it;redraw()}}catch(_:Exception){}}}
- DisposableEffect(permission){if(!permission)return@DisposableEffect onDispose{};val listener=object:LocationListener{override fun onLocationChanged(l:Location)=update(l)};try{listOf(LocationManager.GPS_PROVIDER,LocationManager.NETWORK_PROVIDER).forEach{p->if(lm.isProviderEnabled(p)){lm.requestLocationUpdates(p,3000L,5f,listener);lm.getLastKnownLocation(p)?.let{update(it)}}}}catch(_:SecurityException){locationText="No se pudo acceder a la ubicación"};onDispose{try{lm.removeUpdates(listener)}catch(_:Exception){}}}
- DisposableEffect(Unit){onDispose{tts?.shutdown()}};LaunchedEffect(navigating,step,instructions){if(navigating)instructions.getOrNull(step)?.let{tts?.speak(it,TextToSpeech.QUEUE_FLUSH,null,"omnistudio-navigation")}}
- fun route(){if(destination.isBlank()||loading)return;scope.launch{loading=true;error=null;summary=null;instructions=emptyList();points=emptyList();navigating=false;step=0;try{if(!ors)error("Configura OPENROUTESERVICE_API_KEY en Secrets.");val result=withContext(Dispatchers.IO){val place=OpenRouteServiceClient.api.geocode(BuildConfig.OPENROUTESERVICE_API_KEY,destination.trim(),1).features.firstOrNull()?:error("No encontré ese destino.");val c=place.geometry.coordinates;if(c.size<2)error("El destino no tiene coordenadas válidas.");val feature=OpenRouteServiceClient.api.route(profile.first,BuildConfig.OPENROUTESERVICE_API_KEY,"${current.longitude},${current.latitude}","${c[0]},${c[1]}",true).features.firstOrNull()?:error("No se pudo calcular la ruta.");feature to LatLng(c[1],c[0])};destinationPoint=result.second;summary=result.first.properties.summary;instructions=result.first.properties.segments.flatMap{it.steps.map{st->st.instruction}};points=result.first.geometry.coordinates.mapNotNull{if(it.size>=2)LatLng(it[1],it[0])else null};redraw()}catch(e:Exception){error=e.message?:"No se pudo calcular la ruta."}finally{loading=false}}}
- val mapView=remember(context){MapLibre.getInstance(context);MapView(context).apply{getMapAsync{m->map=m;m.cameraPosition=CameraPosition.Builder().target(current).zoom(14.0).build();m.setStyle(Style.Builder().fromUri(STYLE)){redraw()};m.addOnMapClickListener{p->destinationPoint=p;destination=String.format(Locale.getDefault(),"%.5f, %.5f",p.latitude,p.longitude);if(ors)scope.launch{try{val r=withContext(Dispatchers.IO){OpenRouteServiceClient.api.reverseGeocode(BuildConfig.OPENROUTESERVICE_API_KEY,p.longitude,p.latitude,1)};r.features.firstOrNull()?.properties?.label?.let{destination=it}}catch(_:Exception){};route()}else redraw();true}}}}
- DisposableEffect(owner,mapView){val observer=LifecycleEventObserver{_,e->when(e){Lifecycle.Event.ON_START->mapView.onStart();Lifecycle.Event.ON_RESUME->mapView.onResume();Lifecycle.Event.ON_PAUSE->mapView.onPause();Lifecycle.Event.ON_STOP->mapView.onStop();Lifecycle.Event.ON_DESTROY->mapView.onDestroy();else->Unit}};owner.lifecycle.addObserver(observer);onDispose{owner.lifecycle.removeObserver(observer)}}
- Scaffold(topBar={if(!navigating)TopAppBar(title={Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.Map,null,tint=Color(0xFF10B981));Spacer(Modifier.size(8.dp));Text("Mapas y rutas",fontWeight=FontWeight.Bold)}},navigationIcon={IconButton(onClick=onBack){Icon(Icons.Default.ChevronLeft,"Volver")}},colors=TopAppBarDefaults.topAppBarColors(containerColor=Color(0xFF0F172A),titleContentColor=Color.White,navigationIconContentColor=Color.White))},containerColor=Color(0xFF0F172A)){padding->if(navigating){Box(Modifier.fillMaxSize().padding(padding)){AndroidView({mapView},Modifier.fillMaxSize());Surface(color=Color(0xFF064E3B),shadowElevation=10.dp,modifier=Modifier.align(Alignment.TopCenter).padding(12.dp).fillMaxWidth()){Column(Modifier.padding(18.dp)){Text("Navegación activa",color=Color.White.copy(.8f),fontSize=13.sp,fontWeight=FontWeight.Bold);Text(instructions.getOrNull(step)?:"Sigue la ruta",color=Color.White,fontSize=20.sp,fontWeight=FontWeight.Bold,modifier=Modifier.padding(top=4.dp))}};Surface(color=Color(0xFF0F172A).copy(.97f),shadowElevation=12.dp,modifier=Modifier.align(Alignment.BottomCenter).fillMaxWidth()){Column(Modifier.padding(16.dp)){summary?.let{s->val d=String.format(Locale.getDefault(),"%.1f km",s.distance/1000.0);val t="${(s.duration/60.0).roundToInt()} min";val a=remember(s){java.text.SimpleDateFormat("HH:mm",Locale.getDefault()).format(java.util.Date(System.currentTimeMillis()+s.duration.toLong()*1000L))};Row(Modifier.fillMaxWidth().padding(bottom=14.dp)){Column(Modifier.weight(1f)){Text(t,color=Color.White,fontSize=20.sp,fontWeight=FontWeight.Bold);Text("Tiempo",color=Color.LightGray,fontSize=12.sp)};Column(Modifier.weight(1f)){Text(d,color=Color.White,fontSize=20.sp,fontWeight=FontWeight.Bold);Text("Distancia",color=Color.LightGray,fontSize=12.sp)};Column(Modifier.weight(1f)){Text(a,color=Color.White,fontSize=20.sp,fontWeight=FontWeight.Bold);Text("Llegada",color=Color.LightGray,fontSize=12.sp)}}};Button({navigating=false;step=0},Modifier.fillMaxWidth()){Text("Finalizar",fontWeight=FontWeight.Bold)}}}}}else{Column(Modifier.fillMaxSize().padding(padding)){Surface(color=if(real)Color(0xFF14532D)else Color(0xFF334155),modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp,10.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.MyLocation,null,tint=Color.White);Spacer(Modifier.size(8.dp));Column{Text("Tu ubicación actual",color=Color.White,fontWeight=FontWeight.Bold);Text(locationText,color=Color.White.copy(.85f),fontSize=12.sp)}}};Box(Modifier.weight(1f).fillMaxWidth()){AndroidView({mapView},Modifier.fillMaxSize())};Surface(color=Color(0xFF1E293B),shadowElevation=8.dp){Column(Modifier.padding(12.dp)){OutlinedTextField(destination,{destination=it},Modifier.fillMaxWidth(),singleLine=true,label={Text("Destino")},placeholder={Text("Ej. Parque Central de Heredia o toca el mapa")});Spacer(Modifier.height(8.dp));Row(verticalAlignment=Alignment.CenterVertically){Box{Button({menu=true}){Text(profile.second)};DropdownMenu(menu,{menu=false}){profiles.forEach{p->DropdownMenuItem({Text(p.second)},{profile=p;menu=false})}}};Spacer(Modifier.width(8.dp));Button(::route,destination.isNotBlank()&&!loading){if(loading)CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp)else Text("Calcular ruta")}};Text("Inicio: $locationText",color=Color.LightGray,fontSize=11.sp,modifier=Modifier.padding(top=6.dp));error?.let{Text(it,color=Color(0xFFFCA5A5))};summary?.let{s->Row(Modifier.fillMaxWidth().padding(top=8.dp),verticalAlignment=Alignment.CenterVertically){Text("${String.format(Locale.getDefault(),"%.1f km",s.distance/1000.0)} • ${(s.duration/60.0).roundToInt()} min • ${profile.second}",color=Color.White,fontWeight=FontWeight.Bold,modifier=Modifier.weight(1f));Button({navigating=true;step=0}){Text("Navegar")}}};if(instructions.isNotEmpty())LazyColumn(contentPadding=PaddingValues(top=6.dp),verticalArrangement=Arrangement.spacedBy(4.dp),modifier=Modifier.height(110.dp)){items(instructions){Text("• $it",color=Color.White,style=MaterialTheme.typography.bodySmall)}}}}}}}}
+@Composable
+fun MapsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val owner = LocalLifecycleOwner.current
+
+    val fallback = remember { LatLng(9.9951797, -84.1403642) }
+    val lm = remember { context.getSystemService(Context.LOCATION_SERVICE) as LocationManager }
+
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var marker by remember { mutableStateOf<Marker?>(null) }
+    var destMarker by remember { mutableStateOf<Marker?>(null) }
+    var line by remember { mutableStateOf<Polyline?>(null) }
+
+    var permission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val request = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permission = it }
+
+    LaunchedEffect(Unit) {
+        if (!permission) request.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    var current by remember { mutableStateOf(fallback) }
+    var locationText by remember { mutableStateOf("Buscando tu ubicación...") }
+    var real by remember { mutableStateOf(false) }
+    var destination by remember { mutableStateOf("") }
+    var destinationPoint by remember { mutableStateOf<LatLng?>(null) }
+    var profile by remember { mutableStateOf(profiles.first()) }
+    var menu by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var summary by remember { mutableStateOf<OrsRouteSummary?>(null) }
+    var instructions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var points by remember { mutableStateOf<List<LatLng>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var navigating by remember { mutableStateOf(false) }
+    var step by remember { mutableStateOf(0) }
+
+    val tts = remember {
+        var instance: TextToSpeech? = null
+        instance = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                try {
+                    instance?.language = Locale("es", "ES")
+                } catch (_: Exception) {}
+            }
+        }
+        instance
+    }
+
+    val ors = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
+        BuildConfig.OPENROUTESERVICE_API_KEY != "MY_OPENROUTESERVICE_API_KEY"
+
+    fun redraw() {
+        val m = map ?: return
+
+        marker?.let { m.removeMarker(it) }
+        marker = m.addMarker(
+            MarkerOptions()
+                .position(current)
+                .title(if (real) "Tu ubicación (GPS)" else "Ubicación inicial")
+                .snippet(locationText)
+        )
+
+        destinationPoint?.let { p ->
+            destMarker?.let { m.removeMarker(it) }
+            destMarker = m.addMarker(
+                MarkerOptions()
+                    .position(p)
+                    .title("Destino")
+                    .snippet(destination)
+            )
+        }
+
+        line?.let { m.removePolyline(it) }
+        if (points.isNotEmpty()) {
+            line = m.addPolyline(
+                PolylineOptions()
+                    .addAll(points)
+                    .color(android.graphics.Color.parseColor("#10B981"))
+                    .width(6f)
+            )
+            try {
+                val b = LatLngBounds.Builder()
+                b.include(current)
+                points.forEach { b.include(it) }
+                m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 120), 1000)
+            } catch (_: Exception) {
+                m.animateCamera(CameraUpdateFactory.newLatLngZoom(current, 14.0))
+            }
+        }
+    }
+
+    fun update(loc: Location) {
+        current = LatLng(loc.latitude, loc.longitude)
+        real = true
+        locationText = String.format(Locale.getDefault(), "%.5f, %.5f", loc.latitude, loc.longitude)
+        redraw()
+        if (ors) {
+            scope.launch {
+                try {
+                    val r = withContext(Dispatchers.IO) {
+                        OpenRouteServiceClient.api.reverseGeocode(
+                            BuildConfig.OPENROUTESERVICE_API_KEY,
+                            current.longitude,
+                            current.latitude,
+                            1
+                        )
+                    }
+                    r.features.firstOrNull()?.properties?.label?.let {
+                        locationText = it
+                        redraw()
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    DisposableEffect(permission) {
+        if (!permission) return@DisposableEffect onDispose {}
+        val listener = object : LocationListener {
+            override fun onLocationChanged(l: Location) = update(l)
+        }
+        try {
+            listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { p ->
+                if (lm.isProviderEnabled(p)) {
+                    lm.requestLocationUpdates(p, 3000L, 5f, listener)
+                    lm.getLastKnownLocation(p)?.let { update(it) }
+                }
+            }
+        } catch (_: SecurityException) {
+            locationText = "No se pudo acceder a la ubicación"
+        }
+        onDispose {
+            try {
+                lm.removeUpdates(listener)
+            } catch (_: Exception) {}
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            tts?.shutdown()
+        }
+    }
+
+    LaunchedEffect(navigating, step, instructions) {
+        if (navigating) {
+            instructions.getOrNull(step)?.let {
+                tts?.speak(it, TextToSpeech.QUEUE_FLUSH, null, "omnistudio-navigation")
+            }
+        }
+    }
+
+    fun route() {
+        if (destination.isBlank() || loading) return
+        scope.launch {
+            loading = true
+            error = null
+            summary = null
+            instructions = emptyList()
+            points = emptyList()
+            navigating = false
+            step = 0
+            try {
+                if (!ors) error("Configura OPENROUTESERVICE_API_KEY en Secrets.")
+                val result = withContext(Dispatchers.IO) {
+                    val place = OpenRouteServiceClient.api
+                        .geocode(BuildConfig.OPENROUTESERVICE_API_KEY, destination.trim(), 1)
+                        .features
+                        .firstOrNull() ?: error("No encontré ese destino.")
+                    val c = place.geometry.coordinates
+                    if (c.size < 2) error("El destino no tiene coordenadas válidas.")
+                    val feature = OpenRouteServiceClient.api.route(
+                        profile.first,
+                        BuildConfig.OPENROUTESERVICE_API_KEY,
+                        "${current.longitude},${current.latitude}",
+                        "${c[0]},${c[1]}",
+                        true
+                    ).features.firstOrNull() ?: error("No se pudo calcular la ruta.")
+                    feature to LatLng(c[1], c[0])
+                }
+                destinationPoint = result.second
+                summary = result.first.properties.summary
+                instructions = result.first.properties.segments.flatMap { it.steps.map { st -> st.instruction } }
+                points = result.first.geometry.coordinates.mapNotNull {
+                    if (it.size >= 2) LatLng(it[1], it[0]) else null
+                }
+                redraw()
+            } catch (e: Exception) {
+                error = e.message ?: "No se pudo calcular la ruta."
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    val mapView = remember(context) {
+        MapLibre.getInstance(context)
+        MapView(context).apply {
+            getMapAsync { m ->
+                map = m
+                m.cameraPosition = CameraPosition.Builder().target(current).zoom(14.0).build()
+                m.setStyle(Style.Builder().fromUri(STYLE)) {
+                    redraw()
+                }
+                m.addOnMapClickListener { p ->
+                    destinationPoint = p
+                    destination = String.format(Locale.getDefault(), "%.5f, %.5f", p.latitude, p.longitude)
+                    if (ors) {
+                        scope.launch {
+                            try {
+                                val r = withContext(Dispatchers.IO) {
+                                    OpenRouteServiceClient.api.reverseGeocode(
+                                        BuildConfig.OPENROUTESERVICE_API_KEY,
+                                        p.longitude,
+                                        p.latitude,
+                                        1
+                                    )
+                                }
+                                r.features.firstOrNull()?.properties?.label?.let {
+                                    destination = it
+                                }
+                            } catch (_: Exception) {}
+                            route()
+                        }
+                    } else {
+                        redraw()
+                    }
+                    true
+                }
+            }
+        }
+    }
+
+    DisposableEffect(owner, mapView) {
+        val observer = LifecycleEventObserver { _, e ->
+            when (e) {
+                Lifecycle.Event.ON_START -> mapView.onStart()
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                Lifecycle.Event.ON_STOP -> mapView.onStop()
+                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
+                else -> Unit
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            if (!navigating) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Map, null, tint = Color(0xFF10B981))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Mapas y rutas", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.ChevronLeft, "Volver")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF0F172A),
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White
+                    )
+                )
+            }
+        },
+        containerColor = Color(0xFF0F172A)
+    ) { padding ->
+        if (navigating) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                AndroidView({ mapView }, Modifier.fillMaxSize())
+
+                Surface(
+                    color = Color(0xFF064E3B),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(12.dp)
+                        .fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text(
+                            "Navegación activa",
+                            color = Color.White.copy(.8f),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            instructions.getOrNull(step) ?: "Sigue la ruta",
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(
+                                onClick = {
+                                    if (step < instructions.lastIndex) step++
+                                }
+                            ) {
+                                Text("Siguiente")
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    color = Color(0xFF0F172A).copy(.97f),
+                    shadowElevation = 12.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        summary?.let { s ->
+                            val d = String.format(Locale.getDefault(), "%.1f km", s.distance / 1000.0)
+                            val t = "${(s.duration / 60.0).roundToInt()} min"
+                            val a = remember(s) {
+                                SimpleDateFormat("HH:mm", Locale.getDefault()).format(
+                                    Date(System.currentTimeMillis() + s.duration.toLong() * 1000L)
+                                )
+                            }
+                            Row(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(t, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("Tiempo", color = Color.LightGray, fontSize = 12.sp)
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(d, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("Distancia", color = Color.LightGray, fontSize = 12.sp)
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(a, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("Llegada", color = Color.LightGray, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                navigating = false
+                                step = 0
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Finalizar", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                Surface(
+                    color = if (real) Color(0xFF14532D) else Color(0xFF334155),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(Modifier.padding(16.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.MyLocation, null, tint = Color.White)
+                        Spacer(Modifier.size(8.dp))
+                        Column {
+                            Text("Tu ubicación actual", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text(locationText, color = Color.White.copy(.85f), fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    AndroidView({ mapView }, Modifier.fillMaxSize())
+                }
+
+                Surface(color = Color(0xFF1E293B), shadowElevation = 8.dp) {
+                    Column(Modifier.padding(12.dp)) {
+                        OutlinedTextField(
+                            value = destination,
+                            onValueChange = { destination = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Destino") },
+                            placeholder = { Text("Ej. Parque Central de Heredia o toca el mapa") }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box {
+                                Button(onClick = { menu = true }) {
+                                    Text(profile.second)
+                                }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    profiles.forEach { p ->
+                                        DropdownMenuItem(
+                                            text = { Text(p.second) },
+                                            onClick = {
+                                                profile = p
+                                                menu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = ::route,
+                                enabled = destination.isNotBlank() && !loading
+                            ) {
+                                if (loading) {
+                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("Calcular ruta")
+                                }
+                            }
+                        }
+                        Text(
+                            "Inicio: $locationText",
+                            color = Color.LightGray,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        error?.let {
+                            Text(it, color = Color(0xFFFCA5A5), modifier = Modifier.padding(top = 4.dp))
+                        }
+                        summary?.let { s ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${String.format(Locale.getDefault(), "%.1f km", s.distance / 1000.0)} • ${(s.duration / 60.0).roundToInt()} min • ${profile.second}",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Button(onClick = {
+                                    navigating = true
+                                    step = 0
+                                }) {
+                                    Text("Navegar")
+                                }
+                            }
+                        }
+                        if (instructions.isNotEmpty()) {
+                            LazyColumn(
+                                contentPadding = PaddingValues(top = 6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.height(110.dp)
+                            ) {
+                                items(instructions) {
+                                    Text("• $it", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
