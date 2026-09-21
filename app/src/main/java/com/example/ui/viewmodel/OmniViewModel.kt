@@ -1,12 +1,14 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AiMusicComposer
 import com.example.ai.AiSongResult
 import com.example.audio.AudioSynthEngine
+import com.example.audio.WavAudioHelper
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.CallSoundVibrationManager
@@ -25,6 +27,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
 import com.example.data.model.DocumentType
+import com.example.data.model.RecordedAudioSample
 import com.example.data.model.UserAccount
 import com.example.data.repository.OmniRepository
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +42,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import android.content.Context
 import android.widget.Toast
 import com.example.BuildConfig
 import com.example.data.local.DeviceDownloadManager
@@ -103,6 +105,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val audioProjects: StateFlow<List<AudioProject>>
     val publicAudioProjects: StateFlow<List<AudioProject>>
     val allUsers: StateFlow<List<UserAccount>>
+    val recordedSamples: StateFlow<List<RecordedAudioSample>>
 
     // AI Song Creator State
     private val _isGeneratingSong = MutableStateFlow(false)
@@ -157,6 +160,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val isMetronomeEnabled: StateFlow<Boolean> = _isMetronomeEnabled.asStateFlow()
 
     private var sequencerJob: Job? = null
+
+    // WAV Audio Sample Recording & Management State
+    val isSampleRecording: StateFlow<Boolean> = WavAudioHelper.isRecording
+    val isSampleRecordingPaused: StateFlow<Boolean> = WavAudioHelper.isPaused
+    val sampleRecordingDurationMs: StateFlow<Long> = WavAudioHelper.recordingDurationMs
+    val sampleRecordingAmplitude: StateFlow<Float> = WavAudioHelper.currentAmplitude
+    val sampleRecordingWaveform: StateFlow<List<Float>> = WavAudioHelper.amplitudeWaveform
+
+    private val _previewingSampleId = MutableStateFlow<Long?>(null)
+    val previewingSampleId: StateFlow<Long?> = _previewingSampleId.asStateFlow()
 
     // Global Theme State
     private val _isDarkTheme = MutableStateFlow(true)
@@ -546,6 +559,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         publicAudioProjects = firestoreChatService.listenToPublicAudioProjects().stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            emptyList()
+        )
+
+        recordedSamples = repo.allRecordedSamples.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
             emptyList()
@@ -1266,23 +1285,38 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val obj = JSONObject(json)
             val trackList = mutableListOf<SequencerTrack>()
-            val names = listOf(
-                "kick" to "Kick Drum",
-                "snare" to "Snare Drum",
-                "hihat" to "Hi-Hat",
-                "clap" to "Clap FX",
-                "bass" to "Synth Bass",
-                "lead" to "Lead Synth"
-            )
-            for ((key, displayName) in names) {
-                val steps = BooleanArray(16)
-                if (obj.has(key)) {
-                    val arr = obj.getJSONArray(key)
-                    for (i in 0 until minOf(arr.length(), 16)) {
-                        steps[i] = arr.optBoolean(i, false)
+            if (obj.has("tracks")) {
+                val arr = obj.getJSONArray("tracks")
+                for (i in 0 until arr.length()) {
+                    val tObj = arr.getJSONObject(i)
+                    val name = tObj.getString("name")
+                    val soundType = tObj.getString("soundType")
+                    val stepsArr = tObj.getJSONArray("steps")
+                    val steps = BooleanArray(16)
+                    for (s in 0 until minOf(stepsArr.length(), 16)) {
+                        steps[s] = stepsArr.optBoolean(s, false)
                     }
+                    trackList.add(SequencerTrack(name, soundType, steps = steps))
                 }
-                trackList.add(SequencerTrack(displayName, key, steps = steps))
+            } else {
+                val names = listOf(
+                    "kick" to "Kick Drum",
+                    "snare" to "Snare Drum",
+                    "hihat" to "Hi-Hat",
+                    "clap" to "Clap FX",
+                    "bass" to "Synth Bass",
+                    "lead" to "Lead Synth"
+                )
+                for ((key, displayName) in names) {
+                    val steps = BooleanArray(16)
+                    if (obj.has(key)) {
+                        val arr = obj.getJSONArray(key)
+                        for (i in 0 until minOf(arr.length(), 16)) {
+                            steps[i] = arr.optBoolean(i, false)
+                        }
+                    }
+                    trackList.add(SequencerTrack(displayName, key, steps = steps))
+                }
             }
             if (trackList.isNotEmpty()) {
                 _sequencerTracks.value = trackList
@@ -1293,13 +1327,22 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun serializePatternData(): String {
-        val obj = JSONObject()
+        val root = JSONObject()
+        val tracksArray = JSONArray()
         for (track in _sequencerTracks.value) {
+            val trackObj = JSONObject()
+            trackObj.put("name", track.name)
+            trackObj.put("soundType", track.soundType)
             val arr = JSONArray()
             track.steps.forEach { arr.put(it) }
-            obj.put(track.soundType, arr)
+            trackObj.put("steps", arr)
+            tracksArray.put(trackObj)
+
+            // Direct key for backward compatibility with built-in sounds
+            root.put(track.soundType, arr)
         }
-        return obj.toString()
+        root.put("tracks", tracksArray)
+        return root.toString()
     }
 
     private fun scheduleMusicAutoSave() {
@@ -1573,6 +1616,117 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearMusicFeedback() {
         _musicFeedbackMessage.value = null
+    }
+
+    // ========================================================
+    // AUDIO SAMPLE RECORDING & SEQUENCER INTEGRATION
+    // ========================================================
+
+    fun startRecordingSample(context: Context): Boolean {
+        return WavAudioHelper.startRecording(context)
+    }
+
+    fun togglePauseRecordingSample() {
+        WavAudioHelper.togglePauseRecording()
+    }
+
+    fun stopRecordingSample(
+        context: Context,
+        sampleName: String,
+        category: String = "Vocal",
+        autoAddToSequencer: Boolean = true
+    ) {
+        viewModelScope.launch {
+            val sample = WavAudioHelper.stopRecording(context, sampleName, category)
+            if (sample != null) {
+                val id = repo.insertRecordedSample(sample)
+                val savedSample = sample.copy(id = id)
+                _musicFeedbackMessage.value = "¡Muestra WAV '${savedSample.name}' guardada con éxito!"
+                if (autoAddToSequencer) {
+                    addRecordedSampleToSequencer(savedSample)
+                }
+            } else {
+                _musicFeedbackMessage.value = "Error al capturar la muestra de audio."
+            }
+        }
+    }
+
+    fun cancelRecordingSample() {
+        WavAudioHelper.cancelRecording()
+    }
+
+    fun playSamplePreview(sample: RecordedAudioSample) {
+        _previewingSampleId.value = sample.id
+        AudioSynthEngine.playWavFile(sample.filePath)
+        viewModelScope.launch {
+            delay(sample.durationMs + 300)
+            if (_previewingSampleId.value == sample.id) {
+                _previewingSampleId.value = null
+            }
+        }
+    }
+
+    fun stopSamplePreview() {
+        _previewingSampleId.value = null
+    }
+
+    fun addRecordedSampleToSequencer(sample: RecordedAudioSample) {
+        val currentTracks = _sequencerTracks.value.toMutableList()
+        val defaultSteps = when (sample.category.lowercase()) {
+            "vocal", "voz" -> BooleanArray(16) { it == 0 || it == 8 }
+            "beatbox" -> BooleanArray(16) { it == 4 || it == 12 }
+            "fx", "efecto" -> BooleanArray(16) { it == 14 }
+            else -> BooleanArray(16) { it % 4 == 0 }
+        }
+        val newTrack = SequencerTrack(
+            name = "🎤 ${sample.name}",
+            soundType = "sample:${sample.filePath}",
+            steps = defaultSteps
+        )
+        currentTracks.add(newTrack)
+        _sequencerTracks.value = currentTracks
+        _musicFeedbackMessage.value = "Pista '${sample.name}' agregada al secuenciador"
+        scheduleMusicAutoSave()
+    }
+
+    fun removeSequencerTrack(trackIndex: Int) {
+        val currentTracks = _sequencerTracks.value.toMutableList()
+        if (trackIndex in currentTracks.indices) {
+            val removed = currentTracks.removeAt(trackIndex)
+            _sequencerTracks.value = currentTracks
+            _musicFeedbackMessage.value = "Pista '${removed.name}' eliminada"
+            scheduleMusicAutoSave()
+        }
+    }
+
+    fun deleteRecordedSample(sample: RecordedAudioSample) {
+        viewModelScope.launch {
+            repo.deleteRecordedSample(sample.id)
+            try {
+                java.io.File(sample.filePath).delete()
+            } catch (_: Exception) {}
+            _musicFeedbackMessage.value = "Muestra '${sample.name}' eliminada."
+        }
+    }
+
+    fun exportSampleToDownloads(context: Context, sample: RecordedAudioSample) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val file = java.io.File(sample.filePath)
+                if (file.exists()) {
+                    val bytes = file.readBytes()
+                    val uri = DeviceDownloadManager.saveBytes(
+                        context = context,
+                        fileName = "${sample.name.replace(" ", "_")}.wav",
+                        bytes = bytes,
+                        mimeType = "audio/wav"
+                    )
+                    _musicFeedbackMessage.value = "Muestra exportada a Descargas (${sample.name}.wav)"
+                }
+            } catch (e: Exception) {
+                _musicFeedbackMessage.value = "Error al exportar: ${e.message}"
+            }
+        }
     }
 
     fun isSongOwner(song: AudioProject): Boolean {

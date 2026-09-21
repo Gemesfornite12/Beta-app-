@@ -11,6 +11,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
 import com.example.data.model.DocumentType
+import com.example.data.model.RecordedAudioSample
 import com.example.data.model.UserAccount
 
 class Converters {
@@ -40,9 +41,10 @@ class Converters {
         UserAccount::class,
         DocumentItem::class,
         AudioProject::class,
-        ChatMessage::class
+        ChatMessage::class,
+        RecordedAudioSample::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -51,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun documentDao(): DocumentDao
     abstract fun audioProjectDao(): AudioProjectDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun recordedAudioSampleDao(): RecordedAudioSampleDao
 
     companion object {
         @Volatile

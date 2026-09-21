@@ -6,6 +6,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
 import com.example.data.model.DocumentType
+import com.example.data.model.RecordedAudioSample
 import com.example.data.model.UserAccount
 import kotlinx.coroutines.flow.Flow
 
@@ -14,6 +15,7 @@ class OmniRepository(private val db: AppDatabase) {
     val allAudioProjects: Flow<List<AudioProject>> = db.audioProjectDao().getAllAudioProjects()
     val publicAudioProjects: Flow<List<AudioProject>> = db.audioProjectDao().getPublicAudioProjects()
     val allUsers: Flow<List<UserAccount>> = db.userDao().getAllUsers()
+    val allRecordedSamples: Flow<List<RecordedAudioSample>> = db.recordedAudioSampleDao().getAllSamples()
 
     fun getMessagesForChannel(channelId: String): Flow<List<ChatMessage>> =
         db.chatMessageDao().getMessagesForChannel(channelId)
@@ -32,6 +34,11 @@ class OmniRepository(private val db: AppDatabase) {
     suspend fun updateAudioProjectTitle(id: Long, newTitle: String) = db.audioProjectDao().updateTitle(id, newTitle)
     suspend fun updateAudioProjectPublicStatus(id: Long, isPublic: Boolean) = db.audioProjectDao().updatePublicStatus(id, isPublic)
     suspend fun deleteAudioProject(id: Long) = db.audioProjectDao().deleteAudioProject(id)
+
+    suspend fun insertRecordedSample(sample: RecordedAudioSample): Long = db.recordedAudioSampleDao().insertSample(sample)
+    suspend fun getRecordedSampleById(id: Long): RecordedAudioSample? = db.recordedAudioSampleDao().getSampleById(id)
+    suspend fun updateRecordedSample(sample: RecordedAudioSample) = db.recordedAudioSampleDao().updateSample(sample)
+    suspend fun deleteRecordedSample(id: Long) = db.recordedAudioSampleDao().deleteSample(id)
 
     suspend fun getUnsyncedMessages(): List<ChatMessage> = db.chatMessageDao().getUnsyncedMessages()
     suspend fun insertChatMessage(msg: ChatMessage): Long = db.chatMessageDao().insertMessage(msg)

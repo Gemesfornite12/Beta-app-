@@ -8,6 +8,7 @@ import androidx.room.Update
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentItem
+import com.example.data.model.RecordedAudioSample
 import com.example.data.model.UserAccount
 import kotlinx.coroutines.flow.Flow
 
@@ -99,4 +100,22 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE channelId = :channelId")
     suspend fun deleteMessagesForChannel(channelId: String)
+}
+
+@Dao
+interface RecordedAudioSampleDao {
+    @Query("SELECT * FROM recorded_audio_samples ORDER BY createdAt DESC")
+    fun getAllSamples(): Flow<List<RecordedAudioSample>>
+
+    @Query("SELECT * FROM recorded_audio_samples WHERE id = :id LIMIT 1")
+    suspend fun getSampleById(id: Long): RecordedAudioSample?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSample(sample: RecordedAudioSample): Long
+
+    @Update
+    suspend fun updateSample(sample: RecordedAudioSample)
+
+    @Query("DELETE FROM recorded_audio_samples WHERE id = :id")
+    suspend fun deleteSample(id: Long)
 }

@@ -37,7 +37,9 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsNone
@@ -127,11 +129,13 @@ fun MusicStudioScreen(
         mutableStateOf(activeProject?.genre ?: "Hip Hop / Lo-Fi")
     }
     var showSaveModal by remember { mutableStateOf(false) }
-    var activeTab by remember { mutableStateOf(0) } // 0: Secuenciador, 1: Canciones Publicadas
+    var activeTab by remember { mutableStateOf(0) } // 0: Secuenciador, 1: Muestras WAV, 2: Canciones Publicadas
     var showAiModal by remember { mutableStateOf(false) }
+    var showRecorderModal by remember { mutableStateOf(false) }
     var showRenameActiveModal by remember { mutableStateOf(false) }
 
     val publicSongs by viewModel.publicAudioProjects.collectAsState()
+    val recordedSamples by viewModel.recordedSamples.collectAsState()
     val musicFeedback by viewModel.musicFeedbackMessage.collectAsState()
     val isOwnerOfActive = activeProject?.let { viewModel.isSongOwner(it) } ?: true
 
@@ -212,6 +216,21 @@ fun MusicStudioScreen(
                             )
                         }
 
+                        // Botón: Grabar Muestra WAV
+                        Button(
+                            onClick = { showRecorderModal = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("btn_open_wav_recorder"),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 5.dp)
+                        ) {
+                            Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Grabar WAV", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
                         // Botón: Crear Canción con IA
                         Button(
                             onClick = { showAiModal = true },
@@ -275,7 +294,7 @@ fun MusicStudioScreen(
                         }
                     }
 
-                    // Pestañas: Estudio Secuenciador vs Canciones Publicadas
+                    // Pestañas: Estudio Secuenciador vs Muestras WAV vs Canciones Publicadas
                     TabRow(
                         selectedTabIndex = activeTab,
                         containerColor = Color(0xFF0F172A),
@@ -292,11 +311,11 @@ fun MusicStudioScreen(
                             onClick = { activeTab = 0 },
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "Estudio & Secuenciador",
-                                        fontSize = 12.sp,
+                                        text = "Secuenciador",
+                                        fontSize = 11.sp,
                                         fontWeight = if (activeTab == 0) FontWeight.Bold else FontWeight.Normal
                                     )
                                 }
@@ -307,12 +326,27 @@ fun MusicStudioScreen(
                             onClick = { activeTab = 1 },
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "Canciones Publicadas (${publicSongs.size})",
-                                        fontSize = 12.sp,
+                                        text = "Muestras WAV (${recordedSamples.size})",
+                                        fontSize = 11.sp,
                                         fontWeight = if (activeTab == 1) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = activeTab == 2,
+                            onClick = { activeTab = 2 },
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Publicadas (${publicSongs.size})",
+                                        fontSize = 11.sp,
+                                        fontWeight = if (activeTab == 2) FontWeight.Bold else FontWeight.Normal
                                     )
                                 }
                             }
@@ -322,23 +356,38 @@ fun MusicStudioScreen(
             }
         }
     ) { innerPadding ->
-        if (activeTab == 1) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                CommunitySongsView(
-                    viewModel = viewModel,
-                    onOpenInStudio = { activeTab = 0 },
-                    onShareToChat = { song ->
-                        viewModel.sendChatMessage(attachedAudio = song)
-                        onShareToChat()
-                    },
-                    onRequestCreateWithAi = { showAiModal = true }
-                )
+        when (activeTab) {
+            1 -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    RecordedSamplesLibraryView(
+                        viewModel = viewModel,
+                        onOpenRecorder = { showRecorderModal = true },
+                        onOpenInStudio = { activeTab = 0 }
+                    )
+                }
             }
-        } else {
+            2 -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    CommunitySongsView(
+                        viewModel = viewModel,
+                        onOpenInStudio = { activeTab = 0 },
+                        onShareToChat = { song ->
+                            viewModel.sendChatMessage(attachedAudio = song)
+                            onShareToChat()
+                        },
+                        onRequestCreateWithAi = { showAiModal = true }
+                    )
+                }
+            }
+            else -> {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -519,27 +568,43 @@ fun MusicStudioScreen(
                             )
                         }
 
-                        // Indicador de estado de solo
-                        val anySolo = tracks.any { it.isSolo }
-                        if (anySolo) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Botón rápido para grabar sample WAV
                             Surface(
-                                color = Color(0xFFEAB308).copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(4.dp)
+                                onClick = { showRecorderModal = true },
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFFE11D48).copy(alpha = 0.2f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFB7185).copy(alpha = 0.4f)),
+                                modifier = Modifier.testTag("btn_grid_record_sample")
                             ) {
-                                Text(
-                                    text = "SOLO ACTIVO",
-                                    color = Color(0xFFFDE047),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Mic, contentDescription = null, tint = Color(0xFFFB7185), modifier = Modifier.size(13.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("+ Muestra WAV", color = Color(0xFFFB7185), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
-                        } else {
-                            Text(
-                                text = "Toca para activar/desactivar",
-                                color = Color(0xFF64748B),
-                                fontSize = 11.sp
-                            )
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // Indicador de estado de solo
+                            val anySolo = tracks.any { it.isSolo }
+                            if (anySolo) {
+                                Surface(
+                                    color = Color(0xFFEAB308).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "SOLO ACTIVO",
+                                        color = Color(0xFFFDE047),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -556,7 +621,8 @@ fun MusicStudioScreen(
                         onToggleSolo = { trackIdx -> viewModel.toggleSoloTrack(trackIdx) },
                         onPreviewSound = { track -> viewModel.playTrackSoundPreview(track) },
                         onClearTrack = { trackIdx -> viewModel.clearTrack(trackIdx) },
-                        onFillTrack = { trackIdx, interval -> viewModel.fillTrackEvery(trackIdx, interval) }
+                        onFillTrack = { trackIdx, interval -> viewModel.fillTrackEvery(trackIdx, interval) },
+                        onRemoveTrack = { trackIdx -> viewModel.removeSequencerTrack(trackIdx) }
                     )
                 }
             }
@@ -573,6 +639,7 @@ fun MusicStudioScreen(
             Spacer(modifier = Modifier.height(28.dp))
         }
     }
+}
 }
 
     // Modal para guardar proyecto de audio
@@ -656,6 +723,17 @@ fun MusicStudioScreen(
                 viewModel.renamePublicSong(activeProject!!.id, newTitle)
                 projectTitle = newTitle
                 showRenameActiveModal = false
+            }
+        )
+    }
+
+    // Modal para Grabar Muestras de Audio WAV con Microfono y Formas de Onda
+    if (showRecorderModal) {
+        AudioSampleRecorderDialog(
+            viewModel = viewModel,
+            onDismiss = { showRecorderModal = false },
+            onSampleSaved = {
+                showRecorderModal = false
             }
         )
     }
@@ -1053,7 +1131,8 @@ private fun SequencerGridMatrix(
     onToggleSolo: (Int) -> Unit,
     onPreviewSound: (SequencerTrack) -> Unit,
     onClearTrack: (Int) -> Unit,
-    onFillTrack: (Int, Int) -> Unit
+    onFillTrack: (Int, Int) -> Unit,
+    onRemoveTrack: (Int) -> Unit = {}
 ) {
     // Definición de colores distintivos por instrumento
     val trackThemes = listOf(
@@ -1062,7 +1141,10 @@ private fun SequencerGridMatrix(
         TrackTheme(Color(0xFFFBBF24), Color(0xFFD97706)), // Hi-Hat: Ámbar Oro
         TrackTheme(Color(0xFF10B981), Color(0xFF059669)), // Clap: Verde Esmeralda
         TrackTheme(Color(0xFF8B5CF6), Color(0xFF7C3AED)), // Synth Bass: Violeta Profundo
-        TrackTheme(Color(0xFF06B6D4), Color(0xFF0891B2))  // Lead Synth: Cian Brillante
+        TrackTheme(Color(0xFF06B6D4), Color(0xFF0891B2)), // Lead Synth: Cian Brillante
+        TrackTheme(Color(0xFFE11D48), Color(0xFFBE123C)), // Sample WAV 1: Carmesí
+        TrackTheme(Color(0xFF3B82F6), Color(0xFF1D4ED8)), // Sample WAV 2: Azul
+        TrackTheme(Color(0xFF14B8A6), Color(0xFF0D9488))  // Sample WAV 3: Turquesa
     )
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1148,11 +1230,13 @@ private fun SequencerGridMatrix(
                     track = track,
                     trackIndex = trackIdx,
                     themeColor = theme.accentColor,
+                    canDelete = track.soundType.startsWith("sample:") || tracks.size > 4,
                     onToggleMute = { onToggleMute(trackIdx) },
                     onToggleSolo = { onToggleSolo(trackIdx) },
                     onPreviewSound = { onPreviewSound(track) },
                     onClearTrack = { onClearTrack(trackIdx) },
-                    onFillTrack = { interval -> onFillTrack(trackIdx, interval) }
+                    onFillTrack = { interval -> onFillTrack(trackIdx, interval) },
+                    onRemoveTrack = { onRemoveTrack(trackIdx) }
                 )
 
                 Spacer(modifier = Modifier.width(4.dp))
@@ -1193,14 +1277,14 @@ private fun TrackControlCapsule(
     track: SequencerTrack,
     trackIndex: Int,
     themeColor: Color,
+    canDelete: Boolean = false,
     onToggleMute: () -> Unit,
     onToggleSolo: () -> Unit,
     onPreviewSound: () -> Unit,
     onClearTrack: () -> Unit,
-    onFillTrack: (Int) -> Unit
+    onFillTrack: (Int) -> Unit,
+    onRemoveTrack: () -> Unit = {}
 ) {
-    var showMenu by remember { mutableStateOf(false) }
-
     Surface(
         color = Color(0xFF1E293B),
         shape = RoundedCornerShape(8.dp),
@@ -1240,14 +1324,31 @@ private fun TrackControlCapsule(
                     )
                 }
                 Text(
-                    text = "Toca para oír",
-                    color = Color(0xFF64748B),
-                    fontSize = 8.sp
+                    text = if (track.soundType.startsWith("sample:")) "WAV Sample" else "Toca para oír",
+                    color = if (track.soundType.startsWith("sample:")) Color(0xFFFB7185) else Color(0xFF64748B),
+                    fontSize = 8.sp,
+                    maxLines = 1
                 )
             }
 
-            // Botones de MUTE [M] y SOLO [S]
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            // Botones de MUTE [M], SOLO [S] y Eliminar si es custom sample
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (canDelete) {
+                    IconButton(
+                        onClick = onRemoveTrack,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .testTag("track_delete_$trackIndex")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Eliminar pista",
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(11.dp)
+                        )
+                    }
+                }
+
                 // Solo [S]
                 Surface(
                     onClick = onToggleSolo,
