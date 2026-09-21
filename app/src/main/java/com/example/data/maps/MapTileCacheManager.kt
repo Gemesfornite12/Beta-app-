@@ -3,6 +3,8 @@ package com.example.data.maps
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Handler
+import android.os.Looper
 import org.maplibre.android.MapLibre
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
@@ -53,6 +55,9 @@ object MapTileCacheManager {
     @Volatile
     private var isInitialized = false
 
+    @Volatile
+    private var httpDiskCache: Cache? = null
+
     /**
      * Obtiene la política configurada de eliminación automática en días (-1 = Nunca).
      */
@@ -90,6 +95,7 @@ object MapTileCacheManager {
                 cacheDirectory.mkdirs()
             }
             val diskCache = Cache(cacheDirectory, HTTP_CACHE_SIZE)
+            httpDiskCache = diskCache
 
             val customOkHttpClient = OkHttpClient.Builder()
                 .cache(diskCache)
@@ -139,16 +145,23 @@ object MapTileCacheManager {
      */
     fun getCacheSizeMb(context: Context): Double {
         var totalBytes = 0L
+        val appContext = context.applicationContext
         try {
-            val httpCacheDir = File(context.cacheDir, "maplibre_tile_http_cache")
+            val httpCacheDir = File(appContext.cacheDir, "maplibre_tile_http_cache")
             if (httpCacheDir.exists()) {
                 totalBytes += calculateDirectorySize(httpCacheDir)
             }
-            val appFilesDir = context.filesDir
+            val appFilesDir = appContext.filesDir
             val maplibreDbFiles = appFilesDir.listFiles { file ->
                 file.name.contains("mbgl-offline")
             }
             maplibreDbFiles?.forEach { totalBytes += it.length() }
+
+            // Bases de datos en databases/
+            val dbDir = File(appContext.applicationInfo.dataDir, "databases")
+            if (dbDir.exists()) {
+                dbDir.listFiles { file -> file.name.contains("mbgl-offline") }?.forEach { totalBytes += it.length() }
+            }
         } catch (_: Exception) {}
         return totalBytes / (1024.0 * 1024.0)
     }
@@ -162,27 +175,89 @@ object MapTileCacheManager {
     }
 
     /**
-     * Limpia la memoria caché local en disco y purga el almacenamiento ambiental.
+     * Limpia completamente la memoria caché local en disco, elimina regiones sin conexión
+     * y compacta la base de datos de MapLibre.
      */
     fun clearCache(context: Context, onComplete: () -> Unit = {}) {
-        try {
-            val httpCacheDir = File(context.applicationContext.cacheDir, "maplibre_tile_http_cache")
-            if (httpCacheDir.exists()) {
-                httpCacheDir.deleteRecursively()
-                httpCacheDir.mkdirs()
+        val appContext = context.applicationContext
+        val mainHandler = Handler(Looper.getMainLooper())
+
+        Thread {
+            try {
+                // 1. Evict OkHttp Disk Cache
+                try {
+                    httpDiskCache?.evictAll()
+                } catch (_: Throwable) {}
+
+                // 2. Limpiar directorio HTTP
+                val httpCacheDir = File(appContext.cacheDir, "maplibre_tile_http_cache")
+                if (httpCacheDir.exists()) {
+                    httpCacheDir.listFiles()?.forEach { it.deleteRecursively() }
+                }
+
+                // 3. Limpiar regiones offline y caché ambiental en MapLibre
+                val offlineManager = OfflineManager.getInstance(appContext)
+
+                offlineManager.listOfflineRegions(object : OfflineManager.ListOfflineRegionsCallback {
+                    override fun onList(offlineRegions: Array<OfflineRegion>?) {
+                        if (!offlineRegions.isNullOrEmpty()) {
+                            for (region in offlineRegions) {
+                                try {
+                                    region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
+                                        override fun onDelete() {}
+                                        override fun onError(error: String) {}
+                                    })
+                                } catch (_: Throwable) {}
+                            }
+                        }
+
+                        // 4. Limpiar e invalidar caché ambiental
+                        offlineManager.clearAmbientCache(object : OfflineManager.FileSourceCallback {
+                            override fun onSuccess() {
+                                offlineManager.packDatabase(object : OfflineManager.FileSourceCallback {
+                                    override fun onSuccess() {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                    override fun onError(message: String) {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                })
+                            }
+                            override fun onError(message: String) {
+                                offlineManager.packDatabase(object : OfflineManager.FileSourceCallback {
+                                    override fun onSuccess() {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                    override fun onError(message: String) {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                })
+                            }
+                        })
+                    }
+
+                    override fun onError(error: String) {
+                        offlineManager.clearAmbientCache(object : OfflineManager.FileSourceCallback {
+                            override fun onSuccess() {
+                                offlineManager.packDatabase(object : OfflineManager.FileSourceCallback {
+                                    override fun onSuccess() {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                    override fun onError(message: String) {
+                                        mainHandler.post { onComplete() }
+                                    }
+                                })
+                            }
+                            override fun onError(message: String) {
+                                mainHandler.post { onComplete() }
+                            }
+                        })
+                    }
+                })
+            } catch (_: Throwable) {
+                mainHandler.post { onComplete() }
             }
-            val offlineManager = OfflineManager.getInstance(context.applicationContext)
-            offlineManager.clearAmbientCache(object : OfflineManager.FileSourceCallback {
-                override fun onSuccess() {
-                    onComplete()
-                }
-                override fun onError(message: String) {
-                    onComplete()
-                }
-            })
-        } catch (_: Throwable) {
-            onComplete()
-        }
+        }.start()
     }
 
     /**

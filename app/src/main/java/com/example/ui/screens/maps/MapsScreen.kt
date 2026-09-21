@@ -561,6 +561,7 @@ fun MapsScreen(onBack: () -> Unit) {
     var isNetworkConnected by remember { mutableStateOf(true) }
     var autoCleanDays by remember { mutableIntStateOf(15) }
     var cleanNoticeMessage by remember { mutableStateOf<String?>(null) }
+    var isClearingCache by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         autoCleanDays = MapTileCacheManager.getAutoCleanDays(context)
@@ -2187,18 +2188,37 @@ fun MapsScreen(onBack: () -> Unit) {
                     // Botón para vaciar caché
                     OutlinedButton(
                         onClick = {
-                            MapTileCacheManager.clearCache(context) {
-                                cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
-                                preCacheProgress = PreCacheProgress()
-                                cleanNoticeMessage = "Caché vaciada por completo"
+                            if (!isClearingCache) {
+                                isClearingCache = true
+                                cleanNoticeMessage = "Liberando espacio y compactando..."
+                                MapTileCacheManager.clearCache(context) {
+                                    cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                    preCacheProgress = PreCacheProgress()
+                                    cleanNoticeMessage = "Almacenamiento vaciado con éxito"
+                                    isClearingCache = false
+                                }
                             }
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                        enabled = !isClearingCache,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFEF4444),
+                            disabledContentColor = Color.Gray
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.Delete, null, Modifier.size(16.dp), tint = Color(0xFFEF4444))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Vaciar todo el almacenamiento en caché", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        if (isClearingCache) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = Color(0xFFEF4444),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Vaciando almacenamiento...", color = Color.Gray, fontSize = 12.sp)
+                        } else {
+                            Icon(Icons.Default.Delete, null, Modifier.size(16.dp), tint = Color(0xFFEF4444))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Vaciar todo el almacenamiento en caché", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        }
                     }
                 }
             },
