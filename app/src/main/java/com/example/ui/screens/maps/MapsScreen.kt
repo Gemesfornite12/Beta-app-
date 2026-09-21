@@ -63,7 +63,13 @@ import androidx.compose.material.icons.filled.TurnSlightLeft
 import androidx.compose.material.icons.filled.TurnSlightRight
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +80,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,6 +95,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -114,6 +122,8 @@ import com.example.data.api.OpenRouteServiceClient
 import com.example.data.api.OrsProfiles
 import com.example.data.api.OrsRouteSummary
 import com.example.data.api.OrsStep
+import com.example.data.maps.MapTileCacheManager
+import com.example.data.maps.PreCacheProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -543,6 +553,17 @@ fun MapsScreen(onBack: () -> Unit) {
 
     var lastTtsSpokenTime by remember { mutableLongStateOf(0L) }
     var lastTtsSpokenInstruction by remember { mutableStateOf("") }
+
+    // Estados de Caché y Modo Sin Conexión para MapLibre
+    var cacheSizeMb by remember { mutableDoubleStateOf(0.0) }
+    var preCacheProgress by remember { mutableStateOf(PreCacheProgress()) }
+    var showCacheDialog by remember { mutableStateOf(false) }
+    var isNetworkConnected by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+        isNetworkConnected = MapTileCacheManager.isNetworkAvailable(context)
+    }
 
     // Detección reactiva en tiempo real del nivel de carga y estado de conexión
     DisposableEffect(context) {
@@ -1043,7 +1064,7 @@ fun MapsScreen(onBack: () -> Unit) {
     }
 
     val mapView = remember(context) {
-        MapLibre.getInstance(context)
+        MapTileCacheManager.initialize(context.applicationContext)
         MapView(context).apply {
             getMapAsync { m ->
                 map = m
@@ -1084,14 +1105,16 @@ fun MapsScreen(onBack: () -> Unit) {
 
     DisposableEffect(owner, mapView) {
         val observer = LifecycleEventObserver { _, e ->
-            when (e) {
-                Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
-                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
-                Lifecycle.Event.ON_STOP -> mapView.onStop()
-                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
-                else -> Unit
-            }
+            try {
+                when (e) {
+                    Lifecycle.Event.ON_START -> mapView.onStart()
+                    Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                    Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                    Lifecycle.Event.ON_STOP -> mapView.onStop()
+                    Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
+                    else -> Unit
+                }
+            } catch (_: Throwable) {}
         }
         owner.lifecycle.addObserver(observer)
         onDispose {
@@ -1113,6 +1136,21 @@ fun MapsScreen(onBack: () -> Unit) {
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(Icons.Default.ChevronLeft, "Volver")
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                isNetworkConnected = MapTileCacheManager.isNetworkAvailable(context)
+                                showCacheDialog = true
+                            }
+                        ) {
+                            Icon(
+                                imageVector = if (!isNetworkConnected) Icons.Default.CloudDone else Icons.Default.Storage,
+                                contentDescription = "Gestión de Caché y Modo Offline",
+                                tint = if (!isNetworkConnected) Color(0xFFF59E0B) else Color(0xFF10B981)
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -1843,19 +1881,55 @@ fun MapsScreen(onBack: () -> Unit) {
                                             )
                                         }
 
-                                        Button(
-                                            onClick = {
-                                                navigating = true
-                                                step = 0
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = Color(0xFF10B981),
-                                                contentColor = Color.White
-                                            )
-                                        ) {
-                                            Icon(Icons.Default.Navigation, null, Modifier.size(16.dp))
-                                            Spacer(Modifier.width(6.dp))
-                                            Text("Navegar", fontWeight = FontWeight.Bold)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = {
+                                                    if (!preCacheProgress.isDownloading && points.isNotEmpty()) {
+                                                        MapTileCacheManager.preCacheRouteTiles(context, points, STYLE) { progress ->
+                                                            preCacheProgress = progress
+                                                            if (progress.isComplete) {
+                                                                cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.padding(end = 4.dp)
+                                            ) {
+                                                if (preCacheProgress.isDownloading) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(20.dp),
+                                                        color = Color(0xFF38BDF8),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else if (preCacheProgress.isComplete) {
+                                                    Icon(
+                                                        Icons.Default.CheckCircle,
+                                                        contentDescription = "Ruta guardada offline",
+                                                        tint = Color(0xFF10B981)
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        Icons.Default.Download,
+                                                        contentDescription = "Descargar ruta para uso sin conexión",
+                                                        tint = Color(0xFF38BDF8)
+                                                    )
+                                                }
+                                            }
+
+                                            Button(
+                                                onClick = {
+                                                    navigating = true
+                                                    step = 0
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = Color(0xFF10B981),
+                                                    contentColor = Color.White
+                                                )
+                                            ) {
+                                                Icon(Icons.Default.Navigation, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Navegar", fontWeight = FontWeight.Bold)
+                                            }
                                         }
                                     }
                                 }
@@ -1888,5 +1962,159 @@ fun MapsScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    // Diálogo de Gestión de Caché y Modo Offline de MapLibre
+    if (showCacheDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheDialog = false },
+            containerColor = Color(0xFF1E293B),
+            titleContentColor = Color.White,
+            textContentColor = Color.White,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Storage, contentDescription = null, tint = Color(0xFF10B981))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Caché y Modo Offline", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Estado de Red
+                    Surface(
+                        color = if (isNetworkConnected) Color(0xFF064E3B).copy(alpha = 0.6f) else Color(0xFF7C2D12).copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (isNetworkConnected) Icons.Default.CloudDone else Icons.Default.CloudDone,
+                                contentDescription = null,
+                                tint = if (isNetworkConnected) Color(0xFF34D399) else Color(0xFFF87171),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (isNetworkConnected) "Conectividad activa (Almacenamiento automático en curso)"
+                                else "Modo sin conexión activo (Usando baldosas locales)",
+                                fontSize = 12.sp,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    // Espacio en Disco Utilizado
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Espacio de baldosas en disco:", fontSize = 13.sp, color = Color.LightGray)
+                        Text(
+                            String.format(Locale.getDefault(), "%.2f MB", cacheSizeMb),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF38BDF8)
+                        )
+                    }
+
+                    // Estado de descarga de ruta
+                    if (preCacheProgress.isDownloading) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Descargando baldosas de ruta...", fontSize = 12.sp, color = Color(0xFF38BDF8))
+                                Text("${preCacheProgress.percentage}%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
+                            }
+                            LinearProgressIndicator(
+                                progress = { preCacheProgress.percentage / 100f },
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                                color = Color(0xFF38BDF8),
+                                trackColor = Color(0xFF334155)
+                            )
+                            if (preCacheProgress.totalTiles > 0) {
+                                Text(
+                                    "${preCacheProgress.completedTiles} de ${preCacheProgress.totalTiles} baldosas guardadas",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                    } else if (preCacheProgress.isComplete) {
+                        Surface(
+                            color = Color(0xFF065F46).copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF34D399), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Ruta completamente lista para navegar sin conexión", fontSize = 12.sp, color = Color(0xFFA7F3D0))
+                            }
+                        }
+                    } else if (preCacheProgress.errorMessage != null) {
+                        Text(
+                            "Nota: ${preCacheProgress.errorMessage}",
+                            fontSize = 11.sp,
+                            color = Color(0xFFFCA5A5)
+                        )
+                    }
+
+                    // Botón para pre-descargar la ruta actual si existe
+                    if (points.isNotEmpty() && !preCacheProgress.isDownloading) {
+                        OutlinedButton(
+                            onClick = {
+                                MapTileCacheManager.preCacheRouteTiles(context, points, STYLE) { progress ->
+                                    preCacheProgress = progress
+                                    if (progress.isComplete) {
+                                        cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Download, null, Modifier.size(16.dp), tint = Color(0xFF38BDF8))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Guardar baldosas de la ruta actual", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                        }
+                    }
+
+                    // Botón para vaciar caché
+                    OutlinedButton(
+                        onClick = {
+                            MapTileCacheManager.clearCache(context) {
+                                cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                preCacheProgress = PreCacheProgress()
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Delete, null, Modifier.size(16.dp), tint = Color(0xFFEF4444))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Vaciar almacenamiento en caché", color = Color(0xFFEF4444), fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showCacheDialog = false },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF10B981),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Cerrar")
+                }
+            }
+        )
     }
 }

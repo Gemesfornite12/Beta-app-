@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.FcmTokenManager
+import com.example.data.maps.MapTileCacheManager
 import com.example.ui.navigation.HashRoute
 import com.example.ui.navigation.HashRouter
 import com.example.ui.navigation.HashRouterDock
@@ -93,6 +94,13 @@ class MainActivity : ComponentActivity() {
     // Inicializar canales de notificación y registrar ciclo de vida
     ChatNotificationManager.createNotificationChannels(applicationContext)
     ChatNotificationManager.isAppInForeground = true
+
+    // Inicializar MapLibre y motor de caché de mapas de forma segura
+    try {
+      MapTileCacheManager.initialize(applicationContext)
+    } catch (e: Throwable) {
+      Log.e("MainActivity", "Error inicializando MapTileCacheManager: ${e.message}", e)
+    }
 
     // Extraer canal si la actividad se lanzó desde un toque en notificación push
     intent?.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
