@@ -177,6 +177,64 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
+    fun onMapTapped(point: LatLng) {
+        if (isLoading) return
+        destinationPoint = point
+        scope.launch {
+            isLoading = true
+            routeError = null
+            routeSummary = null
+            instructions = emptyList()
+            routePoints = emptyList()
+            try {
+                if (!orsKeyAvailable) {
+                    destination = String.format(Locale.getDefault(), "%.5f, %.5f", point.latitude, point.longitude)
+                    routeError = "Configura OPENROUTESERVICE_API_KEY en los Secrets de compilación."
+                    return@launch
+                }
+                val label = withContext(Dispatchers.IO) {
+                    try {
+                        val rev = OpenRouteServiceClient.api.reverseGeocode(
+                            apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
+                            longitude = point.longitude,
+                            latitude = point.latitude,
+                            size = 1
+                        )
+                        rev.features.firstOrNull()?.properties?.label
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                destination = label ?: String.format(Locale.getDefault(), "%.5f, %.5f", point.latitude, point.longitude)
+
+                val result = withContext(Dispatchers.IO) {
+                    OpenRouteServiceClient.api.route(
+                        profile = selectedProfile.first,
+                        apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
+                        start = "${startPoint.longitude},${startPoint.latitude}",
+                        end = "${point.longitude},${point.latitude}",
+                        instructions = true
+                    )
+                }
+                val feature = result.features.firstOrNull() ?: error("No se pudo calcular la ruta.")
+                routeSummary = feature.properties.summary
+                instructions = feature.properties.segments.flatMap { segment ->
+                    segment.steps.map { step -> step.instruction }
+                }
+                val coords = feature.geometry.coordinates
+                if (coords.isNotEmpty()) {
+                    routePoints = coords.mapNotNull { pt ->
+                        if (pt.size >= 2) LatLng(pt[1], pt[0]) else null
+                    }
+                }
+            } catch (error: Exception) {
+                routeError = error.message ?: "No se pudo calcular la ruta al punto seleccionado."
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -211,7 +269,8 @@ fun MapsScreen(onBack: () -> Unit) {
                             mapType = MapType.NORMAL,
                             isMyLocationEnabled = hasLocationPermission
                         ),
-                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission)
+                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission),
+                        onMapClick = { tappedPoint -> onMapTapped(tappedPoint) }
                     ) {
                         Marker(
                             state = MarkerState(startPoint),
@@ -254,7 +313,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         label = { Text("Destino") },
-                        placeholder = { Text("Ej. Parque Central de Heredia") }
+                        placeholder = { Text("Ej. Parque Central o toca en el mapa") }
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -290,7 +349,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         }
                     }
                     Text(
-                        "Inicio predeterminado: San Francisco, Heredia",
+                        "Inicio: San Francisco, Heredia • Toca en el mapa para fijar destino",
                         color = Color.LightGray,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(top = 6.dp)
