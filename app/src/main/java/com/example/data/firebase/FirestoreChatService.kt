@@ -314,10 +314,18 @@ class FirestoreChatService(private val context: Context) {
     suspend fun addReaction(channelId: String, firestoreId: String, emoji: String, currentReactions: String): Boolean {
         if (firestoreId.isBlank()) return false
         val updatedReactions = if (currentReactions.isBlank()) emoji else "$currentReactions,$emoji"
+        return updateReactions(channelId, firestoreId, updatedReactions)
+    }
+
+    /**
+     * Actualiza la cadena completa de reacciones emoji en RTDB y Firestore.
+     */
+    suspend fun updateReactions(channelId: String, firestoreId: String, newReactions: String): Boolean {
+        if (firestoreId.isBlank()) return false
         val rtdb = rtdbRef
         if (rtdb != null) {
             try {
-                rtdb.child("chats").child(channelId).child("messages").child(firestoreId).child("reactions").setValue(updatedReactions).await()
+                rtdb.child("chats").child(channelId).child("messages").child(firestoreId).child("reactions").setValue(newReactions).await()
             } catch (e: Exception) {
                 Log.w(TAG, "Error actualizando reacción en RTDB: ${e.message}")
             }
@@ -329,7 +337,7 @@ class FirestoreChatService(private val context: Context) {
                     .document(channelId)
                     .collection("messages")
                     .document(firestoreId)
-                    .update("reactions", updatedReactions)
+                    .update("reactions", newReactions)
                     .await()
             } catch (_: Exception) {}
         }

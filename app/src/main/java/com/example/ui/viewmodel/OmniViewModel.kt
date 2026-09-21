@@ -2010,13 +2010,45 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addReactionToMessage(msg: ChatMessage, emoji: String) {
-        val currentReactions = if (msg.reactions.isEmpty()) emoji else "${msg.reactions},$emoji"
+    fun toggleReactionOnMessage(msg: ChatMessage, emoji: String) {
+        val currentList = msg.reactions.split(",").filter { it.isNotBlank() }.toMutableList()
+        val index = currentList.indexOf(emoji)
+        if (index != -1) {
+            currentList.removeAt(index)
+        } else {
+            currentList.add(emoji)
+        }
+        val newReactions = currentList.joinToString(",")
+        val updatedMsg = msg.copy(reactions = newReactions)
+
+        _chatMessages.value = _chatMessages.value.map {
+            if (it.id == msg.id || (it.firestoreId.isNotBlank() && it.firestoreId == msg.firestoreId)) updatedMsg else it
+        }
+
         viewModelScope.launch {
-            repo.updateChatMessage(msg.copy(reactions = currentReactions))
+            repo.updateChatMessage(updatedMsg)
             if (msg.firestoreId.isNotBlank()) {
-                rtdbService.addReaction(msg.channelId, msg.firestoreId, emoji, msg.reactions)
-                firestoreChatService.addReaction(msg.channelId, msg.firestoreId, emoji, msg.reactions)
+                rtdbService.updateReactions(msg.channelId, msg.firestoreId, newReactions)
+                firestoreChatService.updateReactions(msg.channelId, msg.firestoreId, newReactions)
+            }
+        }
+    }
+
+    fun addReactionToMessage(msg: ChatMessage, emoji: String) {
+        val currentList = msg.reactions.split(",").filter { it.isNotBlank() }.toMutableList()
+        currentList.add(emoji)
+        val newReactions = currentList.joinToString(",")
+        val updatedMsg = msg.copy(reactions = newReactions)
+
+        _chatMessages.value = _chatMessages.value.map {
+            if (it.id == msg.id || (it.firestoreId.isNotBlank() && it.firestoreId == msg.firestoreId)) updatedMsg else it
+        }
+
+        viewModelScope.launch {
+            repo.updateChatMessage(updatedMsg)
+            if (msg.firestoreId.isNotBlank()) {
+                rtdbService.updateReactions(msg.channelId, msg.firestoreId, newReactions)
+                firestoreChatService.updateReactions(msg.channelId, msg.firestoreId, newReactions)
             }
         }
     }

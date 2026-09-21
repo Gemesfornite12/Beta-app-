@@ -387,6 +387,10 @@ class RealtimeDatabaseService {
         database.child("chats").child(chatId).child("messages").child(messageId).child("reactions").setValue(updatedReactions).await()
     }
 
+    suspend fun updateReactions(chatId: String, messageId: String, newReactions: String) {
+        database.child("chats").child(chatId).child("messages").child(messageId).child("reactions").setValue(newReactions).await()
+    }
+
     // --- CHAT PRIVADO (DIRECTO) ---
     suspend fun createOrGetDirectChat(targetEmail: String, targetName: String): String {
         val user = auth.currentUser ?: error("Usuario no autenticado")

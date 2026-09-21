@@ -63,6 +63,12 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Unarchive
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.example.ui.components.MessageReactionMenuDialog
+import com.example.ui.components.MessageReactionsRow
 import com.example.ui.components.VideoPlayer
 import com.example.ui.components.YouTubeOverlayPlayerDialog
 import androidx.compose.material.icons.filled.Videocam
@@ -211,6 +217,7 @@ fun ChatScreen(
     var showGroupManageDialog by remember { mutableStateOf(false) }
     var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
     var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
@@ -1375,7 +1382,8 @@ fun ChatScreen(
                         isSearchMatch = isMatch,
                         searchKeyword = searchKeyword,
                         onTogglePlayAudio = { audioId -> viewModel.togglePlayChatAudio(audioId) },
-                        onReact = { emoji -> viewModel.addReactionToMessage(msg, emoji) },
+                        onReact = { emoji -> viewModel.toggleReactionOnMessage(msg, emoji) },
+                        onOpenReactionMenu = { messageForReactionMenu = msg },
                         onDelete = { messageToDelete = msg },
                         onShowDeliveryStatus = { selectedMessageForStatus = it },
                         onOpenAttachedDoc = { docId ->
@@ -1403,6 +1411,38 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // Modal de Menú Contextual de Reacciones activado por Long-Press
+    if (messageForReactionMenu != null) {
+        val targetMsg = messageForReactionMenu!!
+        val isTargetMe = targetMsg.senderEmail == (authState.currentUser?.email ?: "gonzalez24029@gmail.com")
+        MessageReactionMenuDialog(
+            message = targetMsg,
+            isMe = isTargetMe,
+            onDismiss = { messageForReactionMenu = null },
+            onReact = { emoji ->
+                viewModel.toggleReactionOnMessage(targetMsg, emoji)
+            },
+            onCopyText = {
+                try {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("Mensaje", targetMsg.text)
+                    clipboard?.setPrimaryClip(clip)
+                    android.widget.Toast.makeText(context, "Texto copiado al portapapeles", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {}
+            },
+            onReply = {
+                val preview = if (targetMsg.text.length > 30) targetMsg.text.take(30) + "..." else targetMsg.text
+                viewModel.onChatInputChanged("💬 @${targetMsg.senderName}: \"$preview\"\n")
+            },
+            onShowDeliveryStatus = {
+                selectedMessageForStatus = targetMsg
+            },
+            onDelete = {
+                messageToDelete = targetMsg
+            }
+        )
     }
 
     // Modal de Reproductor Overlay de YouTube en pantalla del chat
@@ -1804,6 +1844,7 @@ fun ChatScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
@@ -1813,6 +1854,7 @@ private fun MessageBubble(
     searchKeyword: String = "",
     onTogglePlayAudio: (Long) -> Unit,
     onReact: (String) -> Unit,
+    onOpenReactionMenu: () -> Unit = {},
     onDelete: () -> Unit,
     onShowDeliveryStatus: (ChatMessage) -> Unit = {},
     onOpenAttachedDoc: (Long) -> Unit,
@@ -1823,6 +1865,7 @@ private fun MessageBubble(
     onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val gifImageLoader = remember(context) {
         coil.ImageLoader.Builder(context)
             .components {
@@ -1940,6 +1983,16 @@ private fun MessageBubble(
                     .then(
                         if (isSearchMatch) Modifier.border(2.dp, Color(0xFFF59E0B), bubbleShape)
                         else Modifier
+                    )
+                    .clip(bubbleShape)
+                    .combinedClickable(
+                        onClick = {
+                            // Clic simple en el mensaje
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onOpenReactionMenu()
+                        }
                     )
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -2446,74 +2499,47 @@ private fun MessageBubble(
                 }
             }
 
-            // Reacciones y opciones debajo de la burbuja
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
-            ) {
-                // Reacciones acumuladas
-                if (message.reactions.isNotEmpty()) {
-                    val tags = message.reactions.split(",").filter { it.isNotBlank() }
-                    tags.distinct().forEach { emoji ->
-                        val count = tags.count { it == emoji }
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF334155),
-                            modifier = Modifier
-                                .padding(end = 4.dp)
-                                .clickable { onReact(emoji) }
+            // Reacciones y opciones interactivas debajo de la burbuja
+            if (message.reactions.isNotEmpty()) {
+                MessageReactionsRow(
+                    reactionsString = message.reactions,
+                    isMe = isMe,
+                    onReactClick = { emoji -> onReact(emoji) },
+                    onOpenReactionMenu = onOpenReactionMenu,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            } else {
+                // Barra sutil cuando no hay reacciones
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
+                ) {
+                    Text(
+                        text = "+😊",
+                        fontSize = 11.sp,
+                        color = Color(0xFF64748B),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onOpenReactionMenu)
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+
+                    if (isMe) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+                            onClick = onDelete,
+                            modifier = Modifier.size(20.dp)
                         ) {
-                            Text(
-                                text = if (count > 1) "$emoji $count" else emoji,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Eliminar mensaje",
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(13.dp)
                             )
                         }
-                    }
-                }
-
-                // Selector rápido de emojis
-                Text(
-                    text = "+👍",
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B),
-                    modifier = Modifier
-                        .clickable { onReact("👍") }
-                        .padding(horizontal = 3.dp)
-                )
-                Text(
-                    text = "+❤️",
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B),
-                    modifier = Modifier
-                        .clickable { onReact("❤️") }
-                        .padding(horizontal = 3.dp)
-                )
-                Text(
-                    text = "+🔥",
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B),
-                    modifier = Modifier
-                        .clickable { onReact("🔥") }
-                        .padding(horizontal = 3.dp)
-                )
-
-                // Botón para eliminar mi mensaje
-                if (isMe) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Eliminar mensaje",
-                            tint = Color(0xFF64748B),
-                            modifier = Modifier.size(13.dp)
-                        )
                     }
                 }
             }
