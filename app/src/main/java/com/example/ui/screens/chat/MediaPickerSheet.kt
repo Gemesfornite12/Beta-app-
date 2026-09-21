@@ -165,21 +165,21 @@ val PRESET_VIDEOS = listOf(
         title = "Demo en Vivo Secuenciador Lo-Fi",
         description = "0:34 • Grabación en tiempo real del beat OmniStudio",
         type = "video",
-        url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+        url = "https://assets.mixkit.co/videos/preview/mixkit-hands-of-a-man-working-on-a-computer-1618-small.mp4",
         thumbnail = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&q=80"
     ),
     PresetMedia(
         title = "Revisión de Diapositivas PPTX",
         description = "1:15 • Walkthrough de la presentación exportada",
         type = "video",
-        url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+        url = "https://assets.mixkit.co/videos/preview/mixkit-keyboard-typing-close-up-1616-small.mp4",
         thumbnail = "https://images.unsplash.com/photo-1557804506-669a67965ba0?w=600&q=80"
     ),
     PresetMedia(
         title = "Sesión de Síntesis Analógica",
         description = "0:45 • Prueba de oscilador senoidal en tiempo real",
         type = "video",
-        url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+        url = "https://assets.mixkit.co/videos/preview/mixkit-set-of-plateaus-seen-from-the-sky-in-a-sunset-26070-small.mp4",
         thumbnail = "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&q=80"
     )
 )

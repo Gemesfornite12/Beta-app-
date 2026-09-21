@@ -216,7 +216,7 @@ object GeminiStudioManager {
                             val uri = firstVideo?.get("uri")?.jsonPrimitive?.contentOrNull
 
                             return@withContext VeoVideoResult(
-                                videoUri = uri ?: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                                videoUri = uri ?: "https://assets.mixkit.co/videos/preview/mixkit-hands-of-a-man-working-on-a-computer-1618-small.mp4",
                                 operationId = opName,
                                 prompt = prompt,
                                 aspectRatio = aspectRatio,
@@ -231,7 +231,7 @@ object GeminiStudioManager {
 
             // Si es preview inmediata o simulador de video generado
             VeoVideoResult(
-                videoUri = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+                videoUri = "https://assets.mixkit.co/videos/preview/mixkit-set-of-plateaus-seen-from-the-sky-in-a-sunset-26070-small.mp4",
                 operationId = opName,
                 prompt = prompt,
                 aspectRatio = aspectRatio,

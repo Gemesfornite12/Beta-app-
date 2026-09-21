@@ -2626,30 +2626,63 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
         val channelId = _currentChannel.value
-        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService(getApplication())
+        val context = getApplication<Application>()
+        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService(context)
 
         viewModelScope.launch {
             var finalUrl = mediaUrl
+
+            // Si es un URI local (content:// o file://), aseguramos una copia interna persistente
             if (mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")) {
+                val inputUri = android.net.Uri.parse(mediaUrl)
+                var localFileUri: android.net.Uri = inputUri
+
                 try {
-                    val uri = android.net.Uri.parse(mediaUrl)
-                    val currentUser = FirebaseAuth.getInstance().currentUser
-                    if (currentUser == null) {
-                        Log.e("OmniViewModel", "Usuario no autenticado, abortando subida.")
-                        return@launch
+                    if (mediaUrl.startsWith("content://")) {
+                        val mediaDir = java.io.File(context.filesDir, "media_cache").apply { mkdirs() }
+                        val ext = when (mediaType) {
+                            "image" -> "jpg"
+                            "video" -> "mp4"
+                            "audio" -> "mp3"
+                            else -> "bin"
+                        }
+                        val destFile = java.io.File(mediaDir, "media_${System.currentTimeMillis()}.$ext")
+                        context.contentResolver.openInputStream(inputUri)?.use { input ->
+                            destFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        if (destFile.exists() && destFile.length() > 0) {
+                            localFileUri = android.net.Uri.fromFile(destFile)
+                            finalUrl = localFileUri.toString()
+                        }
                     }
-                    val ownerUid = currentUser.uid
-                    val mimeType = getApplication<Application>().contentResolver.getType(uri) ?: "application/octet-stream"
+                } catch (e: Exception) {
+                    Log.w("OmniViewModel", "No se pudo copiar archivo localmente: ${e.message}")
+                }
+
+                // Intentamos subir a Firebase Storage
+                try {
+                    val currentUser = FirebaseAuth.getInstance().currentUser
+                    val ownerUid = currentUser?.uid ?: user?.email ?: "local_user"
+                    val mimeType = context.contentResolver.getType(localFileUri) 
+                        ?: when (mediaType) {
+                            "image" -> "image/jpeg"
+                            "video" -> "video/mp4"
+                            "audio" -> "audio/mpeg"
+                            else -> "application/octet-stream"
+                        }
+
                     val uploaded = mediaStorageService.uploadMedia(
                         ownerUid = ownerUid,
-                        localUri = uri,
+                        localUri = localFileUri,
                         mediaType = mediaType,
                         mimeType = mimeType
                     )
                     finalUrl = uploaded.downloadUrl
                 } catch (e: Exception) {
-                    Log.e("OmniViewModel", "Error subiendo media: ${e.message}")
-                    return@launch
+                    Log.w("OmniViewModel", "Aviso: No se pudo subir a Firebase Storage (${e.message}). Se usará copia local.", e)
+                    // No hacemos return@launch, así la foto/video se envía de todos modos localmente
                 }
             }
 
