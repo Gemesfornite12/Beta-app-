@@ -559,8 +559,11 @@ fun MapsScreen(onBack: () -> Unit) {
     var preCacheProgress by remember { mutableStateOf(PreCacheProgress()) }
     var showCacheDialog by remember { mutableStateOf(false) }
     var isNetworkConnected by remember { mutableStateOf(true) }
+    var autoCleanDays by remember { mutableIntStateOf(15) }
+    var cleanNoticeMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        autoCleanDays = MapTileCacheManager.getAutoCleanDays(context)
         cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
         isNetworkConnected = MapTileCacheManager.isNetworkAvailable(context)
     }
@@ -2087,12 +2090,107 @@ fun MapsScreen(onBack: () -> Unit) {
                         }
                     }
 
+                    // Configuración de Eliminación Automática por Días
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = null,
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Auto-eliminar descargas tras:",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+
+                        // Selector de días (7, 15, 30, 60, Nunca)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val options = listOf(
+                                7 to "7 d",
+                                15 to "15 d",
+                                30 to "30 d",
+                                60 to "60 d",
+                                -1 to "Nunca"
+                            )
+
+                            options.forEach { (days, label) ->
+                                val isSelected = autoCleanDays == days
+                                Surface(
+                                    onClick = {
+                                        autoCleanDays = days
+                                        MapTileCacheManager.setAutoCleanDays(context, days)
+                                        cleanNoticeMessage = null
+                                    },
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (isSelected) Color(0xFF10B981) else Color(0xFF334155),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) Color.White else Color.LightGray
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = if (autoCleanDays > 0)
+                                "Las descargas de más de $autoCleanDays días se depuran automáticamente al iniciar la app."
+                            else
+                                "Las descargas permanecerán guardadas de forma indefinida.",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+
+                        if (autoCleanDays > 0) {
+                            OutlinedButton(
+                                onClick = {
+                                    MapTileCacheManager.cleanExpiredDownloads(context) { deleted ->
+                                        cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
+                                        cleanNoticeMessage = if (deleted > 0) {
+                                            "Se depuraron $deleted ruta(s) de más de $autoCleanDays días"
+                                        } else {
+                                            "No se encontraron descargas que superen $autoCleanDays días"
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Limpiar descargas expiradas ahora", fontSize = 11.sp, color = Color(0xFF38BDF8))
+                            }
+                        }
+
+                        if (cleanNoticeMessage != null) {
+                            Text(
+                                cleanNoticeMessage ?: "",
+                                fontSize = 11.sp,
+                                color = Color(0xFF34D399)
+                            )
+                        }
+                    }
+
                     // Botón para vaciar caché
                     OutlinedButton(
                         onClick = {
                             MapTileCacheManager.clearCache(context) {
                                 cacheSizeMb = MapTileCacheManager.getCacheSizeMb(context)
                                 preCacheProgress = PreCacheProgress()
+                                cleanNoticeMessage = "Caché vaciada por completo"
                             }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
@@ -2100,7 +2198,7 @@ fun MapsScreen(onBack: () -> Unit) {
                     ) {
                         Icon(Icons.Default.Delete, null, Modifier.size(16.dp), tint = Color(0xFFEF4444))
                         Spacer(Modifier.width(6.dp))
-                        Text("Vaciar almacenamiento en caché", color = Color(0xFFEF4444), fontSize = 12.sp)
+                        Text("Vaciar todo el almacenamiento en caché", color = Color(0xFFEF4444), fontSize = 12.sp)
                     }
                 }
             },

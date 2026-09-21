@@ -46,8 +46,28 @@ object MapTileCacheManager {
     private const val AMBIENT_SQLITE_CACHE_SIZE = 350L * 1024L * 1024L // 350 MB
     private const val MAX_OFFLINE_TILES = 100000L
 
+    private const val PREFS_NAME = "maplibre_cache_prefs"
+    private const val KEY_AUTO_CLEAN_DAYS = "auto_clean_days"
+    const val DEFAULT_AUTO_CLEAN_DAYS = 15
+
     @Volatile
     private var isInitialized = false
+
+    /**
+     * Obtiene la política configurada de eliminación automática en días (-1 = Nunca).
+     */
+    fun getAutoCleanDays(context: Context): Int {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getInt(KEY_AUTO_CLEAN_DAYS, DEFAULT_AUTO_CLEAN_DAYS)
+    }
+
+    /**
+     * Guarda la política de eliminación automática de mapas descargados.
+     */
+    fun setAutoCleanDays(context: Context, days: Int) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putInt(KEY_AUTO_CLEAN_DAYS, days).apply()
+    }
 
     /**
      * Inicializa MapLibre y configura el pipeline de red con almacenamiento en caché persistente en disco.
@@ -92,6 +112,11 @@ object MapTileCacheManager {
             )
             offlineManager.setOfflineMapboxTileCountLimit(MAX_OFFLINE_TILES)
             offlineManager.runPackDatabaseAutomatically(true)
+        } catch (_: Throwable) {}
+
+        // 4. Ejecutar limpieza automática en segundo plano de rutas antiguas según los días configurados
+        try {
+            cleanExpiredDownloads(appContext)
         } catch (_: Throwable) {}
 
         isInitialized = true
@@ -157,6 +182,84 @@ object MapTileCacheManager {
             })
         } catch (_: Throwable) {
             onComplete()
+        }
+    }
+
+    /**
+     * Elimina automáticamente las rutas descargadas y baldosas cuya antigüedad supere los días configurados.
+     * Invoca onComplete con el número de rutas eliminadas.
+     */
+    fun cleanExpiredDownloads(context: Context, onComplete: (deletedCount: Int) -> Unit = {}) {
+        val days = getAutoCleanDays(context)
+        if (days <= 0) {
+            onComplete(0)
+            return
+        }
+
+        val maxAgeMs = days.toLong() * 24L * 60L * 60L * 1000L
+        val cutoffTime = System.currentTimeMillis() - maxAgeMs
+
+        try {
+            val offlineManager = OfflineManager.getInstance(context.applicationContext)
+            offlineManager.listOfflineRegions(object : OfflineManager.ListOfflineRegionsCallback {
+                override fun onList(offlineRegions: Array<OfflineRegion>?) {
+                    if (offlineRegions.isNullOrEmpty()) {
+                        onComplete(0)
+                        return
+                    }
+
+                    var deletedCount = 0
+                    var processedCount = 0
+                    val total = offlineRegions.size
+
+                    for (region in offlineRegions) {
+                        var shouldDelete = false
+                        try {
+                            val metadataBytes = region.metadata
+                            if (metadataBytes != null) {
+                                val metaStr = String(metadataBytes, Charsets.UTF_8)
+                                val timestamp = if (metaStr.startsWith("Ruta_")) {
+                                    metaStr.removePrefix("Ruta_").toLongOrNull()
+                                } else null
+
+                                if (timestamp != null && timestamp < cutoffTime) {
+                                    shouldDelete = true
+                                }
+                            }
+                        } catch (_: Throwable) {}
+
+                        if (shouldDelete) {
+                            region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
+                                override fun onDelete() {
+                                    deletedCount++
+                                    processedCount++
+                                    if (processedCount >= total) {
+                                        onComplete(deletedCount)
+                                    }
+                                }
+
+                                override fun onError(error: String) {
+                                    processedCount++
+                                    if (processedCount >= total) {
+                                        onComplete(deletedCount)
+                                    }
+                                }
+                            })
+                        } else {
+                            processedCount++
+                            if (processedCount >= total) {
+                                onComplete(deletedCount)
+                            }
+                        }
+                    }
+                }
+
+                override fun onError(error: String) {
+                    onComplete(0)
+                }
+            })
+        } catch (_: Throwable) {
+            onComplete(0)
         }
     }
 
