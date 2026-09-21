@@ -23,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import com.example.data.service.NavigationForegroundService
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -653,6 +654,51 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
+    // Observar si el usuario presionó "Finalizar navegación" desde la notificación persistente
+    LaunchedEffect(Unit) {
+        NavigationForegroundService.stopRequested.collect { requested ->
+            if (requested) {
+                navigating = false
+                step = 0
+                NavigationForegroundService.clearStopRequest()
+            }
+        }
+    }
+
+    // Mantener la navegación activa en segundo plano mediante Foreground Service y notificaciones en vivo
+    LaunchedEffect(step, distanceToNextManeuver, summary, navigating) {
+        if (navigating) {
+            val s = routeSteps.getOrNull(step)
+            val currentInstruction = s?.let { translateInstructionToSpanish(it.instruction) } ?: "Continúa por la ruta"
+            val stepDist = if (distanceToNextManeuver > 0f) {
+                if (distanceToNextManeuver >= 1000) String.format(Locale.getDefault(), "En %.1f km", distanceToNextManeuver / 1000.0)
+                else "En ${distanceToNextManeuver.roundToInt()} m"
+            } else s?.let {
+                if (it.distance >= 1000) String.format(Locale.getDefault(), "En %.1f km", it.distance / 1000.0)
+                else "En ${it.distance.roundToInt()} m"
+            } ?: ""
+            val title = if (stepDist.isNotBlank()) "$stepDist: $currentInstruction" else currentInstruction
+            val etaInfo = summary?.let { sum ->
+                val d = String.format(Locale.getDefault(), "%.1f km", sum.distance / 1000.0)
+                val t = "${(sum.duration / 60.0).roundToInt()} min"
+                val a = formatTime12Hour(System.currentTimeMillis() + sum.duration.toLong() * 1000L)
+                "$d • $t • Llegada: $a"
+            } ?: "Navegación activa"
+
+            NavigationForegroundService.startOrUpdate(context, title, etaInfo)
+        } else {
+            NavigationForegroundService.stop(context)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!navigating) {
+                NavigationForegroundService.stop(context)
+            }
+        }
+    }
+
     fun route() {
         if (destination.isBlank() || loading) return
         scope.launch {
@@ -1100,6 +1146,7 @@ fun MapsScreen(onBack: () -> Unit) {
                             onClick = {
                                 navigating = false
                                 step = 0
+                                NavigationForegroundService.stop(context)
                                 redraw()
                             },
                             colors = ButtonDefaults.buttonColors(
