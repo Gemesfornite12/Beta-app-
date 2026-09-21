@@ -83,7 +83,10 @@ data class OrsSegment(
 data class OrsStep(
     val instruction: String = "",
     val distance: Double = 0.0,
-    val duration: Double = 0.0
+    val duration: Double = 0.0,
+    val name: String? = null,
+    val type: Int? = null,
+    val way_points: List<Int> = emptyList()
 )
 
 interface OpenRouteServiceApi {
