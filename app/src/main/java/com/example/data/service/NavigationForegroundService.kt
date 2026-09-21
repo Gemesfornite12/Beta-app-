@@ -42,11 +42,16 @@ class NavigationForegroundService : Service() {
             stopForegroundService()
             return START_NOT_STICKY
         }
+        if (action == ACTION_TOGGLE_VOICE) {
+            _toggleVoiceRequested.value = true
+            return START_STICKY
+        }
 
         val instruction = intent?.getStringExtra(EXTRA_INSTRUCTION) ?: "Navegación GPS activa"
         val etaInfo = intent?.getStringExtra(EXTRA_ETA) ?: "Ruta en curso"
+        val isVoiceActive = intent?.getBooleanExtra(EXTRA_VOICE_ENABLED, true) ?: true
 
-        val notification = buildNotification(instruction, etaInfo)
+        val notification = buildNotification(instruction, etaInfo, isVoiceActive)
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -82,7 +87,7 @@ class NavigationForegroundService : Service() {
         wakeLock = null
     }
 
-    private fun buildNotification(instruction: String, etaInfo: String): Notification {
+    private fun buildNotification(instruction: String, etaInfo: String, isVoiceActive: Boolean): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -103,19 +108,37 @@ class NavigationForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val toggleVoiceIntent = Intent(this, NavigationForegroundService::class.java).apply {
+            action = ACTION_TOGGLE_VOICE
+        }
+        val toggleVoicePendingIntent = PendingIntent.getService(
+            this,
+            1003,
+            toggleVoiceIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val voiceStatusText = if (isVoiceActive) "🔊 Voz activa" else "🔇 Silencio"
+        val voiceActionTitle = if (isVoiceActive) "🔇 Silenciar" else "🔊 Activar voz"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(instruction)
             .setContentText(etaInfo)
-            .setSubText("Navegación en vivo")
+            .setSubText(voiceStatusText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setContentIntent(openPendingIntent)
             .addAction(
+                if (isVoiceActive) android.R.drawable.ic_lock_silent_mode else android.R.drawable.ic_btn_speak_now,
+                voiceActionTitle,
+                toggleVoicePendingIntent
+            )
+            .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "Finalizar navegación",
+                "Finalizar",
                 stopPendingIntent
             )
             .build()
@@ -158,8 +181,10 @@ class NavigationForegroundService : Service() {
         const val NOTIFICATION_ID = 2001
         const val ACTION_START_OR_UPDATE = "com.example.action.NAV_START_OR_UPDATE"
         const val ACTION_STOP = "com.example.action.NAV_STOP"
+        const val ACTION_TOGGLE_VOICE = "com.example.action.NAV_TOGGLE_VOICE"
         const val EXTRA_INSTRUCTION = "extra_instruction"
         const val EXTRA_ETA = "extra_eta"
+        const val EXTRA_VOICE_ENABLED = "extra_voice_enabled"
 
         private val _isNavigatingInBackground = MutableStateFlow(false)
         val isNavigatingInBackground = _isNavigatingInBackground.asStateFlow()
@@ -167,16 +192,24 @@ class NavigationForegroundService : Service() {
         private val _stopRequested = MutableStateFlow(false)
         val stopRequested = _stopRequested.asStateFlow()
 
+        private val _toggleVoiceRequested = MutableStateFlow(false)
+        val toggleVoiceRequested = _toggleVoiceRequested.asStateFlow()
+
         fun clearStopRequest() {
             _stopRequested.value = false
         }
 
-        fun startOrUpdate(context: Context, instruction: String, etaInfo: String) {
+        fun clearToggleVoiceRequest() {
+            _toggleVoiceRequested.value = false
+        }
+
+        fun startOrUpdate(context: Context, instruction: String, etaInfo: String, isVoiceActive: Boolean = true) {
             try {
                 val intent = Intent(context, NavigationForegroundService::class.java).apply {
                     action = ACTION_START_OR_UPDATE
                     putExtra(EXTRA_INSTRUCTION, instruction)
                     putExtra(EXTRA_ETA, etaInfo)
+                    putExtra(EXTRA_VOICE_ENABLED, isVoiceActive)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)

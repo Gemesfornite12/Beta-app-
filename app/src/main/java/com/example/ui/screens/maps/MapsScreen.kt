@@ -197,9 +197,40 @@ private fun formatTime12Hour(timestamp: Long): String {
 }
 
 /**
- * Traduce y adapta instrucciones de navegación a un español claro y natural
- * para que el motor de voz TTS las pronuncie con máxima inteligibilidad y volumen.
+ * Modelo para los idiomas del motor de voz TTS.
  */
+data class TtsLanguage(
+    val code: String,
+    val name: String,
+    val flag: String,
+    val locale: Locale,
+    val recalculatingText: String
+)
+
+val availableTtsLanguages = listOf(
+    TtsLanguage("es", "Español", "🇪🇸", Locale("es", "ES"), "Recalculando ruta..."),
+    TtsLanguage("en", "English", "🇺🇸", Locale.US, "Recalculating route..."),
+    TtsLanguage("fr", "Français", "🇫🇷", Locale.FRANCE, "Recalcul de l'itinéraire..."),
+    TtsLanguage("pt", "Português", "🇵🇹", Locale("pt", "PT"), "Recalculando rota..."),
+    TtsLanguage("it", "Italiano", "🇮🇹", Locale.ITALY, "Ricalcolo del percorso..."),
+    TtsLanguage("de", "Deutsch", "🇩🇪", Locale.GERMANY, "Route wird neu berechnet...")
+)
+
+/**
+ * Traduce y adapta instrucciones de navegación según el idioma configurado
+ * para el motor de voz TTS y la interfaz de usuario.
+ */
+private fun translateInstruction(instruction: String, langCode: String): String {
+    return when (langCode) {
+        "es" -> translateInstructionToSpanish(instruction)
+        "fr" -> translateInstructionToFrench(instruction)
+        "pt" -> translateInstructionToPortuguese(instruction)
+        "it" -> translateInstructionToItalian(instruction)
+        "de" -> translateInstructionToGerman(instruction)
+        else -> instruction
+    }
+}
+
 private fun translateInstructionToSpanish(instruction: String): String {
     var text = instruction
     val replacements = listOf(
@@ -227,6 +258,142 @@ private fun translateInstructionToSpanish(instruction: String): String {
         Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Llegada a tu destino",
         Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Has llegado a tu destino",
         Regex("(?i)\\bRoundabout\\b") to "Rotonda"
+    )
+    for ((regex, replacement) in replacements) {
+        text = text.replace(regex, replacement)
+    }
+    return text
+}
+
+private fun translateInstructionToFrench(instruction: String): String {
+    var text = instruction
+    val replacements = listOf(
+        Regex("(?i)\\bHead\\s+northeast\\b") to "Dirigez-vous vers le nord-est",
+        Regex("(?i)\\bHead\\s+northwest\\b") to "Dirigez-vous vers le nord-ouest",
+        Regex("(?i)\\bHead\\s+southeast\\b") to "Dirigez-vous vers le sud-est",
+        Regex("(?i)\\bHead\\s+southwest\\b") to "Dirigez-vous vers le sud-ouest",
+        Regex("(?i)\\bHead\\s+north\\b") to "Dirigez-vous vers le nord",
+        Regex("(?i)\\bHead\\s+south\\b") to "Dirigez-vous vers le sud",
+        Regex("(?i)\\bHead\\s+east\\b") to "Dirigez-vous vers l'est",
+        Regex("(?i)\\bHead\\s+west\\b") to "Dirigez-vous vers l'ouest",
+        Regex("(?i)\\bTurn\\s+sharp\\s+left\\b") to "Tournez fortement à gauche",
+        Regex("(?i)\\bTurn\\s+sharp\\s+right\\b") to "Tournez fortement à droite",
+        Regex("(?i)\\bTurn\\s+slight\\s+left\\b") to "Tournez légèrement à gauche",
+        Regex("(?i)\\bTurn\\s+slight\\s+right\\b") to "Tournez légèrement à droite",
+        Regex("(?i)\\bTurn\\s+left\\b") to "Tournez à gauche",
+        Regex("(?i)\\bTurn\\s+right\\b") to "Tournez à droite",
+        Regex("(?i)\\bKeep\\s+left\\b") to "Serrez à gauche",
+        Regex("(?i)\\bKeep\\s+right\\b") to "Serrez à droite",
+        Regex("(?i)\\bContinue\\s+straight\\b") to "Continuez tout droit",
+        Regex("(?i)\\bContinue\\b") to "Continuez",
+        Regex("(?i)\\bonto\\b") to "sur",
+        Regex("(?i)\\bon\\b") to "sur",
+        Regex("(?i)\\btoward\\b") to "vers",
+        Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Arrivée à destination",
+        Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Vous êtes arrivé à destination",
+        Regex("(?i)\\bRoundabout\\b") to "Rond-point"
+    )
+    for ((regex, replacement) in replacements) {
+        text = text.replace(regex, replacement)
+    }
+    return text
+}
+
+private fun translateInstructionToPortuguese(instruction: String): String {
+    var text = instruction
+    val replacements = listOf(
+        Regex("(?i)\\bHead\\s+northeast\\b") to "Siga para o nordeste",
+        Regex("(?i)\\bHead\\s+northwest\\b") to "Siga para o noroeste",
+        Regex("(?i)\\bHead\\s+southeast\\b") to "Siga para o sudeste",
+        Regex("(?i)\\bHead\\s+southwest\\b") to "Siga para o sudoeste",
+        Regex("(?i)\\bHead\\s+north\\b") to "Siga para o norte",
+        Regex("(?i)\\bHead\\s+south\\b") to "Siga para o sul",
+        Regex("(?i)\\bHead\\s+east\\b") to "Siga para o leste",
+        Regex("(?i)\\bHead\\s+west\\b") to "Siga para o oeste",
+        Regex("(?i)\\bTurn\\s+sharp\\s+left\\b") to "Vire acentuadamente à esquerda",
+        Regex("(?i)\\bTurn\\s+sharp\\s+right\\b") to "Vire acentuadamente à direita",
+        Regex("(?i)\\bTurn\\s+slight\\s+left\\b") to "Vire suavemente à esquerda",
+        Regex("(?i)\\bTurn\\s+slight\\s+right\\b") to "Vire suavemente à direita",
+        Regex("(?i)\\bTurn\\s+left\\b") to "Vire à esquerda",
+        Regex("(?i)\\bTurn\\s+right\\b") to "Vire à direita",
+        Regex("(?i)\\bKeep\\s+left\\b") to "Mantenha-se à esquerda",
+        Regex("(?i)\\bKeep\\s+right\\b") to "Mantenha-se à direita",
+        Regex("(?i)\\bContinue\\s+straight\\b") to "Continue em frente",
+        Regex("(?i)\\bContinue\\b") to "Continue",
+        Regex("(?i)\\bonto\\b") to "em direção a",
+        Regex("(?i)\\bon\\b") to "por",
+        Regex("(?i)\\btoward\\b") to "em direção a",
+        Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Chegada ao destino",
+        Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Você chegou ao destino",
+        Regex("(?i)\\bRoundabout\\b") to "Rotatória"
+    )
+    for ((regex, replacement) in replacements) {
+        text = text.replace(regex, replacement)
+    }
+    return text
+}
+
+private fun translateInstructionToItalian(instruction: String): String {
+    var text = instruction
+    val replacements = listOf(
+        Regex("(?i)\\bHead\\s+northeast\\b") to "Procedi verso nord-est",
+        Regex("(?i)\\bHead\\s+northwest\\b") to "Procedi verso nord-ovest",
+        Regex("(?i)\\bHead\\s+southeast\\b") to "Procedi verso sud-est",
+        Regex("(?i)\\bHead\\s+southwest\\b") to "Procedi verso sud-ovest",
+        Regex("(?i)\\bHead\\s+north\\b") to "Procedi verso nord",
+        Regex("(?i)\\bHead\\s+south\\b") to "Procedi verso sud",
+        Regex("(?i)\\bHead\\s+east\\b") to "Procedi verso est",
+        Regex("(?i)\\bHead\\s+west\\b") to "Procedi verso ovest",
+        Regex("(?i)\\bTurn\\s+sharp\\s+left\\b") to "Svolta a gomito a sinistra",
+        Regex("(?i)\\bTurn\\s+sharp\\s+right\\b") to "Svolta a gomito a destra",
+        Regex("(?i)\\bTurn\\s+slight\\s+left\\b") to "Tieni leggermente a sinistra",
+        Regex("(?i)\\bTurn\\s+slight\\s+right\\b") to "Tieni leggermente a destra",
+        Regex("(?i)\\bTurn\\s+left\\b") to "Svolta a sinistra",
+        Regex("(?i)\\bTurn\\s+right\\b") to "Svolta a destra",
+        Regex("(?i)\\bKeep\\s+left\\b") to "Mantieniti a sinistra",
+        Regex("(?i)\\bKeep\\s+right\\b") to "Mantieniti a destra",
+        Regex("(?i)\\bContinue\\s+straight\\b") to "Continua dritto",
+        Regex("(?i)\\bContinue\\b") to "Continua",
+        Regex("(?i)\\bonto\\b") to "verso",
+        Regex("(?i)\\bon\\b") to "su",
+        Regex("(?i)\\btoward\\b") to "verso",
+        Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Arrivo a destinazione",
+        Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Sei arrivato a destinazione",
+        Regex("(?i)\\bRoundabout\\b") to "Rotatoria"
+    )
+    for ((regex, replacement) in replacements) {
+        text = text.replace(regex, replacement)
+    }
+    return text
+}
+
+private fun translateInstructionToGerman(instruction: String): String {
+    var text = instruction
+    val replacements = listOf(
+        Regex("(?i)\\bHead\\s+northeast\\b") to "Fahren Sie nach Nordosten",
+        Regex("(?i)\\bHead\\s+northwest\\b") to "Fahren Sie nach Nordwesten",
+        Regex("(?i)\\bHead\\s+southeast\\b") to "Fahren Sie nach Südosten",
+        Regex("(?i)\\bHead\\s+southwest\\b") to "Fahren Sie nach Südwesten",
+        Regex("(?i)\\bHead\\s+north\\b") to "Fahren Sie nach Norden",
+        Regex("(?i)\\bHead\\s+south\\b") to "Fahren Sie nach Süden",
+        Regex("(?i)\\bHead\\s+east\\b") to "Fahren Sie nach Osten",
+        Regex("(?i)\\bHead\\s+west\\b") to "Fahren Sie nach Westen",
+        Regex("(?i)\\bTurn\\s+sharp\\s+left\\b") to "Scharf links abbiegen",
+        Regex("(?i)\\bTurn\\s+sharp\\s+right\\b") to "Scharf rechts abbiegen",
+        Regex("(?i)\\bTurn\\s+slight\\s+left\\b") to "Leicht links abbiegen",
+        Regex("(?i)\\bTurn\\s+slight\\s+right\\b") to "Leicht rechts abbiegen",
+        Regex("(?i)\\bTurn\\s+left\\b") to "Biegen Sie links ab",
+        Regex("(?i)\\bTurn\\s+right\\b") to "Biegen Sie rechts ab",
+        Regex("(?i)\\bKeep\\s+left\\b") to "Links halten",
+        Regex("(?i)\\bKeep\\s+right\\b") to "Rechts halten",
+        Regex("(?i)\\bContinue\\s+straight\\b") to "Geradeaus weiterfahren",
+        Regex("(?i)\\bContinue\\b") to "Weiterfahren",
+        Regex("(?i)\\bonto\\b") to "auf",
+        Regex("(?i)\\bon\\b") to "auf",
+        Regex("(?i)\\btoward\\b") to "in Richtung",
+        Regex("(?i)\\bArrive\\s+at\\s+your\\s+destination\\b") to "Ankunft am Ziel",
+        Regex("(?i)\\bYou\\s+have\\s+arrived\\b") to "Sie haben Ihr Ziel erreicht",
+        Regex("(?i)\\bRoundabout\\b") to "Kreisverkehr"
     )
     for ((regex, replacement) in replacements) {
         text = text.replace(regex, replacement)
@@ -348,14 +515,16 @@ fun MapsScreen(onBack: () -> Unit) {
     var isRecalculating by remember { mutableStateOf(false) }
     var offRouteCount by remember { mutableIntStateOf(0) }
     var voiceEnabled by remember { mutableStateOf(true) }
+    var selectedLanguage by remember { mutableStateOf(availableTtsLanguages[0]) } // default: Español 🇪🇸
+    var hudLanguageMenuOpen by remember { mutableStateOf(false) }
+    var prepLanguageMenuOpen by remember { mutableStateOf(false) }
 
     val tts = remember {
         var instance: TextToSpeech? = null
         instance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 try {
-                    val spanish = Locale("es", "ES")
-                    val result = instance?.setLanguage(spanish)
+                    val result = instance?.setLanguage(selectedLanguage.locale)
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                         instance?.language = Locale.getDefault()
                     }
@@ -370,6 +539,16 @@ fun MapsScreen(onBack: () -> Unit) {
             }
         }
         instance
+    }
+
+    // Sincronizar el idioma del motor TTS cuando el usuario elija otro en el selector
+    LaunchedEffect(selectedLanguage) {
+        try {
+            val result = tts?.setLanguage(selectedLanguage.locale)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                tts?.language = Locale.getDefault()
+            }
+        } catch (_: Exception) {}
     }
 
     val ors = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
@@ -439,7 +618,7 @@ fun MapsScreen(onBack: () -> Unit) {
     fun speakInstruction(text: String, force: Boolean = false) {
         if (!voiceEnabled && !force) return
         if (text.isNotBlank()) {
-            val translated = translateInstructionToSpanish(text)
+            val translated = translateInstruction(text, selectedLanguage.code)
             try {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                 audioManager?.let { am ->
@@ -473,7 +652,7 @@ fun MapsScreen(onBack: () -> Unit) {
         scope.launch {
             isRecalculating = true
             try {
-                speakInstruction("Recalculando ruta...")
+                speakInstruction(selectedLanguage.recalculatingText)
                 val feature = withContext(Dispatchers.IO) {
                     OpenRouteServiceClient.api.route(
                         profile.first,
@@ -665,11 +844,26 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
+    // Observar si el usuario cambió el modo de voz (Silenciar / Activar voz) desde la notificación
+    LaunchedEffect(Unit) {
+        NavigationForegroundService.toggleVoiceRequested.collect { requested ->
+            if (requested) {
+                voiceEnabled = !voiceEnabled
+                if (!voiceEnabled) {
+                    tts?.stop()
+                } else {
+                    speakCurrentInstruction(force = true)
+                }
+                NavigationForegroundService.clearToggleVoiceRequest()
+            }
+        }
+    }
+
     // Mantener la navegación activa en segundo plano mediante Foreground Service y notificaciones en vivo
-    LaunchedEffect(step, distanceToNextManeuver, summary, navigating) {
+    LaunchedEffect(step, distanceToNextManeuver, summary, navigating, voiceEnabled, selectedLanguage) {
         if (navigating) {
             val s = routeSteps.getOrNull(step)
-            val currentInstruction = s?.let { translateInstructionToSpanish(it.instruction) } ?: "Continúa por la ruta"
+            val currentInstruction = s?.let { translateInstruction(it.instruction, selectedLanguage.code) } ?: "Continúa por la ruta"
             val stepDist = if (distanceToNextManeuver > 0f) {
                 if (distanceToNextManeuver >= 1000) String.format(Locale.getDefault(), "En %.1f km", distanceToNextManeuver / 1000.0)
                 else "En ${distanceToNextManeuver.roundToInt()} m"
@@ -685,7 +879,7 @@ fun MapsScreen(onBack: () -> Unit) {
                 "$d • $t • Llegada: $a"
             } ?: "Navegación activa"
 
-            NavigationForegroundService.startOrUpdate(context, title, etaInfo)
+            NavigationForegroundService.startOrUpdate(context, title, etaInfo, isVoiceActive = voiceEnabled)
         } else {
             NavigationForegroundService.stop(context)
         }
@@ -852,7 +1046,7 @@ fun MapsScreen(onBack: () -> Unit) {
                 ) {
                     val currentStep = routeSteps.getOrNull(step)
                     val rawInstruction = currentStep?.instruction?.ifBlank { "Continúa recto por la vía" } ?: "Continúa por la ruta"
-                    val instructionText = translateInstructionToSpanish(rawInstruction)
+                    val instructionText = translateInstruction(rawInstruction, selectedLanguage.code)
                     val stepDist = if (distanceToNextManeuver > 0f) {
                         if (distanceToNextManeuver >= 1000) String.format(Locale.getDefault(), "En %.1f km", distanceToNextManeuver / 1000.0)
                         else "En ${distanceToNextManeuver.roundToInt()} m"
@@ -1004,6 +1198,80 @@ fun MapsScreen(onBack: () -> Unit) {
                                         color = if (!voiceEnabled) Color.White else Color.White.copy(alpha = 0.75f),
                                         fontSize = 12.sp,
                                         fontWeight = if (!voiceEnabled) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+
+                        // Selector de Idioma TTS en HUD de Navegación
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp, bottom = 2.dp)
+                        ) {
+                            Surface(
+                                onClick = { hudLanguageMenuOpen = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color.White.copy(alpha = 0.12f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "🌐 Idioma TTS:",
+                                            color = Color.White.copy(alpha = 0.75f),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            "${selectedLanguage.flag} ${selectedLanguage.name}",
+                                            color = Color(0xFFA7F3D0),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        "Cambiar ▾",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = hudLanguageMenuOpen,
+                                onDismissRequest = { hudLanguageMenuOpen = false }
+                            ) {
+                                availableTtsLanguages.forEach { lang ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(lang.flag, fontSize = 16.sp)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    lang.name,
+                                                    fontWeight = if (selectedLanguage.code == lang.code) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (selectedLanguage.code == lang.code) Color(0xFF10B981) else Color.Unspecified
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedLanguage = lang
+                                            hudLanguageMenuOpen = false
+                                            try {
+                                                tts?.setLanguage(lang.locale)
+                                            } catch (_: Exception) {}
+                                            // Si está silenciado, permanece en silencio absoluto sin emitir sonido.
+                                            // Si tiene volumen activo, reproduce la indicación en el nuevo idioma.
+                                            if (voiceEnabled) {
+                                                speakCurrentInstruction(force = true)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -1252,7 +1520,40 @@ fun MapsScreen(onBack: () -> Unit) {
                                     }
                                 }
 
-                                Spacer(Modifier.width(10.dp))
+                                Spacer(Modifier.width(8.dp))
+
+                                // Selector de idioma TTS para la ruta
+                                Box {
+                                    FilledTonalButton(onClick = { prepLanguageMenuOpen = true }) {
+                                        Text("${selectedLanguage.flag} ${selectedLanguage.name}")
+                                    }
+                                    DropdownMenu(expanded = prepLanguageMenuOpen, onDismissRequest = { prepLanguageMenuOpen = false }) {
+                                        availableTtsLanguages.forEach { lang ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(lang.flag, fontSize = 16.sp)
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Text(
+                                                            lang.name,
+                                                            fontWeight = if (selectedLanguage.code == lang.code) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (selectedLanguage.code == lang.code) Color(0xFF10B981) else Color.Unspecified
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    selectedLanguage = lang
+                                                    prepLanguageMenuOpen = false
+                                                    try {
+                                                        tts?.setLanguage(lang.locale)
+                                                    } catch (_: Exception) {}
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.width(8.dp))
 
                                 Button(
                                     onClick = ::route,
