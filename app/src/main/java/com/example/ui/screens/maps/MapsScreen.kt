@@ -1,6 +1,11 @@
 package com.example.ui.screens.maps
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,11 +86,15 @@ private val orsRouteProfiles = listOf(
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("MissingPermission")
 @Composable
 fun MapsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val startPoint = LatLng(9.9951797, -84.1403642)
+    val locationManager = remember {
+        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    }
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(startPoint, 12f)
     }
@@ -114,11 +124,62 @@ fun MapsScreen(onBack: () -> Unit) {
     var routeError by remember { mutableStateOf<String?>(null) }
     var routePoints by remember { mutableStateOf<List<LatLng>>(emptyList()) }
     var destinationPoint by remember { mutableStateOf<LatLng?>(null) }
+    var currentLocation by remember { mutableStateOf(startPoint) }
+    var locationLabel by remember { mutableStateOf("Buscando tu ubicación...") }
+    var hasRealLocation by remember { mutableStateOf(false) }
 
     val mapsKeyAvailable = BuildConfig.MAPS_API_KEY.isNotBlank() &&
         BuildConfig.MAPS_API_KEY != "MY_MAPS_API_KEY"
     val orsKeyAvailable = BuildConfig.OPENROUTESERVICE_API_KEY.isNotBlank() &&
         BuildConfig.OPENROUTESERVICE_API_KEY != "MY_OPENROUTESERVICE_API_KEY"
+
+    fun updateCurrentLocation(location: Location) {
+        val point = LatLng(location.latitude, location.longitude)
+        currentLocation = point
+        hasRealLocation = true
+        locationLabel = String.format(Locale.getDefault(), "%.5f, %.5f", location.latitude, location.longitude)
+        cameraPositionState.position = CameraPosition.fromLatLngZoom(point, 15f)
+        if (orsKeyAvailable) {
+            scope.launch {
+                try {
+                    val response = withContext(Dispatchers.IO) {
+                        OpenRouteServiceClient.api.reverseGeocode(
+                            apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
+                            longitude = point.longitude,
+                            latitude = point.latitude,
+                            size = 1
+                        )
+                    }
+                    response.features.firstOrNull()?.properties?.label?.let { locationLabel = it }
+                } catch (_: Exception) {
+                    // Keep the last readable value or coordinates if the service is unavailable.
+                }
+            }
+        }
+    }
+
+    DisposableEffect(hasLocationPermission) {
+        if (!hasLocationPermission) {
+            locationLabel = "Permiso de ubicación requerido"
+            return@DisposableEffect onDispose { }
+        }
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                updateCurrentLocation(location)
+            }
+        }
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { provider -> try { locationManager.isProviderEnabled(provider) } catch (_: Exception) { false } }
+        try {
+            providers.forEach { provider ->
+                locationManager.requestLocationUpdates(provider, 3000L, 5f, listener)
+                locationManager.getLastKnownLocation(provider)?.let { updateCurrentLocation(it) }
+            }
+        } catch (_: SecurityException) {
+            locationLabel = "No se pudo acceder a la ubicación"
+        }
+        onDispose { locationManager.removeUpdates(listener) }
+    }
 
     fun calculateRoute() {
         if (destination.isBlank() || isLoading) return
@@ -146,7 +207,7 @@ fun MapsScreen(onBack: () -> Unit) {
                     OpenRouteServiceClient.api.route(
                         profile = selectedProfile.first,
                         apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
-                        start = "${startPoint.longitude},${startPoint.latitude}",
+                        start = "${currentLocation.longitude},${currentLocation.latitude}",
                         end = end,
                         instructions = true
                     )
@@ -156,8 +217,6 @@ fun MapsScreen(onBack: () -> Unit) {
                 instructions = feature.properties.segments.flatMap { segment ->
                     segment.steps.map { step -> step.instruction }
                 }
-                
-                // Parse coordinates for polyline: ORS returns [longitude, latitude]
                 val coords = feature.geometry.coordinates
                 if (coords.isNotEmpty()) {
                     routePoints = coords.mapNotNull { pt ->
@@ -166,69 +225,13 @@ fun MapsScreen(onBack: () -> Unit) {
                     val lastPt = coords.last()
                     if (lastPt.size >= 2) {
                         destinationPoint = LatLng(lastPt[1], lastPt[0])
-                        cameraPositionState.position = CameraPosition.fromLatLngZoom(LatLng(lastPt[1], lastPt[0]), 13f)
+                        cameraPositionState.position = CameraPosition.fromLatLngZoom(
+                            LatLng(lastPt[1], lastPt[0]), 13f
+                        )
                     }
                 }
             } catch (error: Exception) {
                 routeError = error.message ?: "No se pudo calcular la ruta."
-            } finally {
-                isLoading = false
-            }
-        }
-    }
-
-    fun onMapTapped(point: LatLng) {
-        if (isLoading) return
-        destinationPoint = point
-        scope.launch {
-            isLoading = true
-            routeError = null
-            routeSummary = null
-            instructions = emptyList()
-            routePoints = emptyList()
-            try {
-                if (!orsKeyAvailable) {
-                    destination = String.format(Locale.getDefault(), "%.5f, %.5f", point.latitude, point.longitude)
-                    routeError = "Configura OPENROUTESERVICE_API_KEY en los Secrets de compilación."
-                    return@launch
-                }
-                val label = withContext(Dispatchers.IO) {
-                    try {
-                        val rev = OpenRouteServiceClient.api.reverseGeocode(
-                            apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
-                            longitude = point.longitude,
-                            latitude = point.latitude,
-                            size = 1
-                        )
-                        rev.features.firstOrNull()?.properties?.label
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-                destination = label ?: String.format(Locale.getDefault(), "%.5f, %.5f", point.latitude, point.longitude)
-
-                val result = withContext(Dispatchers.IO) {
-                    OpenRouteServiceClient.api.route(
-                        profile = selectedProfile.first,
-                        apiKey = BuildConfig.OPENROUTESERVICE_API_KEY,
-                        start = "${startPoint.longitude},${startPoint.latitude}",
-                        end = "${point.longitude},${point.latitude}",
-                        instructions = true
-                    )
-                }
-                val feature = result.features.firstOrNull() ?: error("No se pudo calcular la ruta.")
-                routeSummary = feature.properties.summary
-                instructions = feature.properties.segments.flatMap { segment ->
-                    segment.steps.map { step -> step.instruction }
-                }
-                val coords = feature.geometry.coordinates
-                if (coords.isNotEmpty()) {
-                    routePoints = coords.mapNotNull { pt ->
-                        if (pt.size >= 2) LatLng(pt[1], pt[0]) else null
-                    }
-                }
-            } catch (error: Exception) {
-                routeError = error.message ?: "No se pudo calcular la ruta al punto seleccionado."
             } finally {
                 isLoading = false
             }
@@ -260,6 +263,22 @@ fun MapsScreen(onBack: () -> Unit) {
         containerColor = Color(0xFF0F172A)
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            Surface(
+                color = if (hasRealLocation) Color(0xFF14532D) else Color(0xFF334155),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = null, tint = Color.White)
+                    Spacer(Modifier.size(8.dp))
+                    Column {
+                        Text("Tu ubicación actual", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(locationLabel, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                    }
+                }
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (mapsKeyAvailable) {
                     GoogleMap(
@@ -269,13 +288,12 @@ fun MapsScreen(onBack: () -> Unit) {
                             mapType = MapType.NORMAL,
                             isMyLocationEnabled = hasLocationPermission
                         ),
-                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission),
-                        onMapClick = { tappedPoint -> onMapTapped(tappedPoint) }
+                        uiSettings = MapUiSettings(myLocationButtonEnabled = hasLocationPermission)
                     ) {
                         Marker(
-                            state = MarkerState(startPoint),
-                            title = "Inicio",
-                            snippet = "San Francisco, Heredia"
+                            state = MarkerState(currentLocation),
+                            title = "Tu ubicación actual",
+                            snippet = locationLabel
                         )
                         destinationPoint?.let { dest ->
                             Marker(
@@ -313,7 +331,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         label = { Text("Destino") },
-                        placeholder = { Text("Ej. Parque Central o toca en el mapa") }
+                        placeholder = { Text("Ej. Parque Central de Heredia") }
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -349,7 +367,7 @@ fun MapsScreen(onBack: () -> Unit) {
                         }
                     }
                     Text(
-                        "Inicio: San Francisco, Heredia • Toca en el mapa para fijar destino",
+                        "Inicio: $locationLabel",
                         color = Color.LightGray,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(top = 6.dp)
