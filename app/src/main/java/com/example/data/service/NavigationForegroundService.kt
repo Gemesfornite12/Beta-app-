@@ -50,8 +50,9 @@ class NavigationForegroundService : Service() {
         val instruction = intent?.getStringExtra(EXTRA_INSTRUCTION) ?: "Navegación GPS activa"
         val etaInfo = intent?.getStringExtra(EXTRA_ETA) ?: "Ruta en curso"
         val isVoiceActive = intent?.getBooleanExtra(EXTRA_VOICE_ENABLED, true) ?: true
+        val isBatterySaver = intent?.getBooleanExtra(EXTRA_BATTERY_SAVER, false) ?: false
 
-        val notification = buildNotification(instruction, etaInfo, isVoiceActive)
+        val notification = buildNotification(instruction, etaInfo, isVoiceActive, isBatterySaver)
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -87,7 +88,7 @@ class NavigationForegroundService : Service() {
         wakeLock = null
     }
 
-    private fun buildNotification(instruction: String, etaInfo: String, isVoiceActive: Boolean): Notification {
+    private fun buildNotification(instruction: String, etaInfo: String, isVoiceActive: Boolean, isBatterySaverActive: Boolean = false): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -118,7 +119,8 @@ class NavigationForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val voiceStatusText = if (isVoiceActive) "🔊 Voz activa" else "🔇 Silencio"
+        val voiceStatusText = (if (isVoiceActive) "🔊 Voz activa" else "🔇 Silencio") +
+            (if (isBatterySaverActive) " • 🪫 Ahorro" else "")
         val voiceActionTitle = if (isVoiceActive) "🔇 Silenciar" else "🔊 Activar voz"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -185,6 +187,7 @@ class NavigationForegroundService : Service() {
         const val EXTRA_INSTRUCTION = "extra_instruction"
         const val EXTRA_ETA = "extra_eta"
         const val EXTRA_VOICE_ENABLED = "extra_voice_enabled"
+        const val EXTRA_BATTERY_SAVER = "extra_battery_saver"
 
         private val _isNavigatingInBackground = MutableStateFlow(false)
         val isNavigatingInBackground = _isNavigatingInBackground.asStateFlow()
@@ -203,13 +206,20 @@ class NavigationForegroundService : Service() {
             _toggleVoiceRequested.value = false
         }
 
-        fun startOrUpdate(context: Context, instruction: String, etaInfo: String, isVoiceActive: Boolean = true) {
+        fun startOrUpdate(
+            context: Context,
+            instruction: String,
+            etaInfo: String,
+            isVoiceActive: Boolean = true,
+            isBatterySaverActive: Boolean = false
+        ) {
             try {
                 val intent = Intent(context, NavigationForegroundService::class.java).apply {
                     action = ACTION_START_OR_UPDATE
                     putExtra(EXTRA_INSTRUCTION, instruction)
                     putExtra(EXTRA_ETA, etaInfo)
                     putExtra(EXTRA_VOICE_ENABLED, isVoiceActive)
+                    putExtra(EXTRA_BATTERY_SAVER, isBatterySaverActive)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)

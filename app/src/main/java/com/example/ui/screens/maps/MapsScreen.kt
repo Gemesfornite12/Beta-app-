@@ -2,7 +2,10 @@ package com.example.ui.screens.maps
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,6 +17,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.os.BatteryManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -82,9 +86,11 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -215,6 +221,15 @@ val availableTtsLanguages = listOf(
     TtsLanguage("it", "Italiano", "🇮🇹", Locale.ITALY, "Ricalcolo del percorso..."),
     TtsLanguage("de", "Deutsch", "🇩🇪", Locale.GERMANY, "Route wird neu berechnet...")
 )
+
+/**
+ * Modos de ahorro de batería para optimizar el consumo del chip GPS y el motor TTS.
+ */
+enum class BatterySaverMode(val title: String, val shortLabel: String, val description: String) {
+    AUTO("Automático (≤20%)", "Auto", "Se activa solo si la carga baja del 20%"),
+    ON("Siempre activado", "Activo", "Fuerza ahorro: GPS cada 5s y voz espaciada"),
+    OFF("Desactivado", "Desactivado", "Frecuencia máxima (GPS cada 1s y voz continua)")
+}
 
 /**
  * Traduce y adapta instrucciones de navegación según el idioma configurado
@@ -519,6 +534,64 @@ fun MapsScreen(onBack: () -> Unit) {
     var hudLanguageMenuOpen by remember { mutableStateOf(false) }
     var prepLanguageMenuOpen by remember { mutableStateOf(false) }
 
+    // Estados de Batería y Modo Ahorro
+    var batteryLevel by remember { mutableIntStateOf(100) }
+    var isCharging by remember { mutableStateOf(false) }
+    var batterySaverMode by remember { mutableStateOf(BatterySaverMode.AUTO) }
+    var batteryMenuOpen by remember { mutableStateOf(false) }
+    var prepBatteryMenuOpen by remember { mutableStateOf(false) }
+
+    var lastTtsSpokenTime by remember { mutableLongStateOf(0L) }
+    var lastTtsSpokenInstruction by remember { mutableStateOf("") }
+
+    // Detección reactiva en tiempo real del nivel de carga y estado de conexión
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                    if (level >= 0 && scale > 0) {
+                        batteryLevel = (level * 100) / scale
+                    }
+                    val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                                 status == BatteryManager.BATTERY_STATUS_FULL
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val stickyIntent = context.registerReceiver(receiver, filter)
+        stickyIntent?.let { intent ->
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) {
+                batteryLevel = (level * 100) / scale
+            }
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                         status == BatteryManager.BATTERY_STATUS_FULL
+        }
+        onDispose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {}
+        }
+    }
+
+    // El modo ahorro se activa si:
+    // 1. AUTO: la batería baja del 20% y el dispositivo no está enchufado al cargador.
+    // 2. ON: activado manualmente por el usuario.
+    val isBatterySaverActive by remember {
+        derivedStateOf {
+            when (batterySaverMode) {
+                BatterySaverMode.AUTO -> batteryLevel <= 20 && !isCharging
+                BatterySaverMode.ON -> true
+                BatterySaverMode.OFF -> false
+            }
+        }
+    }
+
     val tts = remember {
         var instance: TextToSpeech? = null
         instance = TextToSpeech(context) { status ->
@@ -618,6 +691,24 @@ fun MapsScreen(onBack: () -> Unit) {
     fun speakInstruction(text: String, force: Boolean = false) {
         if (!voiceEnabled && !force) return
         if (text.isNotBlank()) {
+            val now = System.currentTimeMillis()
+
+            // Modo Ahorro de Batería: Reduce la frecuencia de locución TTS para conservar batería
+            if (isBatterySaverActive && !force) {
+                val isSameInstruction = text == lastTtsSpokenInstruction
+                val elapsedMs = now - lastTtsSpokenTime
+
+                // Evitar repetir la misma indicación en menos de 20 segundos
+                if (isSameInstruction && elapsedMs < 20000L) {
+                    return
+                }
+
+                // Espaciar anuncios al menos 14 segundos si la maniobra todavía está lejos (> 80m)
+                if (elapsedMs < 14000L && distanceToNextManeuver > 80f) {
+                    return
+                }
+            }
+
             val translated = translateInstruction(text, selectedLanguage.code)
             try {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -632,6 +723,8 @@ fun MapsScreen(onBack: () -> Unit) {
                 putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             }
             tts?.speak(translated, TextToSpeech.QUEUE_FLUSH, params, "omnistudio-nav")
+            lastTtsSpokenTime = now
+            lastTtsSpokenInstruction = text
         }
     }
 
@@ -789,8 +882,8 @@ fun MapsScreen(onBack: () -> Unit) {
         }
     }
 
-    // Suscripción al sensor GPS real con alta frecuencia (1s, 1m) para navegación activa
-    DisposableEffect(permission) {
+    // Suscripción al sensor GPS real con frecuencia adaptativa según modo ahorro de batería
+    DisposableEffect(permission, isBatterySaverActive) {
         if (!permission) return@DisposableEffect onDispose {}
         val listener = object : LocationListener {
             override fun onLocationChanged(l: Location) {
@@ -798,9 +891,14 @@ fun MapsScreen(onBack: () -> Unit) {
             }
         }
         try {
+            // Modo Normal: 1000ms (1s), 1 metro
+            // Modo Ahorro: 5000ms (5s), 10 metros -> Reduce un 80% las interrupciones del chip GPS y el gasto de batería
+            val minTimeMs = if (isBatterySaverActive) 5000L else 1000L
+            val minDistanceM = if (isBatterySaverActive) 10f else 1f
+
             listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { p ->
                 if (lm.isProviderEnabled(p)) {
-                    lm.requestLocationUpdates(p, 1000L, 1f, listener)
+                    lm.requestLocationUpdates(p, minTimeMs, minDistanceM, listener)
                     lm.getLastKnownLocation(p)?.let { update(it) }
                 }
             }
@@ -860,7 +958,7 @@ fun MapsScreen(onBack: () -> Unit) {
     }
 
     // Mantener la navegación activa en segundo plano mediante Foreground Service y notificaciones en vivo
-    LaunchedEffect(step, distanceToNextManeuver, summary, navigating, voiceEnabled, selectedLanguage) {
+    LaunchedEffect(step, distanceToNextManeuver, summary, navigating, voiceEnabled, selectedLanguage, isBatterySaverActive) {
         if (navigating) {
             val s = routeSteps.getOrNull(step)
             val currentInstruction = s?.let { translateInstruction(it.instruction, selectedLanguage.code) } ?: "Continúa por la ruta"
@@ -879,7 +977,13 @@ fun MapsScreen(onBack: () -> Unit) {
                 "$d • $t • Llegada: $a"
             } ?: "Navegación activa"
 
-            NavigationForegroundService.startOrUpdate(context, title, etaInfo, isVoiceActive = voiceEnabled)
+            NavigationForegroundService.startOrUpdate(
+                context,
+                title,
+                etaInfo,
+                isVoiceActive = voiceEnabled,
+                isBatterySaverActive = isBatterySaverActive
+            )
         } else {
             NavigationForegroundService.stop(context)
         }
@@ -1128,6 +1232,75 @@ fun MapsScreen(onBack: () -> Unit) {
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold
                                         )
+                                    }
+                                }
+
+                                Spacer(Modifier.width(6.dp))
+
+                                // Indicador de Batería y Selector de Modo Ahorro
+                                Box {
+                                    Surface(
+                                        onClick = { batteryMenuOpen = true },
+                                        color = if (isBatterySaverActive) Color(0xFFD97706).copy(alpha = 0.35f) else Color.White.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(16.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = if (isCharging) "⚡${batteryLevel}%"
+                                                       else if (isBatterySaverActive) "🪫 ${batteryLevel}% Ahorro"
+                                                       else "🔋 ${batteryLevel}%",
+                                                color = if (isBatterySaverActive) Color(0xFFFDE68A) else Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = batteryMenuOpen,
+                                        onDismissRequest = { batteryMenuOpen = false }
+                                    ) {
+                                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                            Text("Ahorro de batería", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text(
+                                                "Carga actual: $batteryLevel% ${if (isCharging) "(Cargando)" else ""}",
+                                                fontSize = 11.sp,
+                                                color = Color.Gray
+                                            )
+                                            Text(
+                                                if (isBatterySaverActive) "• Ahorro ACTIVO: GPS cada 5s y voz moderada"
+                                                else "• Modo estándar: GPS continuo cada 1s",
+                                                fontSize = 10.sp,
+                                                color = if (isBatterySaverActive) Color(0xFFEAB308) else Color(0xFF10B981)
+                                            )
+                                        }
+                                        BatterySaverMode.values().forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Text(
+                                                                mode.title,
+                                                                fontWeight = if (batterySaverMode == mode) FontWeight.Bold else FontWeight.Normal,
+                                                                color = if (batterySaverMode == mode) Color(0xFF10B981) else Color.Unspecified
+                                                            )
+                                                            if (batterySaverMode == mode && isBatterySaverActive) {
+                                                                Spacer(Modifier.width(6.dp))
+                                                                Text("• ACTIVO", color = Color(0xFFEAB308), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                            }
+                                                        }
+                                                        Text(mode.description, fontSize = 11.sp, color = Color.Gray)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    batterySaverMode = mode
+                                                    batteryMenuOpen = false
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1547,6 +1720,65 @@ fun MapsScreen(onBack: () -> Unit) {
                                                     try {
                                                         tts?.setLanguage(lang.locale)
                                                     } catch (_: Exception) {}
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.width(8.dp))
+
+                                // Selector de Modo Ahorro de Batería en preparación de ruta
+                                Box {
+                                    FilledTonalButton(
+                                        onClick = { prepBatteryMenuOpen = true },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            if (isCharging) "⚡${batteryLevel}%"
+                                            else if (isBatterySaverActive) "🪫 ${batteryLevel}%"
+                                            else "🔋 ${batteryLevel}%"
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = prepBatteryMenuOpen,
+                                        onDismissRequest = { prepBatteryMenuOpen = false }
+                                    ) {
+                                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                            Text("Modo Ahorro de Batería", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text(
+                                                "Carga actual: $batteryLevel% ${if (isCharging) "(Cargando)" else ""}",
+                                                fontSize = 11.sp,
+                                                color = Color.Gray
+                                            )
+                                            Text(
+                                                if (isBatterySaverActive) "• Ahorro ACTIVO (GPS 5s, voz moderada)"
+                                                else "• Modo estándar (GPS 1s continuo)",
+                                                fontSize = 10.sp,
+                                                color = if (isBatterySaverActive) Color(0xFFEAB308) else Color(0xFF10B981)
+                                            )
+                                        }
+                                        BatterySaverMode.values().forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Text(
+                                                                mode.title,
+                                                                fontWeight = if (batterySaverMode == mode) FontWeight.Bold else FontWeight.Normal,
+                                                                color = if (batterySaverMode == mode) Color(0xFF10B981) else Color.Unspecified
+                                                            )
+                                                            if (batterySaverMode == mode && isBatterySaverActive) {
+                                                                Spacer(Modifier.width(6.dp))
+                                                                Text("• ACTIVO", color = Color(0xFFEAB308), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                            }
+                                                        }
+                                                        Text(mode.description, fontSize = 11.sp, color = Color.Gray)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    batterySaverMode = mode
+                                                    prepBatteryMenuOpen = false
                                                 }
                                             )
                                         }
