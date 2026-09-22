@@ -263,6 +263,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _mediaSendState = MutableStateFlow(MediaSendUiState())
     val mediaSendState: StateFlow<MediaSendUiState> = _mediaSendState.asStateFlow()
 
+    fun clearMediaSendState() {
+        _mediaSendState.value = MediaSendUiState(phase = "idle")
+    }
+
     val firestoreChatService = FirestoreChatService(application)
     val rtdbService = RealtimeDatabaseService()
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
@@ -2775,14 +2779,19 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         mediaType = mediaType,
                         mimeType = mimeType,
                         onProgress = { transferredBytes, totalBytes ->
-                            val progress = if (totalBytes > 0L) {
-                                ((transferredBytes * 100L) / totalBytes).toInt().coerceIn(0, 100)
+                            val rawPercent = if (totalBytes > 0L) {
+                                ((transferredBytes * 90L) / totalBytes).toInt().coerceIn(0, 90)
                             } else 0
+                            val msg = if (rawPercent >= 90) {
+                                "Enviando a Supabase y procesando… 90%"
+                            } else {
+                                "Subiendo archivo… $rawPercent%"
+                            }
                             _mediaSendState.value = MediaSendUiState(
                                 phase = "uploading",
                                 mediaType = mediaType,
-                                progress = progress,
-                                message = "Subiendo archivo… $progress%"
+                                progress = rawPercent,
+                                message = msg
                             )
                         }
                     )
@@ -2799,8 +2808,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 _mediaSendState.value = MediaSendUiState(
                     phase = "saving",
                     mediaType = mediaType,
-                    progress = if (isLocalMediaUri) 100 else 0,
-                    message = "Guardando mensaje en el chat…"
+                    progress = 100,
+                    message = "Subida verificada. Guardando mensaje en el chat…"
                 )
 
                 // Never persist a device URI or a demo/local fallback in a chat message.
@@ -2945,6 +2954,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             Toast.LENGTH_LONG
                         ).show()
                     }
+                    kotlinx.coroutines.delay(3000L)
+                    if (_mediaSendState.value.phase == "sent") {
+                        _mediaSendState.value = MediaSendUiState(phase = "idle")
+                    }
                 }
             } catch (e: Exception) {
                 // This includes upload, URL validation, and any unexpected persistence error.
@@ -2958,6 +2971,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 Log.e("OmniViewModel", "No se pudo preparar/enviar multimedia: channel=$channelId url=$mediaUrl", e)
                 Toast.makeText(context, errorText, Toast.LENGTH_LONG).show()
+                kotlinx.coroutines.delay(5000L)
+                if (_mediaSendState.value.phase == "error") {
+                    _mediaSendState.value = MediaSendUiState(phase = "idle")
+                }
             }
         }
     }

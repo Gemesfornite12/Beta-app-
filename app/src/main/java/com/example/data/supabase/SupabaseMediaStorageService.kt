@@ -48,8 +48,8 @@ class SupabaseMediaStorageService(context: Context) {
         private const val MAX_FILE_SIZE_BYTES = 50L * 1024L * 1024L
         // A 50 MB upload may need several minutes on a mobile connection, but no network
         // operation should be allowed to leave the composer in "100%" forever.
-        private const val UPLOAD_CALL_TIMEOUT_MINUTES = 6L
-        private const val CLEANUP_TIMEOUT_MILLIS = 15_000L
+        private const val UPLOAD_CALL_TIMEOUT_MINUTES = 3L
+        private const val CLEANUP_TIMEOUT_MILLIS = 10_000L
         private const val SUPABASE_URL = BuildConfig.SUPABASE_PROJECT_URL
         private const val SUPABASE_PUBLISHABLE_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         private const val DELETE_FUNCTION = "functions/v1/delete-chat-media"
@@ -129,10 +129,11 @@ class SupabaseMediaStorageService(context: Context) {
             )
             val request = Request.Builder()
                 .url("$SUPABASE_URL/storage/v1/object/$BUCKET/$encodedPath")
-                // The anon INSERT policy authenticates this request with the publishable key.
+                // The anon INSERT policy authenticates this request with the publishable key and bearer token.
                 // Firebase Auth tokens are not Supabase JWTs and must not be sent here.
                 .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-                .header("x-upsert", "false")
+                .header("Authorization", "Bearer $SUPABASE_PUBLISHABLE_KEY")
+                .header("x-upsert", "true")
                 .post(requestBody)
                 .build()
 
@@ -353,6 +354,7 @@ class SupabaseMediaStorageService(context: Context) {
                     transferred += read
                     onProgress(transferred, contentLength())
                 }
+                sink.flush()
             }
         }
     }

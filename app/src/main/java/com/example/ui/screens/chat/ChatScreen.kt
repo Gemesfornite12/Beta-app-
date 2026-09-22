@@ -1021,12 +1021,32 @@ fun ChatScreen(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                            Text(
-                                text = mediaSendState.message ?: "Procesando archivo…",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = mediaSendState.message ?: "Procesando archivo…",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (!isSendingMedia) {
+                                    IconButton(
+                                        onClick = { viewModel.clearMediaSendState() },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Cerrar notificación",
+                                            tint = Color.White.copy(alpha = 0.8f),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
                             if (isSendingMedia) {
                                 LinearProgressIndicator(
                                     progress = { (mediaSendState.progress / 100f).coerceIn(0f, 1f) },
