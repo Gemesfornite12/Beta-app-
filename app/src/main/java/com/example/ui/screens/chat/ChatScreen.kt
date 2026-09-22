@@ -97,6 +97,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -175,6 +176,7 @@ fun ChatScreen(
     val groupDeletionCountdowns by viewModel.groupDeletionCountdownSeconds.collectAsState()
     val allUsers by viewModel.allUsers.collectAsState()
     val channelNotificationPrefs by viewModel.channelNotificationPrefs.collectAsState()
+    val mediaSendState by viewModel.mediaSendState.collectAsState()
 
     val context = LocalContext.current
     val gifImageLoader = remember(context) {
@@ -1000,6 +1002,45 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .background(Color(0xFF1E293B))
             ) {
+                // La subida continúa después de que el selector se cierra y el adjunto
+                // desaparece del compositor. Mantener el estado aquí evita que el envío
+                // parezca un no-op y deja visible el error real si falla.
+                if (mediaSendState.phase != "idle") {
+                    val isSendingMedia = mediaSendState.phase == "preparing" ||
+                        mediaSendState.phase == "uploading" || mediaSendState.phase == "saving"
+                    val isMediaError = mediaSendState.phase == "error"
+                    Surface(
+                        color = when {
+                            isMediaError -> Color(0xFF7F1D1D).copy(alpha = 0.8f)
+                            mediaSendState.phase == "sent" -> Color(0xFF065F46).copy(alpha = 0.8f)
+                            else -> Color(0xFF172554)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                            Text(
+                                text = mediaSendState.message ?: "Procesando archivo…",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            if (isSendingMedia) {
+                                LinearProgressIndicator(
+                                    progress = { (mediaSendState.progress / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 5.dp),
+                                    color = Color(0xFF818CF8),
+                                    trackColor = Color(0xFF334155)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Indicador de escritura en tiempo real de Firestore ("typing indicator")
                 AnimatedVisibility(
                     visible = typingUsers.isNotEmpty(),

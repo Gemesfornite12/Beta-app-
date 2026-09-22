@@ -127,8 +127,10 @@ class SupabaseMediaStorageService(context: Context) {
                 "Supabase Storage no devolvió una URL pública válida"
             }
 
-            // Keep the existing Firestore media index and metadata; only the binary provider
-            // changed from Firebase Storage to Supabase Storage.
+            // The chat message and Supabase object are the source of truth. The Firestore
+            // media index is auxiliary metadata and must not make a successful upload look
+            // like a failed send (for example while Firestore rules or connectivity are
+            // unavailable). Keep indexing best-effort; the message still carries publicUrl.
             val mediaData = hashMapOf<String, Any?>(
                 "mediaId" to mediaId,
                 "ownerUid" to ownerUid,
@@ -141,7 +143,11 @@ class SupabaseMediaStorageService(context: Context) {
                 "sizeBytes" to source.sizeBytes,
                 "createdAt" to FieldValue.serverTimestamp()
             )
-            firestore.collection("media").document(mediaId).set(mediaData).await()
+            try {
+                firestore.collection("media").document(mediaId).set(mediaData).await()
+            } catch (metadataError: Exception) {
+                Log.w(TAG, "La subida a Supabase fue exitosa, pero no se pudo indexar el archivo en Firestore", metadataError)
+            }
 
             return UploadedMedia(
                 mediaId = mediaId,

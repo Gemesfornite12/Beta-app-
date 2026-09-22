@@ -253,6 +253,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Chat & Messaging State (Firebase Firestore Real-Time)
+    data class MediaSendUiState(
+        val phase: String = "idle", // idle, preparing, uploading, saving, sent, error
+        val mediaType: String = "",
+        val progress: Int = 0,
+        val message: String? = null
+    )
+
+    private val _mediaSendState = MutableStateFlow(MediaSendUiState())
+    val mediaSendState: StateFlow<MediaSendUiState> = _mediaSendState.asStateFlow()
+
     val firestoreChatService = FirestoreChatService(application)
     val rtdbService = RealtimeDatabaseService()
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
@@ -2724,6 +2734,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Keep the operation observable while the composer is cleared. This also makes
+        // upload/message-write failures actionable instead of looking like a no-op.
+        _mediaSendState.value = MediaSendUiState(
+            phase = "preparing",
+            mediaType = mediaType,
+            message = "Preparando archivo…"
+        )
+
         viewModelScope.launch {
             var finalUrl = mediaUrl
             try {
@@ -2734,6 +2752,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 // A local URI is only usable on the device that selected it. Upload it first and
                 // do not create a chat message until Supabase returns a valid public URL.
                 if (isLocalMediaUri) {
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "uploading",
+                        mediaType = mediaType,
+                        message = "Subiendo archivo…"
+                    )
                     val ownerUid = FirebaseAuth.getInstance().currentUser?.uid
                         ?: throw IllegalStateException("No hay una sesión de Firebase activa")
                     val mimeType = context.contentResolver.getType(mediaUri)
@@ -2750,7 +2773,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         ownerUid = ownerUid,
                         localUri = mediaUri,
                         mediaType = mediaType,
-                        mimeType = mimeType
+                        mimeType = mimeType,
+                        onProgress = { transferredBytes, totalBytes ->
+                            val progress = if (totalBytes > 0L) {
+                                ((transferredBytes * 100L) / totalBytes).toInt().coerceIn(0, 100)
+                            } else 0
+                            _mediaSendState.value = MediaSendUiState(
+                                phase = "uploading",
+                                mediaType = mediaType,
+                                progress = progress,
+                                message = "Subiendo archivo… $progress%"
+                            )
+                        }
                     )
                     val downloadUrl = uploaded.downloadUrl.trim()
                     require(
@@ -2761,6 +2795,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     finalUrl = downloadUrl
                     Log.d("OmniViewModel", "Archivo multimedia subido a Supabase; preparando mensaje en $channelId")
                 }
+
+                _mediaSendState.value = MediaSendUiState(
+                    phase = "saving",
+                    mediaType = mediaType,
+                    progress = if (isLocalMediaUri) 100 else 0,
+                    message = "Guardando mensaje en el chat…"
+                )
 
                 // Never persist a device URI or a demo/local fallback in a chat message.
                 val finalUri = android.net.Uri.parse(finalUrl)
@@ -2861,27 +2902,42 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         rtdbError?.message?.takeIf { it.isNotBlank() },
                         firestoreError?.message?.takeIf { it.isNotBlank() }
                     ).joinToString("; ")
-                    Toast.makeText(
-                        context,
-                        "El archivo se subió, pero no se pudo guardar el mensaje en el chat${if (details.isNotBlank()) ": $details" else ""}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                } else if (rtdbError != null) {
-                    Toast.makeText(
-                        context,
-                        "El archivo se subió y quedó guardado como mensaje pendiente (RTDB reportó un error)",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    val errorText = "El archivo se subió, pero no se pudo guardar el mensaje en el chat" +
+                        if (details.isNotBlank()) ": $details" else ""
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "error",
+                        mediaType = mediaType,
+                        progress = 100,
+                        message = errorText
+                    )
+                    Toast.makeText(context, errorText, Toast.LENGTH_LONG).show()
+                } else {
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "sent",
+                        mediaType = mediaType,
+                        progress = 100,
+                        message = "${if (mediaType == "video") "Video" else "Archivo"} enviado al chat"
+                    )
+                    if (rtdbError != null) {
+                        Toast.makeText(
+                            context,
+                            "El archivo se subió y quedó guardado como mensaje pendiente (RTDB reportó un error)",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             } catch (e: Exception) {
                 // This includes upload, URL validation, and any unexpected persistence error.
                 // The UI has already cleared the composer, so always leave a diagnostic trail.
+                val errorText = "No se pudo enviar el archivo multimedia: ${e.message ?: "error desconocido"}"
+                _mediaSendState.value = MediaSendUiState(
+                    phase = "error",
+                    mediaType = mediaType,
+                    progress = 0,
+                    message = errorText
+                )
                 Log.e("OmniViewModel", "No se pudo preparar/enviar multimedia: channel=$channelId url=$mediaUrl", e)
-                Toast.makeText(
-                    context,
-                    "No se pudo enviar el archivo multimedia: ${e.message ?: "error desconocido"}",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(context, errorText, Toast.LENGTH_LONG).show()
             }
         }
     }
