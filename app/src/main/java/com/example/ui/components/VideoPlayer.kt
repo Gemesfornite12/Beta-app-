@@ -480,6 +480,21 @@ fun StandardVideoPlayerDialog(
     var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
     var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
 
+    fun stopPlaybackSafely() {
+        try {
+            val vView = videoViewRef
+            if (vView != null) {
+                if (vView.isPlaying) {
+                    vView.pause()
+                }
+                vView.stopPlayback()
+            }
+        } catch (_: Exception) {}
+        try {
+            mediaPlayerRef?.reset()
+        } catch (_: Exception) {}
+    }
+
     // Coroutine to poll playback progress
     LaunchedEffect(isPlaying, isUserSeeking) {
         while (isActive && isPlaying && !isUserSeeking) {
@@ -503,9 +518,7 @@ fun StandardVideoPlayerDialog(
 
     Dialog(
         onDismissRequest = {
-            try {
-                videoViewRef?.stopPlayback()
-            } catch (_: Exception) {}
+            stopPlaybackSafely()
             onDismiss()
         },
         properties = DialogProperties(
@@ -519,9 +532,7 @@ fun StandardVideoPlayerDialog(
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.85f))
                 .clickable {
-                    try {
-                        videoViewRef?.stopPlayback()
-                    } catch (_: Exception) {}
+                    stopPlaybackSafely()
                     onDismiss()
                 }
                 .padding(16.dp),
@@ -614,9 +625,7 @@ fun StandardVideoPlayerDialog(
                                 // Close Button
                                 IconButton(
                                     onClick = {
-                                        try {
-                                            videoViewRef?.stopPlayback()
-                                        } catch (_: Exception) {}
+                                        stopPlaybackSafely()
                                         onDismiss()
                                     },
                                     modifier = Modifier
@@ -681,10 +690,16 @@ fun StandardVideoPlayerDialog(
                                         showControls = true
                                     }
 
-                                    setOnErrorListener { _, what, _ ->
+                                    setOnErrorListener { mp, what, _ ->
                                         isBuffering = false
                                         hasError = true
                                         errorMessage = "No se pudo decodificar el formato de video (Código: $what)"
+                                        try {
+                                            if (mp != null && mp.isPlaying) {
+                                                mp.pause()
+                                            }
+                                            mp?.reset()
+                                        } catch (_: Exception) {}
                                         true
                                     }
 
@@ -966,9 +981,7 @@ fun StandardVideoPlayerDialog(
 
     DisposableEffect(videoUrl) {
         onDispose {
-            try {
-                videoViewRef?.stopPlayback()
-            } catch (_: Exception) {}
+            stopPlaybackSafely()
         }
     }
 }

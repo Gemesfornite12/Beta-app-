@@ -177,6 +177,11 @@ object CallSoundVibrationManager {
             }
         } catch (e: Exception) {
             Log.w(TAG, "MediaPlayer system ringtone failed, falling back: ${e.message}")
+            try {
+                mediaPlayer?.reset()
+                mediaPlayer?.release()
+            } catch (_: Exception) {}
+            mediaPlayer = null
             startFallbackRingtone(context)
         }
     }
@@ -352,12 +357,14 @@ object CallSoundVibrationManager {
 
         // Detener MediaPlayer
         try {
-            mediaPlayer?.let {
-                if (it.isPlaying) {
-                    it.stop()
-                }
-                it.reset()
-                it.release()
+            mediaPlayer?.let { mp ->
+                try {
+                    if (mp.isPlaying) {
+                        mp.pause()
+                    }
+                } catch (_: Exception) {}
+                try { mp.reset() } catch (_: Exception) {}
+                try { mp.release() } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error releasing media player: ${e.message}")
