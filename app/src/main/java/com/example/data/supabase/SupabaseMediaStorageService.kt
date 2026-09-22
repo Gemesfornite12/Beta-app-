@@ -92,9 +92,6 @@ class SupabaseMediaStorageService(context: Context) {
             uploadedPath = storagePath
             val encodedPath = encodeStoragePath(storagePath)
             val publicUrl = "$SUPABASE_URL/storage/v1/object/public/$BUCKET/$encodedPath"
-            val firebaseToken = auth.currentUser?.getIdToken(false)?.await()?.token
-                ?: throw IllegalStateException("No hay un token de Firebase activo para subir el archivo")
-
             val requestBody = ProgressRequestBody(
                 file = source.file,
                 contentType = normalizedMimeType.toMediaTypeOrNull(),
@@ -102,10 +99,9 @@ class SupabaseMediaStorageService(context: Context) {
             )
             val request = Request.Builder()
                 .url("$SUPABASE_URL/storage/v1/object/$BUCKET/$encodedPath")
+                // The anon INSERT policy authenticates this request with the publishable key.
+                // Firebase Auth tokens are not Supabase JWTs and must not be sent here.
                 .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-                // Supabase Storage RLS accepts the authenticated Firebase identity configured
-                // for this project; the publishable key is not a secret or an admin key.
-                .header("Authorization", "Bearer $firebaseToken")
                 .header("x-upsert", "false")
                 .post(requestBody)
                 .build()
@@ -184,6 +180,11 @@ class SupabaseMediaStorageService(context: Context) {
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 val detail = response.body?.string()?.take(300).orEmpty()
+                Log.e(
+                    TAG,
+                    "Supabase upload failed: code=${response.code}, path=$storagePath" +
+                        if (detail.isNotBlank()) ", detail=$detail" else ""
+                )
                 throw IOException(
                     "Supabase Storage rechazó el archivo (${response.code})" +
                         if (detail.isNotBlank()) ": $detail" else ""
@@ -285,3 +286,4 @@ class SupabaseMediaStorageService(context: Context) {
         }
     }
 }
+
