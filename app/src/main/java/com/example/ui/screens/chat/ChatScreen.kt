@@ -1265,48 +1265,59 @@ fun ChatScreen(
                     Spacer(modifier = Modifier.width(6.dp))
 
                     val hasAnyInput = chatInput.isNotBlank() || pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null
+                    val canSendPendingMedia = pendingMediaType == null || canSendMedia
 
                     Surface(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .clickable(enabled = canSendMessages && hasAnyInput) {
-                                if (canSendMessages) {
+                            .clickable(enabled = canSendMessages && canSendPendingMedia && hasAnyInput) {
+                                if (canSendMessages && canSendPendingMedia) {
+                                    var submitted = false
                                     when {
                                         pendingMediaType != null -> {
-                                            viewModel.sendMediaMessage(
-                                                mediaType = pendingMediaType!!,
-                                                mediaUrl = pendingMediaUrl!!,
-                                                caption = chatInput
-                                            )
-                                            viewModel.onChatInputChanged("")
+                                            val selectedMediaUrl = pendingMediaUrl
+                                            if (!selectedMediaUrl.isNullOrBlank()) {
+                                                viewModel.sendMediaMessage(
+                                                    mediaType = pendingMediaType!!,
+                                                    mediaUrl = selectedMediaUrl,
+                                                    caption = chatInput
+                                                )
+                                                viewModel.onChatInputChanged("")
+                                                submitted = true
+                                            }
                                         }
                                         pendingDocItem != null -> {
                                             viewModel.sendChatMessage(attachedDoc = pendingDocItem)
+                                            submitted = true
                                         }
                                         pendingAudioProject != null -> {
                                             viewModel.sendChatMessage(attachedAudio = pendingAudioProject)
+                                            submitted = true
                                         }
                                         else -> {
                                             viewModel.sendChatMessage()
+                                            submitted = true
                                         }
                                     }
-                                    // Limpiar estados locales de adjuntos
-                                    pendingMediaType = null
-                                    pendingMediaUrl = null
-                                    pendingMediaTitle = null
-                                    pendingDocItem = null
-                                    pendingAudioProject = null
+                                    // Do not discard a selected attachment if its URI is missing.
+                                    if (submitted) {
+                                        pendingMediaType = null
+                                        pendingMediaUrl = null
+                                        pendingMediaTitle = null
+                                        pendingDocItem = null
+                                        pendingAudioProject = null
+                                    }
                                 }
                             }
                             .testTag("btn_send_chat"),
-                        color = if (canSendMessages && hasAnyInput) Color(0xFF4F46E5) else Color(0xFF334155)
+                        color = if (canSendMessages && canSendPendingMedia && hasAnyInput) Color(0xFF4F46E5) else Color(0xFF334155)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Enviar",
-                                tint = if (canSendMessages && hasAnyInput) Color.White else Color(0xFF94A3B8),
+                                tint = if (canSendMessages && canSendPendingMedia && hasAnyInput) Color.White else Color(0xFF94A3B8),
                                 modifier = Modifier.size(18.dp)
                             )
                         }

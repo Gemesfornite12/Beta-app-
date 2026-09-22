@@ -1984,6 +1984,47 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Keeps a locally-created message visible while the Firebase listener catches up.
+     * RTDB messages have a remote key, whereas the local Room row has only an auto id,
+     * so media URL (and message content for text) is the stable merge key.
+     */
+    private fun chatMessageMergeKey(message: ChatMessage): String {
+        val mediaUrl = message.mediaUrl?.trim().orEmpty()
+        if (mediaUrl.isNotEmpty()) {
+            return "media:${message.channelId}:$mediaUrl"
+        }
+        return "message:${message.channelId}:${message.senderEmail}:${message.timestamp}:" +
+            "${message.text}:${message.attachedDocId}:${message.attachedAudioId}"
+    }
+
+    private fun mergeChatMessages(
+        remoteMessages: List<ChatMessage>,
+        pendingMessages: List<ChatMessage>
+    ): List<ChatMessage> {
+        val merged = LinkedHashMap<String, ChatMessage>()
+        // Prefer the server copy when it exists, then retain local messages that are
+        // still waiting for (or reporting) a transport result.
+        remoteMessages.forEach { merged[chatMessageMergeKey(it)] = it }
+        pendingMessages.forEach { message ->
+            merged.putIfAbsent(chatMessageMergeKey(message), message)
+        }
+        return merged.values.sortedBy { it.timestamp }
+    }
+
+    private fun upsertChatMessageOnScreen(message: ChatMessage) {
+        if (_currentChannel.value != message.channelId) return
+        val current = _chatMessages.value
+        val key = chatMessageMergeKey(message)
+        val index = current.indexOfFirst { chatMessageMergeKey(it) == key ||
+            (message.id != 0L && it.id == message.id) }
+        _chatMessages.value = if (index >= 0) {
+            current.toMutableList().also { it[index] = message }.sortedBy { it.timestamp }
+        } else {
+            (current + message).sortedBy { it.timestamp }
+        }
+    }
+
     fun loadChannelMessages(channelId: String) {
         _currentChannel.value = channelId
         syncPendingOfflineMessages()
@@ -2001,8 +2042,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         // 2. Cargar mensajes locales en Room para ESTE canal específicamente (Respuesta instantánea)
         roomMessagesJob = viewModelScope.launch {
             repo.getMessagesForChannel(channelId).collect { localMsgs ->
-                if (_currentChannel.value == channelId && (_chatMessages.value.isEmpty() || firestoreStatus.value != FirestoreConnectionStatus.CONNECTED_REALTIME)) {
-                    _chatMessages.value = localMsgs
+                if (_currentChannel.value == channelId) {
+                    val pending = _chatMessages.value.filter {
+                        it.channelId == channelId &&
+                            (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
+                    }
+                    _chatMessages.value = mergeChatMessages(localMsgs, pending)
                 }
             }
         }
@@ -2012,16 +2057,32 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             rtdbService.listenToMessages(channelId).collect { rtdbMsgs ->
                 if (_currentChannel.value == channelId) {
                     if (rtdbMsgs.isNotEmpty()) {
-                        _chatMessages.value = rtdbMsgs
-                        repo.insertChatMessages(rtdbMsgs)
+                        val pending = _chatMessages.value.filter {
+                            it.channelId == channelId &&
+                                (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
+                        }
+                        _chatMessages.value = mergeChatMessages(rtdbMsgs, pending)
+                        try {
+                            repo.insertChatMessages(rtdbMsgs)
+                        } catch (e: Exception) {
+                            Log.e("OmniViewModel", "No se pudieron guardar mensajes RTDB en Room para $channelId", e)
+                        }
                         viewModelScope.launch {
-                            firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
+                            try {
+                                firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
+                            } catch (e: Exception) {
+                                Log.w("OmniViewModel", "No se pudieron marcar mensajes como vistos en $channelId", e)
+                            }
                         }
                     } else {
                         // Si el canal no tiene mensajes en RTDB aún, verificar si hay mensajes locales en Room
                         repo.getMessagesForChannel(channelId).collect { localMsgs ->
                             if (_currentChannel.value == channelId) {
-                                _chatMessages.value = localMsgs
+                                val pending = _chatMessages.value.filter {
+                                    it.channelId == channelId &&
+                                        (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
+                                }
+                                _chatMessages.value = mergeChatMessages(localMsgs, pending)
                             }
                         }
                     }
@@ -2625,23 +2686,36 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val user = _authUiState.value.currentUser
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
-        val channelId = _currentChannel.value
+        // Capture the channel at tap time. The upload is asynchronous and the user may
+        // navigate elsewhere before it finishes; never silently retarget the message.
+        val channelId = _currentChannel.value.trim()
         val context = getApplication<Application>()
         val mediaStorageService = com.example.data.supabase.SupabaseMediaStorageService(context)
 
+        if (channelId.isBlank()) {
+            Log.e("OmniViewModel", "No se puede enviar multimedia: channelId vacío")
+            Toast.makeText(context, "No se pudo determinar el chat activo", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (mediaUrl.isBlank()) {
+            Log.e("OmniViewModel", "No se puede enviar multimedia: mediaUrl vacío en $channelId")
+            Toast.makeText(context, "No se encontró el archivo seleccionado", Toast.LENGTH_LONG).show()
+            return
+        }
+
         viewModelScope.launch {
             var finalUrl = mediaUrl
-            val mediaUri = android.net.Uri.parse(mediaUrl)
-            val isLocalMediaUri = mediaUri.scheme?.lowercase() in setOf("content", "file", "android.resource")
+            try {
+                val mediaUri = android.net.Uri.parse(mediaUrl)
+                val isLocalMediaUri = mediaUri.scheme?.lowercase() in
+                    setOf("content", "file", "android.resource")
 
-            // A local URI is only usable on the device that selected it. Upload it first and
-            // do not create a chat message until Supabase returns a valid public URL.
-            if (isLocalMediaUri) {
-                try {
-                    val inputUri = android.net.Uri.parse(mediaUrl)
+                // A local URI is only usable on the device that selected it. Upload it first and
+                // do not create a chat message until Supabase returns a valid public URL.
+                if (isLocalMediaUri) {
                     val ownerUid = FirebaseAuth.getInstance().currentUser?.uid
                         ?: throw IllegalStateException("No hay una sesión de Firebase activa")
-                    val mimeType = context.contentResolver.getType(inputUri)
+                    val mimeType = context.contentResolver.getType(mediaUri)
                         ?: when (mediaType) {
                             "image" -> "image/jpeg"
                             "video" -> "video/mp4"
@@ -2653,7 +2727,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
                     val uploaded = mediaStorageService.uploadMedia(
                         ownerUid = ownerUid,
-                        localUri = inputUri,
+                        localUri = mediaUri,
                         mediaType = mediaType,
                         mimeType = mimeType
                     )
@@ -2662,76 +2736,132 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         downloadUrl.isNotEmpty() &&
                             downloadUrl.startsWith("https://") &&
                             downloadUrl.contains("ovttmxwtljfqizcetoxk.supabase.co/storage/v1/object/public/chat-media/")
-                    ) {
-                        "Supabase Storage no devolvió una URL pública válida"
-                    }
+                    ) { "Supabase Storage no devolvió una URL pública válida" }
                     finalUrl = downloadUrl
+                    Log.d("OmniViewModel", "Archivo multimedia subido a Supabase; preparando mensaje en $channelId")
+                }
+
+                // Never persist a device URI or a demo/local fallback in a chat message.
+                val finalUri = android.net.Uri.parse(finalUrl)
+                if (finalUri.scheme?.lowercase() != "https" ||
+                    finalUrl.contains("gtv-videos-bucket", ignoreCase = true)) {
+                    throw IllegalStateException(
+                        "El archivo multimedia no tiene una URL HTTPS válida de Supabase Storage"
+                    )
+                }
+
+                val fallbackText = when (mediaType) {
+                    "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
+                    "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
+                    "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
+                    "sticker" -> if (caption.isNotBlank()) caption else "✨ Sticker"
+                    "youtube" -> if (caption.isNotBlank()) caption else "▶️ Video de YouTube"
+                    "document" -> if (caption.isNotBlank()) caption else "📄 Archivo adjunto"
+                    else -> if (caption.isNotBlank()) caption else "Multimedia adjunta"
+                }
+                val now = System.currentTimeMillis()
+                val msg = ChatMessage(
+                    channelId = channelId,
+                    senderName = senderName,
+                    senderEmail = senderEmail,
+                    text = fallbackText,
+                    timestamp = now,
+                    mediaType = mediaType,
+                    mediaUrl = finalUrl,
+                    isSyncedFirestore = false,
+                    deliveryStatus = "enviando",
+                    sentTimestamp = now
+                )
+
+                // Room is a cache, not a prerequisite for rendering or remote delivery.
+                // If a local DB migration/device error occurs, keep a non-zero temporary id
+                // and continue; the uploaded message must not disappear silently.
+                var localId = -System.currentTimeMillis()
+                var savedLocally = false
+                try {
+                    localId = repo.insertChatMessage(msg)
+                    savedLocally = true
                 } catch (e: Exception) {
-                    val errorMessage = e.message ?: "error desconocido al subir el archivo"
-                    Log.e("OmniViewModel", "No se pudo subir el archivo multimedia a Supabase Storage: $errorMessage", e)
+                    Log.e("OmniViewModel", "No se pudo insertar el mensaje multimedia en Room; se continuará con Firebase", e)
+                }
+                val initialMsg = msg.copy(id = localId)
+                upsertChatMessageOnScreen(initialMsg)
+                Log.d("OmniViewModel", "Mensaje multimedia visible localmente: channel=$channelId localId=$localId")
+
+                var rtdbId = ""
+                var rtdbError: Throwable? = null
+                try {
+                    rtdbId = rtdbService.sendMessage(
+                        initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true)
+                    ).trim()
+                    Log.d("OmniViewModel", "Mensaje multimedia guardado en RTDB: channel=$channelId id=$rtdbId")
+                } catch (e: Exception) {
+                    rtdbError = e
+                    Log.e("OmniViewModel", "Error enviando multimedia por RTDB: channel=$channelId", e)
+                }
+
+                // Firestore remains a backup. Execute it in the same coroutine so failures are
+                // observable and cannot cancel an unrelated detached job.
+                var firestoreId = ""
+                var firestoreError: Throwable? = null
+                try {
+                    firestoreId = firestoreChatService.sendMessage(
+                        initialMsg.copy(
+                            firestoreId = rtdbId,
+                            deliveryStatus = if (rtdbId.isNotBlank()) "enviado" else "error",
+                            isSyncedFirestore = rtdbId.isNotBlank()
+                        )
+                    )?.trim().orEmpty()
+                    if (firestoreId.isNotBlank()) {
+                        Log.d("OmniViewModel", "Mensaje multimedia respaldado en Firestore: channel=$channelId id=$firestoreId")
+                    }
+                } catch (e: Exception) {
+                    firestoreError = e
+                    Log.e("OmniViewModel", "Error respaldando multimedia en Firestore: channel=$channelId", e)
+                }
+
+                val remoteId = rtdbId.ifBlank { firestoreId }
+                val sentMsg = initialMsg.copy(
+                    firestoreId = remoteId,
+                    isSyncedFirestore = remoteId.isNotBlank(),
+                    deliveryStatus = if (remoteId.isNotBlank()) "enviado" else "error"
+                )
+                if (savedLocally) {
+                    try {
+                        repo.updateChatMessage(sentMsg)
+                    } catch (e: Exception) {
+                        Log.e("OmniViewModel", "No se pudo actualizar el estado local del multimedia", e)
+                    }
+                }
+                upsertChatMessageOnScreen(sentMsg)
+
+                if (remoteId.isBlank()) {
+                    val details = listOfNotNull(
+                        rtdbError?.message?.takeIf { it.isNotBlank() },
+                        firestoreError?.message?.takeIf { it.isNotBlank() }
+                    ).joinToString("; ")
                     Toast.makeText(
                         context,
-                        "No se pudo enviar el archivo multimedia: $errorMessage",
+                        "El archivo se subió, pero no se pudo guardar el mensaje en el chat${if (details.isNotBlank()) ": $details" else ""}",
                         Toast.LENGTH_LONG
                     ).show()
-                    return@launch
+                } else if (rtdbError != null) {
+                    Toast.makeText(
+                        context,
+                        "El archivo se subió y quedó guardado como mensaje pendiente (RTDB reportó un error)",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
+            } catch (e: Exception) {
+                // This includes upload, URL validation, and any unexpected persistence error.
+                // The UI has already cleared the composer, so always leave a diagnostic trail.
+                Log.e("OmniViewModel", "No se pudo preparar/enviar multimedia: channel=$channelId url=$mediaUrl", e)
+                Toast.makeText(
+                    context,
+                    "No se pudo enviar el archivo multimedia: ${e.message ?: "error desconocido"}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
-
-            // Never persist a device URI or a demo/local fallback in a chat message.
-            val finalUri = android.net.Uri.parse(finalUrl)
-            val finalScheme = finalUri.scheme?.lowercase()
-            if (finalScheme != "https" || finalUrl.contains("gtv-videos-bucket", ignoreCase = true)) {
-                val errorMessage = "El archivo multimedia no tiene una URL HTTPS válida de Supabase Storage"
-                Log.e("OmniViewModel", "$errorMessage: $finalUrl")
-                Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
-                return@launch
-            }
-
-            val fallbackText = when (mediaType) {
-                "image" -> if (caption.isNotBlank()) caption else "📷 Foto adjunta"
-                "video" -> if (caption.isNotBlank()) caption else "🎥 Video adjunto"
-                "gif" -> if (caption.isNotBlank()) caption else "🎭 GIF animado"
-                "sticker" -> if (caption.isNotBlank()) caption else "✨ Sticker"
-                "youtube" -> if (caption.isNotBlank()) caption else "▶️ Video de YouTube"
-                "document" -> if (caption.isNotBlank()) caption else "📄 Archivo adjunto"
-                else -> if (caption.isNotBlank()) caption else "Multimedia adjunta"
-            }
-
-            val now = System.currentTimeMillis()
-            val msg = ChatMessage(
-                channelId = channelId,
-                senderName = senderName,
-                senderEmail = senderEmail,
-                text = fallbackText,
-                timestamp = now,
-                mediaType = mediaType,
-                mediaUrl = finalUrl,
-                isSyncedFirestore = false,
-                deliveryStatus = "enviando",
-                sentTimestamp = now
-            )
-
-            val localId = repo.insertChatMessage(msg)
-            val initialMsg = msg.copy(id = localId)
-            if (_currentChannel.value == channelId) {
-                _chatMessages.value = (_chatMessages.value + initialMsg).distinctBy { if (it.firestoreId.isNotBlank()) it.firestoreId else it.id.toString() }
-            }
-
-            val firestoreId = rtdbService.sendMessage(initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true))
-            
-            viewModelScope.launch {
-                firestoreChatService.sendMessage(initialMsg.copy(firestoreId = firestoreId, deliveryStatus = "enviado", isSyncedFirestore = true))
-            }
-
-            val sentMsg = initialMsg.copy(
-                firestoreId = firestoreId,
-                isSyncedFirestore = firestoreId.isNotBlank(),
-                deliveryStatus = if (firestoreId.isNotBlank()) "enviado" else "error"
-            )
-            
-            repo.updateChatMessage(sentMsg)
-            _chatMessages.value = _chatMessages.value.map { if (it.id == localId) sentMsg else it }
         }
     }
 

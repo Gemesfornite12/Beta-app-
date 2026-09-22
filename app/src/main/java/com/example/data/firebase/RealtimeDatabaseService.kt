@@ -1,5 +1,6 @@
 package com.example.data.firebase
 
+import android.util.Log
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
@@ -18,6 +19,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 
 class RealtimeDatabaseService {
+
+    companion object {
+        private const val TAG = "RealtimeDatabaseService"
+    }
 
     private val auth = FirebaseAuth.getInstance()
     private val rtdbInstance: FirebaseDatabase = FirebaseDatabase.getInstance("https://omnistudio-caaf5-default-rtdb.firebaseio.com")
@@ -328,16 +333,24 @@ class RealtimeDatabaseService {
             "seenBy" to message.seenBy
         )
 
-        database.child("chats").child(message.channelId).child("messages").child(docId).setValue(messageData).await()
+        val messageRef = database.child("chats").child(message.channelId).child("messages").child(docId)
+        messageRef.setValue(messageData).await()
+        Log.d(TAG, "Mensaje guardado en RTDB: channel=${message.channelId}, id=$docId")
 
-        // Actualizar metadatos del canal
+        // The message path is the source of truth. Channel metadata is only a convenience
+        // for chat lists and may be denied by rules independently; it must not turn a
+        // successfully written message into a failed send.
         val channelMeta = mapOf(
             "lastMessageText" to message.text,
             "lastMessageTimestamp" to message.timestamp,
             "lastMessageSender" to message.senderName,
             "lastUpdated" to System.currentTimeMillis()
         )
-        database.child("chats").child(message.channelId).updateChildren(channelMeta).await()
+        try {
+            database.child("chats").child(message.channelId).updateChildren(channelMeta).await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Mensaje guardado pero no se pudieron actualizar metadatos de ${message.channelId}", e)
+        }
 
         return docId
     }
