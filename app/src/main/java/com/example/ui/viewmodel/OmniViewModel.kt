@@ -19,6 +19,7 @@ import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.local.AppDatabase
+import com.example.data.supabase.SupabaseMediaStorageService
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
 import com.example.data.model.CallStatus
@@ -2273,14 +2274,34 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         if (msg.senderEmail != currentUserEmail) return
 
         viewModelScope.launch {
-            repo.deleteChatMessage(msg.id)
-            if (msg.firestoreId.isNotBlank()) {
-                rtdbService.deleteMessage(msg.channelId, msg.firestoreId)
-                firestoreChatService.deleteMessage(msg.channelId, msg.firestoreId)
-                repo.deleteChatMessageByFirestoreId(msg.firestoreId)
-            }
-            _chatMessages.value = _chatMessages.value.filter {
-                it.id != msg.id && (it.firestoreId.isBlank() || it.firestoreId != msg.firestoreId)
+            try {
+                // Supabase objects must be removed through the Firebase-verified
+                // Edge Function before the message is deleted. External media
+                // URLs (GIF providers, YouTube, etc.) are not touched.
+                val storagePath = msg.mediaUrl?.let {
+                    SupabaseMediaStorageService.storagePathFromPublicUrl(it)
+                }
+                if (!storagePath.isNullOrBlank()) {
+                    SupabaseMediaStorageService(getApplication<Application>())
+                        .deleteMediaObject(storagePath)
+                }
+
+                repo.deleteChatMessage(msg.id)
+                if (msg.firestoreId.isNotBlank()) {
+                    rtdbService.deleteMessage(msg.channelId, msg.firestoreId)
+                    firestoreChatService.deleteMessage(msg.channelId, msg.firestoreId)
+                    repo.deleteChatMessageByFirestoreId(msg.firestoreId)
+                }
+                _chatMessages.value = _chatMessages.value.filter {
+                    it.id != msg.id && (it.firestoreId.isBlank() || it.firestoreId != msg.firestoreId)
+                }
+            } catch (error: Exception) {
+                Log.e("OmniViewModel", "No se pudo eliminar el archivo multimedia de forma segura", error)
+                Toast.makeText(
+                    getApplication<Application>(),
+                    "No se pudo eliminar el archivo multimedia. El mensaje no se eliminó.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }

@@ -17,7 +17,9 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.UUID
@@ -43,6 +45,20 @@ class SupabaseMediaStorageService(context: Context) {
         private const val MAX_FILE_SIZE_BYTES = 50L * 1024L * 1024L
         private const val SUPABASE_URL = BuildConfig.SUPABASE_PROJECT_URL
         private const val SUPABASE_PUBLISHABLE_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
+        private const val DELETE_FUNCTION = "functions/v1/delete-chat-media"
+
+        /**
+         * Returns a raw object path only for this app's public chat-media URL.
+         * External URLs (GIF providers, YouTube, etc.) are never sent to the
+         * privileged delete function.
+         */
+        fun storagePathFromPublicUrl(url: String): String? {
+            val prefix = "$SUPABASE_URL/storage/v1/object/public/$BUCKET/"
+            if (!url.startsWith(prefix)) return null
+            val encodedPath = url.removePrefix(prefix).substringBefore('?')
+            if (encodedPath.isBlank()) return null
+            return encodedPath.split('/').joinToString("/") { Uri.decode(it) }
+        }
     }
 
     private val context = context.applicationContext
@@ -156,24 +172,42 @@ class SupabaseMediaStorageService(context: Context) {
         firestore.collection("media").document(mediaId).delete().await()
     }
 
-    private suspend fun deleteObject(ownerUid: String, storagePath: String) = withContext(Dispatchers.IO) {
-        require(auth.currentUser?.uid == ownerUid) { "La sesión de Firebase no coincide con el propietario" }
-        require(storagePath.split('/').none { it == "." || it == ".." }) {
+    /**
+     * Deletes a chat-media object through the Edge Function. Firebase verifies
+     * the ID token server-side; the Android app never receives service-role access.
+     */
+    suspend fun deleteMediaObject(storagePath: String) = withContext(Dispatchers.IO) {
+        require(storagePath.split('/').none { it.isBlank() || it == "." || it == ".." }) {
             "La ruta del archivo no es válida"
+        }
+        require(storagePath.startsWith("users/") && "/media/" in storagePath) {
+            "La ruta del archivo no pertenece al almacenamiento multimedia"
         }
         val firebaseToken = auth.currentUser?.getIdToken(false)?.await()?.token
             ?: throw IllegalStateException("No hay un token de Firebase activo")
+        val requestBody = JSONObject().put("storagePath", storagePath)
+            .toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         val request = Request.Builder()
-            .url("$SUPABASE_URL/storage/v1/object/$BUCKET/${encodeStoragePath(storagePath)}")
+            .url("$SUPABASE_URL/$DELETE_FUNCTION")
             .header("apikey", SUPABASE_PUBLISHABLE_KEY)
             .header("Authorization", "Bearer $firebaseToken")
-            .delete()
+            .header("Content-Type", "application/json")
+            .post(requestBody)
             .build()
         httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful && response.code != 404) {
-                throw IOException("Supabase Storage rechazó la eliminación (${response.code})")
+            if (!response.isSuccessful) {
+                val detail = response.body?.string()?.take(300).orEmpty()
+                throw IOException(
+                    "La función segura rechazó la eliminación (${response.code})" +
+                        if (detail.isNotBlank()) ": $detail" else ""
+                )
             }
         }
+    }
+
+    private suspend fun deleteObject(ownerUid: String, storagePath: String) {
+        require(auth.currentUser?.uid == ownerUid) { "La sesión de Firebase no coincide con el propietario" }
+        deleteMediaObject(storagePath)
     }
 
     private suspend fun executeUpload(request: Request, storagePath: String) = withContext(Dispatchers.IO) {
