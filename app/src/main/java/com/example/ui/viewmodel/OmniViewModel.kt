@@ -2627,7 +2627,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
         val channelId = _currentChannel.value
         val context = getApplication<Application>()
-        val mediaStorageService = com.example.data.firebase.FirebaseMediaStorageService(context)
+        val mediaStorageService = com.example.data.supabase.SupabaseMediaStorageService(context)
 
         viewModelScope.launch {
             var finalUrl = mediaUrl
@@ -2635,7 +2635,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             val isLocalMediaUri = mediaUri.scheme?.lowercase() in setOf("content", "file", "android.resource")
 
             // A local URI is only usable on the device that selected it. Upload it first and
-            // do not create a chat message until Firebase returns a valid public download URL.
+            // do not create a chat message until Supabase returns a valid public URL.
             if (isLocalMediaUri) {
                 try {
                     val inputUri = android.net.Uri.parse(mediaUrl)
@@ -2661,14 +2661,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     require(
                         downloadUrl.isNotEmpty() &&
                             downloadUrl.startsWith("https://") &&
-                            downloadUrl.contains("firebasestorage.googleapis.com")
+                            downloadUrl.contains("ovttmxwtljfqizcetoxk.supabase.co/storage/v1/object/public/chat-media/")
                     ) {
-                        "Firebase Storage no devolvió una URL de descarga válida"
+                        "Supabase Storage no devolvió una URL pública válida"
                     }
                     finalUrl = downloadUrl
                 } catch (e: Exception) {
                     val errorMessage = e.message ?: "error desconocido al subir el archivo"
-                    Log.e("OmniViewModel", "No se pudo subir el archivo multimedia a Firebase Storage: $errorMessage", e)
+                    Log.e("OmniViewModel", "No se pudo subir el archivo multimedia a Supabase Storage: $errorMessage", e)
                     Toast.makeText(
                         context,
                         "No se pudo enviar el archivo multimedia: $errorMessage",
@@ -2682,7 +2682,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             val finalUri = android.net.Uri.parse(finalUrl)
             val finalScheme = finalUri.scheme?.lowercase()
             if (finalScheme != "https" || finalUrl.contains("gtv-videos-bucket", ignoreCase = true)) {
-                val errorMessage = "El archivo multimedia no tiene una URL HTTPS válida de Firebase Storage"
+                val errorMessage = "El archivo multimedia no tiene una URL HTTPS válida de Supabase Storage"
                 Log.e("OmniViewModel", "$errorMessage: $finalUrl")
                 Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
                 return@launch
