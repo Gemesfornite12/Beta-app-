@@ -2853,29 +2853,49 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 var rtdbId = ""
                 var rtdbError: Throwable? = null
                 try {
-                    rtdbId = rtdbService.sendMessage(
-                        initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true)
-                    ).trim()
-                    Log.d("OmniViewModel", "Mensaje multimedia guardado en RTDB: channel=$channelId id=$rtdbId")
+                    // RTDB is the primary remote copy, but it must never leave the visible
+                    // message in a permanent sending state when Firebase does not respond.
+                    val rtdbResult = withTimeoutOrNull(20_000L) {
+                        rtdbService.sendMessage(
+                            initialMsg.copy(deliveryStatus = "enviado", isSyncedFirestore = true)
+                        ).trim()
+                    }
+                    if (rtdbResult == null) {
+                        rtdbError = IllegalStateException(
+                            "Tiempo de espera agotado al guardar el mensaje en Realtime Database"
+                        )
+                    } else {
+                        rtdbId = rtdbResult
+                        Log.d("OmniViewModel", "Mensaje multimedia guardado en RTDB: channel=$channelId id=$rtdbId")
+                    }
                 } catch (e: Exception) {
                     rtdbError = e
                     Log.e("OmniViewModel", "Error enviando multimedia por RTDB: channel=$channelId", e)
                 }
 
-                // Firestore remains a backup. Execute it in the same coroutine so failures are
-                // observable and cannot cancel an unrelated detached job.
+                // Firestore is only a backup. Bound it independently so a Firebase outage
+                // cannot keep the upload UI spinning after Supabase already returned a URL.
                 var firestoreId = ""
                 var firestoreError: Throwable? = null
                 try {
-                    firestoreId = firestoreChatService.sendMessage(
-                        initialMsg.copy(
-                            firestoreId = rtdbId,
-                            deliveryStatus = if (rtdbId.isNotBlank()) "enviado" else "error",
-                            isSyncedFirestore = rtdbId.isNotBlank()
+                    val firestoreResult = withTimeoutOrNull(20_000L) {
+                        firestoreChatService.sendMessage(
+                            initialMsg.copy(
+                                firestoreId = rtdbId,
+                                deliveryStatus = if (rtdbId.isNotBlank()) "enviado" else "error",
+                                isSyncedFirestore = rtdbId.isNotBlank()
+                            )
+                        )?.trim().orEmpty()
+                    }
+                    if (firestoreResult == null) {
+                        firestoreError = IllegalStateException(
+                            "Tiempo de espera agotado al respaldar el mensaje en Firestore"
                         )
-                    )?.trim().orEmpty()
-                    if (firestoreId.isNotBlank()) {
-                        Log.d("OmniViewModel", "Mensaje multimedia respaldado en Firestore: channel=$channelId id=$firestoreId")
+                    } else {
+                        firestoreId = firestoreResult
+                        if (firestoreId.isNotBlank()) {
+                            Log.d("OmniViewModel", "Mensaje multimedia respaldado en Firestore: channel=$channelId id=$firestoreId")
+                        }
                     }
                 } catch (e: Exception) {
                     firestoreError = e

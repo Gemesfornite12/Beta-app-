@@ -13,6 +13,7 @@ import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,7 +23,9 @@ import okio.BufferedSink
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
  * Stores chat attachments in the public Supabase `chat-media` bucket.
@@ -43,6 +46,10 @@ class SupabaseMediaStorageService(context: Context) {
         private const val TAG = "SupabaseMediaStorage"
         private const val BUCKET = "chat-media"
         private const val MAX_FILE_SIZE_BYTES = 50L * 1024L * 1024L
+        // A 50 MB upload may need several minutes on a mobile connection, but no network
+        // operation should be allowed to leave the composer in "100%" forever.
+        private const val UPLOAD_CALL_TIMEOUT_MINUTES = 6L
+        private const val CLEANUP_TIMEOUT_MILLIS = 15_000L
         private const val SUPABASE_URL = BuildConfig.SUPABASE_PROJECT_URL
         private const val SUPABASE_PUBLISHABLE_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         private const val DELETE_FUNCTION = "functions/v1/delete-chat-media"
@@ -65,7 +72,14 @@ class SupabaseMediaStorageService(context: Context) {
     private val app: FirebaseApp = FirebaseAppProvider.get(context)
     private val auth = FirebaseAuth.getInstance(app)
     private val firestore = FirebaseFirestore.getInstance(app)
-    private val httpClient = OkHttpClient()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        // writeTimeout bounds stalled request-body writes; callTimeout bounds the full upload,
+        // including waiting for Supabase's response after progress reaches 100%.
+        .writeTimeout(5, TimeUnit.MINUTES)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(UPLOAD_CALL_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+        .build()
 
     /**
      * Uploads a content:// URI and returns a public URL only after Supabase confirms success.
@@ -160,8 +174,15 @@ class SupabaseMediaStorageService(context: Context) {
         } catch (error: Exception) {
             val pathToClean = uploadedPath
             if (pathToClean != null) {
-                runCatching { deleteObject(ownerUid, pathToClean) }
-                    .onFailure { cleanupError -> Log.w(TAG, "No se pudo limpiar una subida incompleta", cleanupError) }
+                runCatching {
+                    // Cleanup is best-effort and must not turn an upload timeout into another
+                    // unbounded wait on the same network path.
+                    withTimeoutOrNull(CLEANUP_TIMEOUT_MILLIS) {
+                        deleteObject(ownerUid, pathToClean)
+                    } ?: Log.w(TAG, "La limpieza de una subida incompleta agotó su tiempo")
+                }.onFailure { cleanupError ->
+                    Log.w(TAG, "No se pudo limpiar una subida incompleta", cleanupError)
+                }
             }
             throw error
         } finally {
@@ -217,20 +238,30 @@ class SupabaseMediaStorageService(context: Context) {
     }
 
     private suspend fun executeUpload(request: Request, storagePath: String) = withContext(Dispatchers.IO) {
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val detail = response.body?.string()?.take(300).orEmpty()
-                Log.e(
-                    TAG,
-                    "Supabase upload failed: code=${response.code}, path=$storagePath" +
-                        if (detail.isNotBlank()) ", detail=$detail" else ""
-                )
-                throw IOException(
-                    "Supabase Storage rechazó el archivo (${response.code})" +
-                        if (detail.isNotBlank()) ": $detail" else ""
-                )
+        try {
+            httpClient.newCall(request).execute().use { response ->
+                // Drain the response before closing it. This releases the connection cleanly
+                // and prevents a successful request from remaining suspended after 100%.
+                val responseText = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val detail = responseText.take(300)
+                    Log.e(
+                        TAG,
+                        "Supabase upload failed: code=${response.code}, path=$storagePath" +
+                            if (detail.isNotBlank()) ", detail=$detail" else ""
+                    )
+                    throw IOException(
+                        "Supabase Storage rechazó el archivo (${response.code})" +
+                            if (detail.isNotBlank()) ": $detail" else ""
+                    )
+                }
+                Log.d(TAG, "Archivo multimedia subido: $storagePath")
             }
-            Log.d(TAG, "Archivo multimedia subido: $storagePath")
+        } catch (timeout: InterruptedIOException) {
+            throw IOException(
+                "Tiempo de espera agotado al subir el archivo a Supabase Storage",
+                timeout
+            )
         }
     }
 
