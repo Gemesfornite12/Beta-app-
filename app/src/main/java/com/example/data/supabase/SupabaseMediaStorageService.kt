@@ -129,11 +129,8 @@ class SupabaseMediaStorageService(context: Context) {
             )
             val request = Request.Builder()
                 .url("$SUPABASE_URL/storage/v1/object/$BUCKET/$encodedPath")
-                // The anon INSERT policy authenticates this request with the publishable key and bearer token.
-                // Firebase Auth tokens are not Supabase JWTs and must not be sent here.
+                // Upload uses anon publishable-key access; deleteMediaObject uses Firebase bearer auth.
                 .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-                .header("Authorization", "Bearer $SUPABASE_PUBLISHABLE_KEY")
-                .header("x-upsert", "true")
                 .post(requestBody)
                 .build()
 
