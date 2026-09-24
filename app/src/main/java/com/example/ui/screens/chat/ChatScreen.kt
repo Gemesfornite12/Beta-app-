@@ -2382,47 +2382,68 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de DOCUMENTOS (Archivos genéricos subidos)
+                    // Renderizado de DOCUMENTOS (Archivos genéricos subidos o videos detectados automáticamente)
                     if (message.mediaType == "document" && !message.mediaUrl.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF0F172A),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
-                                    intent.data = android.net.Uri.parse(message.mediaUrl)
-                                    context.startActivity(intent)
-                                }
-                                .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                        ) {
-                            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Color(0xFF475569),
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.AttachFile,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                        val urlAndText = "${message.mediaUrl} ${message.text} ${message.attachedDocTitle.orEmpty()}".lowercase()
+                        val isDetectedVideo = urlAndText.contains(".mp4") || urlAndText.contains(".mov") ||
+                                urlAndText.contains(".mkv") || urlAndText.contains(".webm") ||
+                                urlAndText.contains(".avi") || urlAndText.contains(".3gp") || urlAndText.contains(".m4v")
+
+                        if (isDetectedVideo) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            VideoPlayer(
+                                videoUrl = message.mediaUrl,
+                                title = if (message.text.isNotBlank() && !message.text.startsWith("📄")) message.text else "Video detectado",
+                                thumbnailUrl = message.mediaThumbnail,
+                                showActionButtons = true,
+                                onLaunchOverlay = onOpenYouTubeOverlay,
+                                onLaunchStandardVideo = onOpenStandardVideo,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .testTag("msg_video_doc_${message.id}")
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF0F172A),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                        intent.data = android.net.Uri.parse(message.mediaUrl)
+                                        context.startActivity(intent)
                                     }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text("Toca para descargar/abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                    .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                            ) {
+                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF475569),
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                Icons.Default.AttachFile,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text("Toca para descargar/abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                    }
                                 }
                             }
                         }

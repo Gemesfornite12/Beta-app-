@@ -366,29 +366,62 @@ fun MediaPickerSheet(
         }
     }
 
-    // File/Document Picker nativo de Android (cualquier archivo del dispositivo)
+    // File/Document Picker nativo de Android (cualquier archivo del dispositivo con detección automática)
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             val fileName = getFileNameFromUri(context, uri)
             val ext = fileName.substringAfterLast(".", "bin").lowercase()
-            val format = when (ext) {
-                "pdf" -> DocumentFormat.PDF
-                "docx", "doc" -> DocumentFormat.DOCX
-                "md" -> DocumentFormat.MARKDOWN
-                "html" -> DocumentFormat.HTML
-                "txt" -> DocumentFormat.TXT
-                else -> DocumentFormat.TXT
+            val mimeType = context.contentResolver.getType(uri)?.lowercase().orEmpty()
+
+            val isVideo = ext in listOf("mp4", "mkv", "mov", "webm", "avi", "3gp", "flv", "wmv", "m4v") || mimeType.startsWith("video/")
+            val isGif = ext == "gif" || mimeType == "image/gif"
+            val isImage = ext in listOf("jpg", "jpeg", "png", "webp", "bmp", "heic") || mimeType.startsWith("image/")
+            val isAudio = ext in listOf("mp3", "wav", "m4a", "aac", "ogg", "flac", "opus") || mimeType.startsWith("audio/")
+
+            when {
+                isVideo -> {
+                    onSendMedia("video", uri.toString(), "🎥 $fileName")
+                }
+                isGif -> {
+                    onSendMedia("gif", uri.toString(), "🎭 $fileName")
+                }
+                isImage -> {
+                    onSendMedia("image", uri.toString(), "📷 $fileName")
+                }
+                isAudio -> {
+                    val audioProj = AudioProject(
+                        id = System.currentTimeMillis(),
+                        title = fileName,
+                        description = "Archivo de audio seleccionado desde almacenamiento local",
+                        genre = "Audio Local",
+                        bpm = 120,
+                        patternDataJson = "[]",
+                        authorEmail = "local",
+                        isPublic = true
+                    )
+                    onSendAudio(audioProj)
+                }
+                else -> {
+                    val format = when (ext) {
+                        "pdf" -> DocumentFormat.PDF
+                        "docx", "doc" -> DocumentFormat.DOCX
+                        "md" -> DocumentFormat.MARKDOWN
+                        "html" -> DocumentFormat.HTML
+                        "txt" -> DocumentFormat.TXT
+                        else -> DocumentFormat.TXT
+                    }
+                    val docItem = DocumentItem(
+                        id = System.currentTimeMillis(),
+                        title = fileName,
+                        content = "Archivo adjunto enviado desde el almacenamiento local: $uri",
+                        currentFormat = format,
+                        authorEmail = "local"
+                    )
+                    onSendDoc(docItem)
+                }
             }
-            val docItem = DocumentItem(
-                id = System.currentTimeMillis(),
-                title = fileName,
-                content = "Archivo adjunto enviado desde el almacenamiento local: $uri",
-                currentFormat = format,
-                authorEmail = "local"
-            )
-            onSendDoc(docItem)
             onDismiss()
         }
     }

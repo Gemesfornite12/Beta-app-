@@ -544,6 +544,41 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val db = AppDatabase.getInstance(application)
         repo = OmniRepository(db)
 
+        viewModelScope.launch {
+            com.example.data.service.BackgroundUploadService.uploadStateFlow.collect { bgState ->
+                if (bgState.isUploading) {
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "uploading",
+                        mediaType = bgState.mediaType,
+                        progress = bgState.progress,
+                        message = bgState.message
+                    )
+                } else if (bgState.isSuccess) {
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "sent",
+                        mediaType = bgState.mediaType,
+                        progress = 100,
+                        message = bgState.message
+                    )
+                    delay(3000L)
+                    if (_mediaSendState.value.phase == "sent") {
+                        _mediaSendState.value = MediaSendUiState(phase = "idle")
+                    }
+                } else if (bgState.isError) {
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "error",
+                        mediaType = bgState.mediaType,
+                        progress = 0,
+                        message = bgState.message
+                    )
+                    delay(5000L)
+                    if (_mediaSendState.value.phase == "error") {
+                        _mediaSendState.value = MediaSendUiState(phase = "idle")
+                    }
+                }
+            }
+        }
+
         documents = combine(repo.allDocuments, firestoreChatService.listenToAllDocuments()) { local, cloud ->
             val cloudMap = cloud.associateBy { it.firestoreId }
             val merged = local.toMutableList()
@@ -2149,6 +2184,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val text = _chatInputText.value.trim()
         if (text.isEmpty() && attachedDoc == null && attachedAudio == null) return
 
+        // Detección automática de video si un documento adjunto resulta ser mp4 u otro formato de video
+        if (attachedDoc != null) {
+            val contentStr = attachedDoc.content.orEmpty()
+            val fullInfo = "${attachedDoc.title} $contentStr".lowercase()
+            val isVideoFormat = fullInfo.contains(".mp4") || fullInfo.contains(".mov") || fullInfo.contains(".mkv") ||
+                    fullInfo.contains(".webm") || fullInfo.contains(".avi") || fullInfo.contains(".3gp") || fullInfo.contains(".m4v")
+
+            if (isVideoFormat) {
+                val mediaUriStr = contentStr.substringAfter("almacenamiento local: ", "").trim().ifBlank {
+                    contentStr.substringAfter("https://", "").let { if (it.isNotBlank()) "https://$it" else "" }
+                }
+                if (mediaUriStr.isNotBlank()) {
+                    _chatInputText.value = ""
+                    sendMediaMessage(
+                        mediaType = "video",
+                        mediaUrl = mediaUriStr,
+                        caption = text.ifEmpty { "🎥 ${attachedDoc.title}" }
+                    )
+                    return
+                }
+            }
+        }
+
         val user = _authUiState.value.currentUser
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
@@ -2753,63 +2811,55 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val isLocalMediaUri = mediaUri.scheme?.lowercase() in
                     setOf("content", "file", "android.resource")
 
-                // A local URI is only usable on the device that selected it. Upload it first and
-                // do not create a chat message until Supabase returns a valid public URL.
+                // Auto-detección del tipo de archivo (p. ej. .mp4 -> video)
+                val mimeTypeFromResolver = if (isLocalMediaUri) context.contentResolver.getType(mediaUri)?.lowercase().orEmpty() else ""
+                val fileNameOrUrl = mediaUrl.substringAfterLast('/')
+                val ext = fileNameOrUrl.substringAfterLast('.').lowercase().substringBefore('?')
+
+                val detectedType = when {
+                    ext in listOf("mp4", "mkv", "mov", "webm", "avi", "3gp", "flv", "wmv", "m4v") ||
+                            mimeTypeFromResolver.startsWith("video/") ||
+                            mediaUrl.contains(".mp4", ignoreCase = true) -> "video"
+                    ext == "gif" || mimeTypeFromResolver == "image/gif" || mediaUrl.contains(".gif", ignoreCase = true) -> "gif"
+                    ext in listOf("jpg", "jpeg", "png", "webp", "bmp", "heic") || mimeTypeFromResolver.startsWith("image/") -> "image"
+                    ext in listOf("mp3", "wav", "m4a", "aac", "ogg", "flac", "opus") || mimeTypeFromResolver.startsWith("audio/") -> "audio"
+                    mediaType.isNotBlank() && mediaType != "document" -> mediaType
+                    else -> "document"
+                }
+
+                val effectiveMediaType = detectedType
+
+                // A local URI is only usable on the device that selected it. Delegate to BackgroundUploadService
+                // so the upload continues in a Foreground Service even if the app is minimized or closed.
                 if (isLocalMediaUri) {
-                    _mediaSendState.value = MediaSendUiState(
-                        phase = "uploading",
-                        mediaType = mediaType,
-                        message = "Subiendo archivo…"
-                    )
                     val ownerUid = FirebaseAuth.getInstance().currentUser?.uid
                         ?: throw IllegalStateException("No hay una sesión de Firebase activa")
-                    val mimeType = context.contentResolver.getType(mediaUri)
-                        ?: when (mediaType) {
-                            "image" -> "image/jpeg"
-                            "video" -> "video/mp4"
-                            "audio" -> "audio/mpeg"
-                            "gif" -> "image/gif"
-                            "sticker" -> "image/webp"
-                            else -> "application/octet-stream"
-                        }
 
-                    val uploaded = mediaStorageService.uploadMedia(
-                        ownerUid = ownerUid,
-                        localUri = mediaUri,
-                        mediaType = mediaType,
-                        mimeType = mimeType,
-                        onProgress = { transferredBytes, totalBytes ->
-                            val rawPercent = if (totalBytes > 0L) {
-                                ((transferredBytes * 90L) / totalBytes).toInt().coerceIn(0, 90)
-                            } else 0
-                            val msg = if (rawPercent >= 90) {
-                                "Enviando a Supabase y procesando… 90%"
-                            } else {
-                                "Subiendo archivo… $rawPercent%"
-                            }
-                            _mediaSendState.value = MediaSendUiState(
-                                phase = "uploading",
-                                mediaType = mediaType,
-                                progress = rawPercent,
-                                message = msg
-                            )
-                        }
+                    _mediaSendState.value = MediaSendUiState(
+                        phase = "uploading",
+                        mediaType = effectiveMediaType,
+                        progress = 0,
+                        message = "Iniciando subida en segundo plano..."
                     )
-                    val downloadUrl = uploaded.downloadUrl.trim()
-                    require(
-                        downloadUrl.isNotEmpty() &&
-                            downloadUrl.startsWith("https://") &&
-                            downloadUrl.contains("ovttmxwtljfqizcetoxk.supabase.co/storage/v1/object/public/chat-media/")
-                    ) { "Supabase Storage no devolvió una URL pública válida" }
-                    finalUrl = downloadUrl
-                    Log.d("OmniViewModel", "Archivo multimedia subido a Supabase; preparando mensaje en $channelId")
+
+                    com.example.data.service.BackgroundUploadService.startUpload(
+                        context = context,
+                        mediaUri = mediaUrl,
+                        mediaType = effectiveMediaType,
+                        caption = caption,
+                        channelId = channelId,
+                        ownerUid = ownerUid,
+                        senderName = senderName,
+                        senderEmail = senderEmail
+                    )
+                    return@launch
                 }
 
                 _mediaSendState.value = MediaSendUiState(
                     phase = "saving",
-                    mediaType = mediaType,
+                    mediaType = effectiveMediaType,
                     progress = 100,
-                    message = "Subida verificada. Guardando mensaje en el chat…"
+                    message = "Guardando mensaje en el chat…"
                 )
 
                 // Never persist a device URI or a demo/local fallback in a chat message.
