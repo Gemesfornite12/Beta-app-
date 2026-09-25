@@ -73,6 +73,9 @@ interface SaraApi {
     @POST("api/rasa/predict")
     suspend fun predictNextAction(@Header("Authorization") authorization: String): JsonObject
 
+    @POST("api/rasa/reset")
+    suspend fun resetConversation(@Header("Authorization") authorization: String): ResponseBody
+
     @POST("api/rasa/trigger-intent")
     suspend fun triggerIntent(
         @Header("Authorization") authorization: String,

@@ -319,6 +319,69 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAiLoading = MutableStateFlow(false)
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
+    private val _saraAdvancedResult = MutableStateFlow<String?>(null)
+    val saraAdvancedResult: StateFlow<String?> = _saraAdvancedResult.asStateFlow()
+
+    private val _isSaraAdvancedLoading = MutableStateFlow(false)
+    val isSaraAdvancedLoading: StateFlow<Boolean> = _isSaraAdvancedLoading.asStateFlow()
+
+    fun runSaraAdvanced(operation: String, input: String = "") {
+        if (_isSaraAdvancedLoading.value) return
+        val cleanInput = input.trim()
+        if (operation in setOf("parse", "trigger", "message", "events") && cleanInput.isBlank()) {
+            _saraAdvancedResult.value = "Escribe un texto o nombre de intención primero."
+            return
+        }
+        viewModelScope.launch {
+            _isSaraAdvancedLoading.value = true
+            _saraAdvancedResult.value = null
+            try {
+                val firebaseUser = FirebaseAuth.getInstance().currentUser
+                    ?: throw IllegalStateException("Inicia sesión con Firebase para usar estas herramientas.")
+                val idToken = firebaseUser.getIdToken(false).await().token
+                    ?: throw IllegalStateException("No pude validar tu sesión de Firebase.")
+                val authorization = "Bearer $idToken"
+                val api = com.example.data.api.SaraRetrofitClient.service
+                val result = when (operation) {
+                    "status" -> api.getStatus(authorization).toString()
+                    "version" -> api.getVersion(authorization).toString()
+                    "domain" -> api.getDomain(authorization).toString()
+                    "tracker" -> api.getTracker(authorization, includeEvents = "ALL").toString()
+                    "story" -> api.getStory(authorization, allSessions = true).use { it.string() }
+                    "parse" -> api.parseMessage(
+                        authorization,
+                        com.example.data.api.SaraTextRequest(cleanInput)
+                    ).toString()
+                    "predict" -> api.predictNextAction(authorization).toString()
+                    "trigger" -> api.triggerIntent(
+                        authorization,
+                        com.example.data.api.SaraTriggerIntentRequest(name = cleanInput)
+                    ).toString()
+                    "message" -> api.addMessageToTracker(
+                        authorization,
+                        com.example.data.api.SaraTextRequest(cleanInput)
+                    ).toString()
+                    "events" -> api.appendUserEvent(
+                        authorization,
+                        com.example.data.api.SaraTextRequest(cleanInput)
+                    ).toString()
+                    else -> throw IllegalArgumentException("Herramienta avanzada desconocida.")
+                }
+                _saraAdvancedResult.value = result.ifBlank { "Rasa respondió sin contenido." }
+            } catch (e: retrofit2.HttpException) {
+                _saraAdvancedResult.value = "Rasa respondió con HTTP ${e.code()}. Verifica que el modelo esté listo y la sesión siga activa."
+            } catch (e: Exception) {
+                _saraAdvancedResult.value = e.message ?: "No se pudo consultar el endpoint de Sara."
+            } finally {
+                _isSaraAdvancedLoading.value = false
+            }
+        }
+    }
+
+    fun clearSaraAdvancedResult() {
+        _saraAdvancedResult.value = null
+    }
+
     fun sendAiMessage(text: String) {
         val userText = text.trim()
         if (userText.isBlank() || _isAiLoading.value) return
@@ -384,6 +447,20 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearAiChat() {
         _aiChatHistory.value = emptyList()
+        val firebaseUser = FirebaseAuth.getInstance().currentUser ?: return
+        viewModelScope.launch {
+            try {
+                val idToken = firebaseUser.getIdToken(false).await().token ?: return@launch
+                com.example.data.api.SaraRetrofitClient.service
+                    .resetConversation("Bearer $idToken")
+                    .use { }
+            } catch (e: Exception) {
+                Log.w("OmniViewModel", "Could not reset Sara's server tracker", e)
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                    "Limpié este chat, pero no pude reiniciar el historial del servidor."
+                )
+            }
+        }
     }
 
     private val _selectedGeminiModel = MutableStateFlow("")

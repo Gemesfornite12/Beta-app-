@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -80,6 +82,10 @@ fun AiAssistantScreen(
     val coroutineScope = rememberCoroutineScope()
     val aiChatHistory by viewModel.aiChatHistory.collectAsState()
     val isAiLoading by viewModel.isAiLoading.collectAsState()
+    val saraAdvancedResult by viewModel.saraAdvancedResult.collectAsState()
+    val isSaraAdvancedLoading by viewModel.isSaraAdvancedLoading.collectAsState()
+    var showSaraAdvanced by remember { mutableStateOf(false) }
+    var saraAdvancedInput by remember { mutableStateOf("") }
     var currentTab by remember { mutableStateOf(AiStudioTab.SARA) }
 
     // TTS Engine
@@ -128,6 +134,11 @@ fun AiAssistantScreen(
                     if (currentTab == AiStudioTab.SARA && aiChatHistory.isNotEmpty()) {
                         IconButton(onClick = { viewModel.clearAiChat() }) {
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
+                        }
+                    }
+                    if (currentTab == AiStudioTab.SARA) {
+                        IconButton(onClick = { showSaraAdvanced = true }) {
+                            Icon(Icons.Default.Tune, contentDescription = "Herramientas avanzadas de Sara", tint = Color(0xFF94A3B8))
                         }
                     }
                     IconButton(onClick = {
@@ -197,6 +208,20 @@ fun AiAssistantScreen(
                 }
             }
         }
+    }
+
+    if (showSaraAdvanced && currentTab == AiStudioTab.SARA) {
+        SaraAdvancedDialog(
+            result = saraAdvancedResult,
+            isLoading = isSaraAdvancedLoading,
+            input = saraAdvancedInput,
+            onInputChange = { saraAdvancedInput = it },
+            onRun = { operation -> viewModel.runSaraAdvanced(operation, saraAdvancedInput) },
+            onDismiss = {
+                showSaraAdvanced = false
+                viewModel.clearSaraAdvancedResult()
+            }
+        )
     }
 }
 
@@ -310,6 +335,120 @@ private fun SaraChatView(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SaraAdvancedDialog(
+    result: String?,
+    isLoading: Boolean,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onRun: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1E293B),
+        title = { Text("Herramientas avanzadas de Sara", color = Color.White, fontSize = 18.sp) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    "Consultas protegidas con tu sesión Firebase. Los cambios de tracker afectan solo tu conversación.",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 12.sp
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onRun("status") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Estado", color = Color.White)
+                    }
+                    OutlinedButton(onClick = { onRun("version") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Versión", color = Color.White)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onRun("tracker") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Tracker", color = Color.White)
+                    }
+                    OutlinedButton(onClick = { onRun("story") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Story", color = Color.White)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onRun("domain") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Dominio", color = Color.White)
+                    }
+                    OutlinedButton(onClick = { onRun("predict") }, enabled = !isLoading, modifier = Modifier.weight(1f)) {
+                        Text("Predecir", color = Color.White)
+                    }
+                }
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Texto o nombre de intención") },
+                    placeholder = { Text("Ej.: hola o greet") },
+                    enabled = !isLoading,
+                    maxLines = 2,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFF818CF8),
+                        unfocusedBorderColor = Color(0xFF475569),
+                        focusedLabelColor = Color(0xFFA5B4FC),
+                        unfocusedLabelColor = Color(0xFF94A3B8),
+                        cursorColor = Color(0xFFA5B4FC)
+                    )
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onRun("parse") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
+                        Text("Analizar", color = Color.White)
+                    }
+                    OutlinedButton(onClick = { onRun("trigger") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
+                        Text("Activar intención", color = Color.White)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onRun("message") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
+                        Text("Agregar mensaje", color = Color.White)
+                    }
+                    OutlinedButton(onClick = { onRun("events") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
+                        Text("Agregar evento", color = Color.White)
+                    }
+                }
+                if (isLoading) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Consultando a Rasa…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                    }
+                }
+                result?.let {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text("Respuesta", color = Color(0xFFA5B4FC), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                it,
+                                color = Color(0xFFE2E8F0),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState())
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cerrar", color = Color(0xFFA5B4FC)) }
+        }
+    )
 }
 
 /**
