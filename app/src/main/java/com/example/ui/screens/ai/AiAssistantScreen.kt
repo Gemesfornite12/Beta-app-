@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -45,9 +46,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -262,6 +267,7 @@ private fun SaraChatView(
     isLoading: Boolean,
     onSend: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     LaunchedEffect(history.size, isLoading) {
@@ -309,7 +315,34 @@ private fun SaraChatView(
                                     Text("Sara", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.height(3.dp))
                                 }
-                                Text(message.text, color = Color.White, fontSize = 15.sp)
+                                val linkedText = remember(message.text) {
+                                    buildAnnotatedString {
+                                        append(message.text)
+                                        Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).findAll(message.text).forEach { match ->
+                                            val rawUrl = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
+                                            val end = match.range.first + rawUrl.length
+                                            if (rawUrl.isNotBlank() && end > match.range.first) {
+                                                addStyle(
+                                                    SpanStyle(color = Color(0xFF93C5FD), textDecoration = TextDecoration.Underline),
+                                                    match.range.first,
+                                                    end
+                                                )
+                                                addStringAnnotation("url", rawUrl, match.range.first, end)
+                                            }
+                                        }
+                                    }
+                                }
+                                ClickableText(
+                                    text = linkedText,
+                                    style = TextStyle(color = Color.White, fontSize = 15.sp),
+                                    onClick = { offset ->
+                                        linkedText.getStringAnnotations("url", offset, offset).firstOrNull()?.let { annotation ->
+                                            runCatching {
+                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item)))
+                                            }
+                                        }
+                                    }
+                                )
                             }
                         }
                     }
@@ -336,7 +369,7 @@ private fun SaraChatView(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Escribe a Sara…", color = Color(0xFF94A3B8)) },
+                placeholder = { Text("Escribe a Sara o: Busca en internet…", color = Color(0xFF94A3B8)) },
                 maxLines = 4,
                 enabled = !isLoading,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),

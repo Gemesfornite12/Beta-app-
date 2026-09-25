@@ -32,6 +32,19 @@ data class SaraTextRequest(val text: String)
 data class SaraEventRequest(val event: JsonObject)
 
 @Serializable
+data class SaraSearchRequest(val query: String)
+
+@Serializable
+data class SaraSearchSource(val title: String, val url: String)
+
+@Serializable
+data class SaraSearchResponse(
+    val answer: String,
+    @SerialName("search_queries") val searchQueries: List<String> = emptyList(),
+    val sources: List<SaraSearchSource> = emptyList()
+)
+
+@Serializable
 data class SaraTriggerIntentRequest(
     val name: String,
     val entities: Map<String, String> = emptyMap()
@@ -96,6 +109,12 @@ interface SaraApi {
         @Header("Authorization") authorization: String,
         @Body request: SaraEventRequest
     ): JsonObject
+
+    @POST("api/rasa/search")
+    suspend fun searchWeb(
+        @Header("Authorization") authorization: String,
+        @Body request: SaraSearchRequest
+    ): SaraSearchResponse
 }
 
 object SaraRetrofitClient {
