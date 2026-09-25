@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import android.widget.Toast
 import com.example.BuildConfig
@@ -311,7 +312,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _archivedChannelIds.value = _archivedChannelIds.value + channelId
     }
 
-    // --- Gemini AI State ---
+    // --- Sara assistant chat state; Gemini remains for multimedia modules ---
     private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
 
@@ -319,80 +320,67 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
     fun sendAiMessage(text: String) {
-        if (text.isBlank()) return
-        
+        val userText = text.trim()
+        if (userText.isBlank() || _isAiLoading.value) return
+
+        val signedInUser = FirebaseAuth.getInstance().currentUser
         val userMsg = ChatMessage(
             channelId = "ai_assistant",
-            senderEmail = "Tu",
-            senderName = "Yo",
-            text = text,
+            senderEmail = signedInUser?.email ?: "",
+            senderName = signedInUser?.displayName ?: "Yo",
+            text = userText,
             timestamp = System.currentTimeMillis()
         )
         _aiChatHistory.value = _aiChatHistory.value + userMsg
-        
+
         viewModelScope.launch {
             _isAiLoading.value = true
             try {
-                val apiKey = BuildConfig.GEMINI_API_KEY
-                if (apiKey == "MY_GEMINI_API_KEY" || apiKey.isBlank()) {
-                    val errorMsg = ChatMessage(
-                        channelId = "ai_assistant",
-                        senderEmail = "gemini",
-                        senderName = "Gemini",
-                        text = "Configura tu GEMINI_API_KEY en el panel de Secrets de AI Studio para usar esta función.",
-                        timestamp = System.currentTimeMillis()
+                val firebaseUser = FirebaseAuth.getInstance().currentUser
+                if (firebaseUser == null) {
+                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                        "Inicia sesión con tu cuenta para conversar con Sara."
                     )
-                    _aiChatHistory.value = _aiChatHistory.value + errorMsg
                     return@launch
                 }
-
-                val request = com.example.data.api.GenerateContentRequest(
-                    contents = listOf(com.example.data.api.Content(parts = listOf(com.example.data.api.Part(text = text))))
+                val idToken = firebaseUser.getIdToken(false).await().token
+                if (idToken.isNullOrBlank()) {
+                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                        "No pude validar tu sesión. Vuelve a iniciar sesión e inténtalo de nuevo."
+                    )
+                    return@launch
+                }
+                val replies = com.example.data.api.SaraRetrofitClient.service.sendMessage(
+                    authorization = "Bearer $idToken",
+                    request = com.example.data.api.SaraRequest(message = userText)
                 )
-                
-                val currentModel = _selectedGeminiModel.value
-                val modelPath = if (currentModel.startsWith("models/")) currentModel else "models/$currentModel"
-                
-                val response = com.example.data.api.GeminiRetrofitClient.service.generateContent(
-                    modelPath,
-                    apiKey,
-                    request
-                )
-                val aiText = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
-                    ?: response.error?.message
-                    ?: "No pude procesar tu solicitud."
-                
-                val aiMsg = ChatMessage(
-                    channelId = "ai_assistant",
-                    senderEmail = "gemini",
-                    senderName = "Gemini",
-                    text = aiText,
-                    timestamp = System.currentTimeMillis()
-                )
-                _aiChatHistory.value = _aiChatHistory.value + aiMsg
+                val answer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
+                    .joinToString("\n")
+                    .ifBlank { "Sara no devolvió una respuesta de texto. Inténtalo de nuevo." }
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(answer)
             } catch (e: retrofit2.HttpException) {
-                val errorMsg = ChatMessage(
-                    channelId = "ai_assistant",
-                    senderEmail = "gemini",
-                    senderName = "Gemini",
-                    text = "Error API (${e.code()}): El modelo seleccionado no existe o la clave es inválida.",
-                    timestamp = System.currentTimeMillis()
-                )
-                _aiChatHistory.value = _aiChatHistory.value + errorMsg
+                val explanation = when (e.code()) {
+                    401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
+                    else -> "Sara no está disponible ahora. Inténtalo de nuevo en unos momentos."
+                }
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(explanation)
             } catch (e: Exception) {
-                val errorMsg = ChatMessage(
-                    channelId = "ai_assistant",
-                    senderEmail = "gemini",
-                    senderName = "Gemini",
-                    text = "Error de conexión: ${e.message}",
-                    timestamp = System.currentTimeMillis()
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                    "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo."
                 )
-                _aiChatHistory.value = _aiChatHistory.value + errorMsg
             } finally {
                 _isAiLoading.value = false
             }
         }
     }
+
+    private fun saraMessage(text: String) = ChatMessage(
+        channelId = "ai_assistant",
+        senderEmail = "sara",
+        senderName = "Sara",
+        text = text,
+        timestamp = System.currentTimeMillis()
+    )
 
     fun clearAiChat() {
         _aiChatHistory.value = emptyList()

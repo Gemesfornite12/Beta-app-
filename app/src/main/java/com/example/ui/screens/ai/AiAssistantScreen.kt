@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -53,11 +54,13 @@ import com.example.ai.*
 import com.example.audio.AudioRecorderHelper
 import com.example.audio.AudioSynthEngine
 import com.example.ui.viewmodel.OmniViewModel
+import com.example.data.model.ChatMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.*
 
 enum class AiStudioTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val modelBadge: String) {
+    SARA("Sara", Icons.Default.Chat, "Rasa · Asistente"),
     SEARCH("Búsqueda", Icons.Default.Search, "gemini-3.5-flash"),
     TRANSCRIBE("Transcribir", Icons.Default.Mic, "gemini-3.5-transcribe"),
     VIDEO("Video Veo", Icons.Default.Videocam, "veo-3.1-fast"),
@@ -75,7 +78,9 @@ fun AiAssistantScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var currentTab by remember { mutableStateOf(AiStudioTab.SEARCH) }
+    val aiChatHistory by viewModel.aiChatHistory.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
+    var currentTab by remember { mutableStateOf(AiStudioTab.SARA) }
 
     // TTS Engine
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
@@ -120,6 +125,11 @@ fun AiAssistantScreen(
                     }
                 },
                 actions = {
+                    if (currentTab == AiStudioTab.SARA && aiChatHistory.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearAiChat() }) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
+                        }
+                    }
                     IconButton(onClick = {
                         Toast.makeText(context, "Modelo activo: ${currentTab.modelBadge}", Toast.LENGTH_SHORT).show()
                     }) {
@@ -172,6 +182,11 @@ fun AiAssistantScreen(
                     .weight(1f)
             ) {
                 when (currentTab) {
+                    AiStudioTab.SARA -> SaraChatView(
+                        history = aiChatHistory,
+                        isLoading = isAiLoading,
+                        onSend = viewModel::sendAiMessage
+                    )
                     AiStudioTab.SEARCH -> SearchGroundingView(ttsEngine)
                     AiStudioTab.TRANSCRIBE -> AudioTranscriptionView()
                     AiStudioTab.VIDEO -> VeoTextToVideoView()
@@ -180,6 +195,118 @@ fun AiAssistantScreen(
                     AiStudioTab.LIVE_VOICE -> LiveVoiceConversationView()
                     AiStudioTab.MUSIC -> LyriaMusicGenerationView()
                 }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SaraChatView(
+    history: List<ChatMessage>,
+    isLoading: Boolean,
+    onSend: (String) -> Unit
+) {
+    var draft by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    LaunchedEffect(history.size, isLoading) {
+        val lastIndex = history.lastIndex
+        if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0F172A)),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (history.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(42.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("Habla con Sara", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Tu asistente personal, impulsada por Rasa. Las funciones multimedia siguen usando Gemini.",
+                        color = Color(0xFF94A3B8), fontSize = 14.sp, textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                contentPadding = PaddingValues(vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(history) { message ->
+                    val isUser = message.senderName != "Sara"
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                    ) {
+                        Surface(
+                            color = if (isUser) Color(0xFF4F46E5) else Color(0xFF1E293B),
+                            shape = RoundedCornerShape(18.dp),
+                            modifier = Modifier.widthIn(max = 310.dp)
+                        ) {
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                if (!isUser) {
+                                    Text("Sara", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(3.dp))
+                                }
+                                Text(message.text, color = Color.White, fontSize = 15.sp)
+                            }
+                        }
+                    }
+                }
+                if (isLoading) {
+                    item {
+                        Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(18.dp)) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
+                                Spacer(Modifier.width(9.dp))
+                                Text("Sara está pensando…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF1E293B)).padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Escribe a Sara…", color = Color(0xFF94A3B8)) },
+                maxLines = 4,
+                enabled = !isLoading,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = Color(0xFF818CF8),
+                    unfocusedBorderColor = Color(0xFF475569),
+                    cursorColor = Color(0xFFA5B4FC)
+                ),
+                shape = RoundedCornerShape(22.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = {
+                    val message = draft.trim()
+                    if (message.isNotEmpty() && !isLoading) {
+                        onSend(message)
+                        draft = ""
+                    }
+                },
+                enabled = draft.isNotBlank() && !isLoading,
+                modifier = Modifier.size(48.dp).background(Color(0xFF6366F1), CircleShape)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar a Sara", tint = Color.White)
             }
         }
     }
