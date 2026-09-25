@@ -59,6 +59,7 @@ import com.example.ui.viewmodel.OmniViewModel
 import com.example.data.model.ChatMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.*
 import java.util.*
 
 enum class AiStudioTab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val modelBadge: String) {
@@ -71,6 +72,34 @@ enum class AiStudioTab(val title: String, val icon: androidx.compose.ui.graphics
     LIVE_VOICE("Voz en Vivo", Icons.Default.RecordVoiceOver, "gemini-3.8-live"),
     MUSIC("Música", Icons.Default.MusicNote, "lyria-3-preview")
 }
+
+private data class SaraEventOption(val value: String, val label: String)
+
+private val saraEventOptions = listOf(
+    SaraEventOption("user", "UserEvent · Mensaje de usuario"),
+    SaraEventOption("bot", "BotEvent · Respuesta de Sara"),
+    SaraEventOption("session_started", "SessionStartedEvent · Iniciar sesión"),
+    SaraEventOption("action", "ActionEvent · Acción"),
+    SaraEventOption("slot", "SlotEvent · Cambiar slot"),
+    SaraEventOption("reset_slots", "ResetSlotsEvent · Reiniciar slots"),
+    SaraEventOption("restart", "RestartEvent · Reiniciar tracker"),
+    SaraEventOption("reminder", "ReminderEvent · Recordatorio"),
+    SaraEventOption("cancel_reminder", "CancelReminderEvent · Cancelar recordatorio"),
+    SaraEventOption("pause", "PauseEvent · Pausar conversación"),
+    SaraEventOption("resume", "ResumeEvent · Reanudar conversación"),
+    SaraEventOption("followup", "FollowupEvent · Acción siguiente"),
+    SaraEventOption("export", "ExportEvent · Exportar tracker"),
+    SaraEventOption("undo", "UndoEvent · Deshacer evento"),
+    SaraEventOption("rewind", "RewindEvent · Revertir turno"),
+    SaraEventOption("agent", "AgentEvent · Agente"),
+    SaraEventOption("entities", "EntitiesAddedEvent · Entidades"),
+    SaraEventOption("user_featurization", "UserFeaturizationEvent · Featurización"),
+    SaraEventOption("action_execution_rejected", "ActionExecutionRejectedEvent · Rechazo de acción"),
+    SaraEventOption("form_validation", "FormValidationEvent · Validación de formulario"),
+    SaraEventOption("loop_interrupted", "LoopInterruptedEvent · Interrumpir loop"),
+    SaraEventOption("form", "FormEvent · Formulario"),
+    SaraEventOption("active_loop", "ActiveLoopEvent · Loop activo")
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -217,6 +246,7 @@ fun AiAssistantScreen(
             input = saraAdvancedInput,
             onInputChange = { saraAdvancedInput = it },
             onRun = { operation -> viewModel.runSaraAdvanced(operation, saraAdvancedInput) },
+            onAppendEvent = { event -> viewModel.runSaraAdvanced("events", eventPayload = event) },
             onDismiss = {
                 showSaraAdvanced = false
                 viewModel.clearSaraAdvancedResult()
@@ -345,8 +375,78 @@ private fun SaraAdvancedDialog(
     input: String,
     onInputChange: (String) -> Unit,
     onRun: (String) -> Unit,
+    onAppendEvent: (JsonObject) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var selectedEvent by remember { mutableStateOf("user") }
+    var eventMenuExpanded by remember { mutableStateOf(false) }
+    var eventText by remember { mutableStateOf("") }
+    var eventInputChannel by remember { mutableStateOf("rest") }
+    var eventMessageId by remember { mutableStateOf("") }
+    var eventParseData by remember { mutableStateOf("") }
+    var slotName by remember { mutableStateOf("") }
+    var slotValue by remember { mutableStateOf("null") }
+    var actionName by remember { mutableStateOf("") }
+    var actionPolicy by remember { mutableStateOf("") }
+    var actionConfidence by remember { mutableStateOf("") }
+    var actionText by remember { mutableStateOf("") }
+    var hideRuleTurn by remember { mutableStateOf(false) }
+    var entitiesJson by remember { mutableStateOf("[]") }
+    var eventTimestamp by remember { mutableStateOf("") }
+    var eventMetadata by remember { mutableStateOf("") }
+    var eventFormError by remember { mutableStateOf<String?>(null) }
+    var pendingDestructiveEvent by remember { mutableStateOf<JsonObject?>(null) }
+
+    fun makeEventPayload(): JsonObject {
+        return buildJsonObject {
+            put("event", selectedEvent)
+            if (eventTimestamp.isNotBlank()) {
+                val timestamp = eventTimestamp.toLongOrNull()
+                    ?: throw IllegalArgumentException("La marca de tiempo debe ser un número entero.")
+                put("timestamp", timestamp)
+            }
+            if (eventMetadata.isNotBlank()) {
+                val metadata = Json.parseToJsonElement(eventMetadata)
+                if (metadata !is JsonObject) throw IllegalArgumentException("Metadata debe ser un objeto JSON.")
+                put("metadata", metadata)
+            }
+            when (selectedEvent) {
+                "user" -> {
+                    if (eventText.isNotBlank()) put("text", eventText.trim())
+                    if (eventInputChannel.isNotBlank()) put("input_channel", eventInputChannel.trim())
+                    if (eventMessageId.isNotBlank()) put("message_id", eventMessageId.trim())
+                    if (eventParseData.isNotBlank()) {
+                        val parseData = Json.parseToJsonElement(eventParseData)
+                        if (parseData !is JsonObject) throw IllegalArgumentException("parse_data debe ser un objeto JSON.")
+                        put("parse_data", parseData)
+                    }
+                }
+                "slot" -> {
+                    if (slotName.isBlank()) throw IllegalArgumentException("Escribe el nombre del slot.")
+                    put("name", slotName.trim())
+                    put("value", Json.parseToJsonElement(slotValue))
+                }
+                "action" -> {
+                    if (actionName.isNotBlank()) put("name", actionName.trim())
+                    if (actionPolicy.isNotBlank()) put("policy", actionPolicy.trim())
+                    if (actionConfidence.isNotBlank()) {
+                        val confidence = actionConfidence.toDoubleOrNull()
+                            ?: throw IllegalArgumentException("La confianza debe ser un número.")
+                        if (!confidence.isFinite()) throw IllegalArgumentException("La confianza debe ser finita.")
+                        put("confidence", confidence)
+                    }
+                    put("hide_rule_turn", hideRuleTurn)
+                    if (actionText.isNotBlank()) put("action_text", actionText.trim())
+                }
+                "entities" -> {
+                    val entities = Json.parseToJsonElement(entitiesJson)
+                    if (entities !is JsonArray) throw IllegalArgumentException("entities debe ser una lista JSON.")
+                    put("entities", entities)
+                }
+            }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF1E293B),
@@ -413,13 +513,97 @@ private fun SaraAdvancedDialog(
                         Text("Activar intención", color = Color.White)
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { onRun("message") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
-                        Text("Agregar mensaje", color = Color.White)
+                OutlinedButton(
+                    onClick = { onRun("message") },
+                    enabled = !isLoading && input.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Agregar mensaje al tracker", color = Color.White)
+                }
+                HorizontalDivider(color = Color(0xFF334155))
+                Text("Configurar evento de tracker", color = Color(0xFFA5B4FC), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    "Elige el tipo: los campos cambian según el esquema de Rasa.",
+                    color = Color(0xFF94A3B8), fontSize = 12.sp
+                )
+                Box {
+                    OutlinedButton(
+                        onClick = { eventMenuExpanded = true },
+                        enabled = !isLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(saraEventOptions.first { it.value == selectedEvent }.label, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color.White)
                     }
-                    OutlinedButton(onClick = { onRun("events") }, enabled = !isLoading && input.isNotBlank(), modifier = Modifier.weight(1f)) {
-                        Text("Agregar evento", color = Color.White)
+                    DropdownMenu(
+                        expanded = eventMenuExpanded,
+                        onDismissRequest = { eventMenuExpanded = false },
+                        modifier = Modifier.heightIn(max = 360.dp).background(Color(0xFF1E293B))
+                    ) {
+                        saraEventOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label, color = Color.White, fontSize = 13.sp) },
+                                onClick = {
+                                    selectedEvent = option.value
+                                    eventMenuExpanded = false
+                                    eventFormError = null
+                                }
+                            )
+                        }
                     }
+                }
+                if (selectedEvent == "user") {
+                    SaraEventInput(eventText, { eventText = it }, "Texto (opcional)")
+                    SaraEventInput(eventInputChannel, { eventInputChannel = it }, "Canal de entrada", placeholder = "rest")
+                    SaraEventInput(eventMessageId, { eventMessageId = it }, "ID de mensaje (opcional)")
+                    SaraEventInput(eventParseData, { eventParseData = it }, "parse_data JSON (opcional)", maxLines = 3)
+                }
+                if (selectedEvent == "slot") {
+                    SaraEventInput(slotName, { slotName = it }, "Nombre del slot *")
+                    SaraEventInput(slotValue, { slotValue = it }, "Valor JSON *", placeholder = "null, true, 42 o \"texto\"")
+                }
+                if (selectedEvent == "action") {
+                    SaraEventInput(actionName, { actionName = it }, "Nombre de acción (opcional)")
+                    SaraEventInput(actionPolicy, { actionPolicy = it }, "Política (opcional)")
+                    SaraEventInput(actionConfidence, { actionConfidence = it }, "Confianza numérica (opcional)")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = hideRuleTurn, onCheckedChange = { hideRuleTurn = it }, enabled = !isLoading)
+                        Text("hide_rule_turn", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                    }
+                    SaraEventInput(actionText, { actionText = it }, "Texto de acción (opcional)")
+                }
+                if (selectedEvent == "entities") {
+                    SaraEventInput(entitiesJson, { entitiesJson = it }, "Entidades JSON *", placeholder = "[{\"entity\":\"lugar\",\"value\":\"Heredia\"}]", maxLines = 5)
+                }
+                SaraEventInput(eventTimestamp, { eventTimestamp = it }, "Timestamp entero (opcional)")
+                SaraEventInput(eventMetadata, { eventMetadata = it }, "Metadata JSON object (opcional)", maxLines = 3)
+                if (selectedEvent in setOf("restart", "reset_slots", "undo", "rewind")) {
+                    Text(
+                        "Este evento modifica o reinicia el historial del tracker.",
+                        color = Color(0xFFFBBF24), fontSize = 12.sp
+                    )
+                }
+                eventFormError?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp) }
+                Button(
+                    onClick = {
+                        try {
+                            val payload = makeEventPayload()
+                            eventFormError = null
+                            if (selectedEvent in setOf("restart", "reset_slots", "undo", "rewind")) {
+                                pendingDestructiveEvent = payload
+                            } else {
+                                onAppendEvent(payload)
+                            }
+                        } catch (error: Exception) {
+                            eventFormError = error.message ?: "Revisa los campos del evento."
+                        }
+                    },
+                    enabled = !isLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
+                ) {
+                    Text("Enviar evento a mi tracker", color = Color.White)
                 }
                 if (isLoading) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -448,6 +632,51 @@ private fun SaraAdvancedDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Cerrar", color = Color(0xFFA5B4FC)) }
         }
+    )
+
+    pendingDestructiveEvent?.let { event ->
+        AlertDialog(
+            onDismissRequest = { pendingDestructiveEvent = null },
+            containerColor = Color(0xFF1E293B),
+            title = { Text("Confirmar cambio del tracker", color = Color.White) },
+            text = { Text("Este evento puede reiniciar slots o modificar el historial de tu conversación. ¿Quieres continuar?", color = Color(0xFFCBD5E1)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onAppendEvent(event)
+                    pendingDestructiveEvent = null
+                }) { Text("Sí, continuar", color = Color(0xFFFBBF24)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDestructiveEvent = null }) { Text("Cancelar", color = Color(0xFFA5B4FC)) }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SaraEventInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String = "",
+    maxLines: Int = 1
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        placeholder = { if (placeholder.isNotBlank()) Text(placeholder) },
+        maxLines = maxLines,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            focusedBorderColor = Color(0xFF818CF8),
+            unfocusedBorderColor = Color(0xFF475569),
+            focusedLabelColor = Color(0xFFA5B4FC),
+            unfocusedLabelColor = Color(0xFF94A3B8),
+            cursorColor = Color(0xFFA5B4FC)
+        )
     )
 }
 

@@ -48,6 +48,8 @@ import android.widget.Toast
 import com.example.BuildConfig
 import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -325,10 +327,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSaraAdvancedLoading = MutableStateFlow(false)
     val isSaraAdvancedLoading: StateFlow<Boolean> = _isSaraAdvancedLoading.asStateFlow()
 
-    fun runSaraAdvanced(operation: String, input: String = "") {
+    fun runSaraAdvanced(operation: String, input: String = "", eventPayload: JsonObject? = null) {
         if (_isSaraAdvancedLoading.value) return
         val cleanInput = input.trim()
-        if (operation in setOf("parse", "trigger", "message", "events") && cleanInput.isBlank()) {
+        if (operation in setOf("parse", "trigger", "message") && cleanInput.isBlank()) {
+            _saraAdvancedResult.value = "Escribe un texto o nombre de intención primero."
+            return
+        }
+        if (operation == "events" && eventPayload == null && cleanInput.isBlank()) {
             _saraAdvancedResult.value = "Escribe un texto o nombre de intención primero."
             return
         }
@@ -361,9 +367,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         authorization,
                         com.example.data.api.SaraTextRequest(cleanInput)
                     ).toString()
-                    "events" -> api.appendUserEvent(
+                    "events" -> api.appendEvent(
                         authorization,
-                        com.example.data.api.SaraTextRequest(cleanInput)
+                        com.example.data.api.SaraEventRequest(
+                            eventPayload ?: JsonObject(mapOf(
+                                "event" to JsonPrimitive("user"),
+                                "text" to JsonPrimitive(cleanInput),
+                                "input_channel" to JsonPrimitive("rest")
+                            ))
+                        )
                     ).toString()
                     else -> throw IllegalArgumentException("Herramienta avanzada desconocida.")
                 }

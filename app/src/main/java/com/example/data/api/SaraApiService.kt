@@ -29,6 +29,9 @@ data class SaraReply(
 data class SaraTextRequest(val text: String)
 
 @Serializable
+data class SaraEventRequest(val event: JsonObject)
+
+@Serializable
 data class SaraTriggerIntentRequest(
     val name: String,
     val entities: Map<String, String> = emptyMap()
@@ -89,9 +92,9 @@ interface SaraApi {
     ): JsonObject
 
     @POST("api/rasa/events")
-    suspend fun appendUserEvent(
+    suspend fun appendEvent(
         @Header("Authorization") authorization: String,
-        @Body request: SaraTextRequest
+        @Body request: SaraEventRequest
     ): JsonObject
 }
 
