@@ -7,8 +7,6 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.ai.AiMusicComposer
-import com.example.ai.AiSongResult
 import com.example.audio.AudioSynthEngine
 import com.example.audio.WavAudioHelper
 import com.example.data.firebase.ChannelInfo
@@ -114,16 +112,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val publicAudioProjects: StateFlow<List<AudioProject>>
     val allUsers: StateFlow<List<UserAccount>>
     val recordedSamples: StateFlow<List<RecordedAudioSample>>
-
-    // AI Song Creator State
-    private val _isGeneratingSong = MutableStateFlow(false)
-    val isGeneratingSong: StateFlow<Boolean> = _isGeneratingSong.asStateFlow()
-
-    private val _aiGenerationStatus = MutableStateFlow<String?>(null)
-    val aiGenerationStatus: StateFlow<String?> = _aiGenerationStatus.asStateFlow()
-
-    private val _lastAiResult = MutableStateFlow<AiSongResult?>(null)
-    val lastAiResult: StateFlow<AiSongResult?> = _lastAiResult.asStateFlow()
 
     // Community Preview & Feedback State
     private val _previewPlayingSongId = MutableStateFlow<Long?>(null)
@@ -1996,55 +1984,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         if (userName.isNotEmpty() && userName.equals(song.authorName.trim(), ignoreCase = true)) return true
         if (userLogin.isNotEmpty() && userLogin.equals(song.authorName.trim(), ignoreCase = true)) return true
         return false
-    }
-
-    fun generateSongWithAi(title: String, description: String, onFinished: (() -> Unit)? = null) {
-        if (_isGeneratingSong.value) return
-        _isGeneratingSong.value = true
-        _aiGenerationStatus.value = "Analizando estilo musical y estructura con IA..."
-
-        viewModelScope.launch {
-            try {
-                stopPlayPreview()
-                stopSequencer()
-                delay(300)
-                _aiGenerationStatus.value = "Sintetizando compases, bajo y percusión..."
-                val result = AiMusicComposer.generateSong(title, description)
-                _lastAiResult.value = result
-
-                _aiGenerationStatus.value = "Cargando en el secuenciador..."
-                _currentBpm.value = result.bpm
-                _sequencerTracks.value = result.tracks
-
-                val currentUser = _authUiState.value.currentUser
-                val userEmail = currentUser?.email ?: "gonzalez24029@gmail.com"
-                val userName = currentUser?.displayName ?: "Alex González"
-
-                val newProject = AudioProject(
-                    title = result.title,
-                    description = result.description,
-                    genre = result.genre,
-                    bpm = result.bpm,
-                    patternDataJson = result.patternJson,
-                    authorEmail = userEmail,
-                    authorName = userName,
-                    isPublic = false,
-                    aiPrompt = description,
-                    notesMelody = result.melodyNotes.joinToString(", ")
-                )
-                val newId = repo.insertAudioProject(newProject)
-                val savedProject = repo.getAudioProjectById(newId)
-                _activeAudioProject.value = savedProject
-
-                _musicFeedbackMessage.value = "¡Canción '${result.title}' creada con IA lista para escuchar!"
-                onFinished?.invoke()
-            } catch (e: Exception) {
-                _musicFeedbackMessage.value = "Error al generar canción: ${e.message}"
-            } finally {
-                _isGeneratingSong.value = false
-                _aiGenerationStatus.value = null
-            }
-        }
     }
 
     fun publishSong(songId: Long, isPublic: Boolean) {

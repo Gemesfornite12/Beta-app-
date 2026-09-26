@@ -31,7 +31,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Delete
@@ -130,7 +129,6 @@ fun MusicStudioScreen(
     }
     var showSaveModal by remember { mutableStateOf(false) }
     var activeTab by remember { mutableStateOf(0) } // 0: Secuenciador, 1: Muestras WAV, 2: Canciones Publicadas
-    var showAiModal by remember { mutableStateOf(false) }
     var showRecorderModal by remember { mutableStateOf(false) }
     var showRenameActiveModal by remember { mutableStateOf(false) }
 
@@ -227,21 +225,6 @@ fun MusicStudioScreen(
                             Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Grabar WAV", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        // Botón: Crear Canción con IA
-                        Button(
-                            onClick = { showAiModal = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.testTag("btn_open_ai_creator"),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 5.dp)
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Crear con IA", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
 
                         Spacer(modifier = Modifier.width(4.dp))
@@ -383,7 +366,7 @@ fun MusicStudioScreen(
                             viewModel.sendChatMessage(attachedAudio = song)
                             onShareToChat()
                         },
-                        onRequestCreateWithAi = { showAiModal = true }
+                        onCreateInStudio = { activeTab = 0 }
                     )
                 }
             }
@@ -698,18 +681,6 @@ fun MusicStudioScreen(
                 TextButton(onClick = { showSaveModal = false }) {
                     Text("Cancelar")
                 }
-            }
-        )
-    }
-
-    // Modal para crear canción con IA (Gemini Beat Maker)
-    if (showAiModal) {
-        AiSongCreationDialog(
-            viewModel = viewModel,
-            onDismiss = { showAiModal = false },
-            onSongGeneratedAndLoaded = {
-                activeTab = 0
-                showAiModal = false
             }
         )
     }

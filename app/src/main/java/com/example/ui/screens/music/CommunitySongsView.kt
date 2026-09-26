@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
@@ -81,7 +80,7 @@ fun CommunitySongsView(
     viewModel: OmniViewModel,
     onOpenInStudio: (AudioProject) -> Unit,
     onShareToChat: (AudioProject) -> Unit,
-    onRequestCreateWithAi: () -> Unit
+    onCreateInStudio: () -> Unit
 ) {
     val publicSongs by viewModel.publicAudioProjects.collectAsState()
     val previewPlayingId by viewModel.previewPlayingSongId.collectAsState()
@@ -163,16 +162,15 @@ fun CommunitySongsView(
                         )
                     }
 
-                    // Botón de acción rápida: Crear con IA
                     Button(
-                        onClick = onRequestCreateWithAi,
+                        onClick = onCreateInStudio,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("btn_community_create_ai")
+                        modifier = Modifier.testTag("btn_community_create_beat")
                     ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Crear con IA", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Crear beat", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -228,19 +226,19 @@ fun CommunitySongsView(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "¡Sé el primero en componer una canción con IA y publicarla para todos!",
+                        text = "Crea un beat en el secuenciador y publícalo para la comunidad.",
                         color = Color(0xFF94A3B8),
                         fontSize = 12.sp
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(
-                        onClick = onRequestCreateWithAi,
+                        onClick = onCreateInStudio,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("✨ Crear mi primera canción")
+                        Text("Abrir secuenciador")
                     }
                 }
             }
