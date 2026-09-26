@@ -4,7 +4,6 @@ import android.content.Context
 import com.example.data.local.SaraKnowledgeEntry
 import com.example.data.local.SaraKnowledgeStore
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.tasks.await
 import java.text.Normalizer
@@ -71,17 +70,20 @@ class SaraKnowledgeFirebaseStore(context: Context) {
 
         val userRef = root.child(uid)
         val before = userRef.get().await()
-        val existingIds = before.children.mapNotNull(DataSnapshot::getKey).toSet()
+        val existingIds = before.children.mapNotNull { it.key }.toSet()
         localEntries.forEach { entry ->
             if (entry.id !in existingIds) writeEntry(uid, entry)
         }
 
         val verified = userRef.get().await()
-        val verifiedIds = verified.children
-            .filter { it.child("ownerUid").getValue(String::class.java) == uid }
-            .mapNotNull(DataSnapshot::getKey)
-            .toSet()
-        check(localEntries.all { it.id in verifiedIds }) {
+        val migrationVerified = localEntries.all { entry ->
+            val child = verified.child(entry.id)
+            child.exists() &&
+                child.child("ownerUid").getValue(String::class.java) == uid &&
+                child.child("text").getValue(String::class.java) == entry.text.take(MAX_NOTE_CHARS) &&
+                (child.child("createdAt").getValue(Long::class.javaObjectType) ?: 0L) == entry.createdAt
+        }
+        check(migrationVerified) {
             "No se pudo verificar la migración de la biblioteca de Sara"
         }
         legacyStore.clear(uid)
