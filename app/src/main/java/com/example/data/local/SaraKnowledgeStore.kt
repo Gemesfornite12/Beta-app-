@@ -48,6 +48,12 @@ class SaraKnowledgeStore(context: Context) {
         persist(uid, list(uid).filterNot { it.id == entryId })
     }
 
+    /** Removes the legacy local copy only after the cloud migration is verified. */
+    fun clear(uid: String) {
+        if (uid.isBlank()) return
+        preferences.edit().remove(storageKey(uid)).apply()
+    }
+
     /** Returns only keyword-relevant approved notes, keeping private context bounded. */
     fun relevantContext(uid: String, query: String): String {
         val queryWords = tokens(query)
