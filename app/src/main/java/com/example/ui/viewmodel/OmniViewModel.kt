@@ -18,9 +18,9 @@ import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.firebase.RealtimeDatabaseService
+import com.example.data.firebase.SaraKnowledgeFirebaseStore
 import com.example.data.local.AppDatabase
 import com.example.data.local.SaraKnowledgeEntry
-import com.example.data.local.SaraKnowledgeStore
 import com.example.data.supabase.SupabaseMediaStorageService
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
@@ -316,26 +316,79 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAiLoading = MutableStateFlow(false)
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
-    private val saraKnowledgeStore by lazy { SaraKnowledgeStore(getApplication()) }
+    private val saraKnowledgeStore by lazy { SaraKnowledgeFirebaseStore(getApplication()) }
     private val _saraKnowledgeEntries = MutableStateFlow<List<SaraKnowledgeEntry>>(emptyList())
     val saraKnowledgeEntries: StateFlow<List<SaraKnowledgeEntry>> = _saraKnowledgeEntries.asStateFlow()
+    private val _isSaraKnowledgeLoading = MutableStateFlow(false)
+    val isSaraKnowledgeLoading: StateFlow<Boolean> = _isSaraKnowledgeLoading.asStateFlow()
+    private val _saraKnowledgeFeedback = MutableStateFlow<String?>(null)
+    val saraKnowledgeFeedback: StateFlow<String?> = _saraKnowledgeFeedback.asStateFlow()
+
+    fun clearSaraKnowledgeFeedback() {
+        _saraKnowledgeFeedback.value = null
+    }
 
     fun refreshSaraKnowledge() {
         val uid = FirebaseAuth.getInstance().currentUser?.uid
-        _saraKnowledgeEntries.value = if (uid.isNullOrBlank()) emptyList() else saraKnowledgeStore.list(uid)
+        if (uid.isNullOrBlank()) {
+            _saraKnowledgeEntries.value = emptyList()
+            _saraKnowledgeFeedback.value = "Inicia sesión para ver tu biblioteca de Sara."
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSaraKnowledgeLoading.value = true
+            try {
+                _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "No se pudo cargar Aprendizaje de Sara desde Firebase", e)
+                _saraKnowledgeFeedback.value = "No se pudo cargar la biblioteca de Sara desde Firebase."
+            } finally {
+                _isSaraKnowledgeLoading.value = false
+            }
+        }
     }
 
-    fun saveSaraKnowledge(text: String): Boolean {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return false
-        if (saraKnowledgeStore.save(uid, text) == null) return false
-        refreshSaraKnowledge()
-        return true
+    fun saveSaraKnowledge(text: String) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        if (uid.isNullOrBlank()) {
+            _saraKnowledgeFeedback.value = "Inicia sesión para guardar notas de Sara."
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSaraKnowledgeLoading.value = true
+            try {
+                val saved = saraKnowledgeStore.save(uid, text)
+                if (saved == null) {
+                    _saraKnowledgeFeedback.value = "No se guardó: la biblioteca puede estar llena o el texto vacío."
+                } else {
+                    _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
+                    _saraKnowledgeFeedback.value = "Guardado en Aprendizaje de Sara en Firebase."
+                }
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "No se pudo guardar Aprendizaje de Sara en Firebase", e)
+                _saraKnowledgeFeedback.value = "No se pudo guardar en Firebase. Las notas locales se conservaron si la migración no terminó."
+            } finally {
+                _isSaraKnowledgeLoading.value = false
+            }
+        }
     }
 
     fun deleteSaraKnowledge(entryId: String) {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        saraKnowledgeStore.delete(uid, entryId)
-        refreshSaraKnowledge()
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        if (uid.isNullOrBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSaraKnowledgeLoading.value = true
+            try {
+                saraKnowledgeStore.delete(uid, entryId)
+                _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
+                _saraKnowledgeFeedback.value = "Nota eliminada de Aprendizaje de Sara."
+            } catch (e: Exception) {
+                Log.e("OmniViewModel", "No se pudo borrar una nota de Sara en Firebase", e)
+                _saraKnowledgeFeedback.value = "No se pudo eliminar la nota de Firebase."
+            } finally {
+                _isSaraKnowledgeLoading.value = false
+            }
+        }
     }
 
     private val _saraAdvancedResult = MutableStateFlow<String?>(null)
@@ -3777,4 +3830,3 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         typingDebounceJob?.cancel()
     }
 }
-
