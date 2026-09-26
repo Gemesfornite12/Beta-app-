@@ -27,7 +27,8 @@ data class SaraRequest(val message: String)
 @Serializable
 data class SaraReply(
     val text: String? = null,
-    @SerialName("recipient_id") val recipientId: String? = null
+    @SerialName("recipient_id") val recipientId: String? = null,
+    val custom: JsonObject? = null
 )
 
 @Serializable
