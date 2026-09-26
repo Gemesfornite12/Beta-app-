@@ -71,6 +71,10 @@ class SaraKnowledgeFirebaseStore(context: Context) {
         val userRef = root.child(uid)
         val before = userRef.get().await()
         val existingIds = before.children.mapNotNull { it.key }.toSet()
+        val newEntryCount = localEntries.count { it.id !in existingIds }
+        check(before.childrenCount + newEntryCount.toLong() <= MAX_ENTRIES.toLong()) {
+            "La biblioteca de Sara excedería el límite de 100 notas; se conservaron las notas locales"
+        }
         localEntries.forEach { entry ->
             if (entry.id !in existingIds) writeEntry(uid, entry)
         }
