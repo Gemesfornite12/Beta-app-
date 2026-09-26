@@ -107,8 +107,8 @@ fun AiAssistantScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Sara", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Text("Asistente de OmniStudio · Rasa + Felo", fontSize = 11.sp, color = Color(0xFFA5B4FC))
+                        Text("Asistente de OmniStudio", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Rasa + Cloudflare + Groq AI + DuckDuckGo Search", fontSize = 11.sp, color = Color(0xFFA5B4FC))
                     }
                 },
                 navigationIcon = {
@@ -170,10 +170,10 @@ fun AiAssistantScreen(
     pendingKnowledge?.let { textToSave ->
         AlertDialog(
             onDismissRequest = { pendingKnowledge = null },
-            title = { Text("¿Guardar para Sara?") },
+            title = { Text("¿Guardar para el asistente?") },
             text = {
                 Column {
-                    Text("Sara podrá usar este mensaje en respuestas futuras. Se guardará en tu biblioteca privada de Firebase, separada por tu cuenta y disponible al iniciar sesión en tus dispositivos. Las notas locales anteriores se borrarán de este dispositivo solo después de verificar que se copiaron correctamente. Si una nota ayuda a responder con Felo, se enviará a ese servicio y podría consumir créditos.")
+                    Text("Asistente de OmniStudio podrá usar este mensaje en respuestas futuras. Se guardará en tu biblioteca privada de Firebase, separada por tu cuenta y disponible al iniciar sesión en tus dispositivos. Las notas locales anteriores se borrarán de este dispositivo solo después de verificar que se copiaron correctamente. Si una nota ayuda a responder con la búsqueda avanzada, se enviará a ese servicio y podría consumir créditos.")
                     Spacer(Modifier.height(10.dp))
                     Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
                         Text(
@@ -201,12 +201,12 @@ fun AiAssistantScreen(
     if (showSaraLibrary) {
         AlertDialog(
             onDismissRequest = { showSaraLibrary = false },
-            title = { Text("Aprendizaje de Sara") },
+            title = { Text("Aprendizaje del asistente") },
             text = {
                 if (isSaraKnowledgeLoading) {
-                    Text("Sincronizando la biblioteca privada de Sara con Firebase…")
+                    Text("Sincronizando la biblioteca privada del asistente con Firebase…")
                 } else if (saraKnowledgeEntries.isEmpty()) {
-                    Text("Aún no hay notas. Toca ‘Guardar para Sara’ en un mensaje tuyo y confirma; solo se guardarán las notas aprobadas.")
+                    Text("Aún no hay notas. Toca ‘Guardar para el asistente’ en un mensaje tuyo y confirma; solo se guardarán las notas aprobadas.")
                 } else {
                     Column(
                         modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
@@ -298,7 +298,7 @@ private fun SaraChatView(
                 attachmentUri = uri
                 attachmentName = saraAttachmentDisplayName(context, uri)
             } else {
-                Toast.makeText(context, "Sara acepta documentos, audio y video compatibles; las imágenes no están disponibles", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "El asistente acepta documentos, audio y video compatibles; las imágenes no están disponibles", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -317,7 +317,7 @@ private fun SaraChatView(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
                     Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF818CF8), modifier = Modifier.size(42.dp))
                     Spacer(Modifier.height(12.dp))
-                    Text("Habla con Sara", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                    Text("Habla con el asistente", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "Escribe o dicta. También puedes adjuntar documentos, audio y video compatibles para que Sara los analice.",
@@ -345,7 +345,7 @@ private fun SaraChatView(
                         ) {
                             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                                 if (!isUser) {
-                                    Text("Sara", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Asistente", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.height(3.dp))
                                 }
                                 val linkedText = remember(message.text) {
@@ -381,7 +381,7 @@ private fun SaraChatView(
                                     ) {
                                         Icon(Icons.Default.BookmarkBorder, contentDescription = null, modifier = Modifier.size(15.dp))
                                         Spacer(Modifier.width(4.dp))
-                                        Text("Guardar para Sara", fontSize = 11.sp)
+                                        Text("Guardar para aprendizaje", fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -394,7 +394,7 @@ private fun SaraChatView(
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
                                 Spacer(Modifier.width(9.dp))
-                                Text("Sara está procesando…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                                Text("El asistente está procesando…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
                             }
                         }
                     }
@@ -422,7 +422,7 @@ private fun SaraChatView(
         }
 
         Text(
-            "Adjuntos compatibles: documentos, audio o video · máximo 10 MB. Felo procesa temporalmente y se intenta borrar al terminar; no fotos.",
+            "Adjuntos compatibles: documentos, audio o video · máximo 10 MB. El sistema de búsqueda procesa temporalmente y se intenta borrar al terminar; no fotos.",
             color = Color(0xFF64748B), fontSize = 10.sp,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
         )
@@ -441,7 +441,7 @@ private fun SaraChatView(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Escribe o busca con Sara…", color = Color(0xFF94A3B8)) },
+                placeholder = { Text("Escribe o busca aquí…", color = Color(0xFF94A3B8)) },
                 maxLines = 4,
                 enabled = !isLoading,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -602,7 +602,7 @@ private fun SaraAdvancedDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF1E293B),
-        title = { Text("Herramientas avanzadas de Sara", color = Color.White, fontSize = 18.sp) },
+        title = { Text("Herramientas avanzadas del asistente", color = Color.White, fontSize = 18.sp) },
         text = {
             Column(
                 modifier = Modifier

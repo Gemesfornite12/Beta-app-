@@ -1,0 +1,63 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "chats": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "presence": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "typing": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "documents": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$docId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "audio_projects": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$projectId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "sara_knowledge": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$entryId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "sara_chat_history": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid && !newData.exists()",
+        ".indexOn": ["createdAt"],
+        "$entryId": {
+          ".write": "auth != null && auth.uid == $uid && (!data.exists() || !newData.exists())",
+          ".validate": "newData.hasChildren(['uid', 'role', 'text', 'createdAt']) && newData.child('uid').val() == auth.uid && (newData.child('role').val() == 'user' || newData.child('role').val() == 'assistant') && newData.child('text').isString() && newData.child('text').val().length <= 4000 && newData.child('createdAt').isNumber()"
+        }
+      }
+    }
+  }
+}

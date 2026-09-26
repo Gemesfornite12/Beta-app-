@@ -563,4 +563,50 @@ class RealtimeDatabaseService {
         usersRef.addValueEventListener(listener)
         awaitClose { usersRef.removeEventListener(listener) }
     }
+
+    // --- SARA CHAT HISTORY PERSISTENCE ---
+
+    /**
+     * Guarda un mensaje en el historial persistente de Sara en RTDB.
+     */
+    suspend fun saveSaraChatMessage(
+        uid: String,
+        role: String, // "user" o "assistant"
+        text: String
+    ) {
+        val entryId = database.child("sara_chat_history").child(uid).push().key ?: "msg_${System.currentTimeMillis()}"
+        val messageData = mapOf(
+            "uid" to uid,
+            "role" to role,
+            "text" to text,
+            "createdAt" to System.currentTimeMillis()
+        )
+        database.child("sara_chat_history").child(uid).child(entryId).setValue(messageData).await()
+    }
+
+    /**
+     * Observa el historial completo de Sara para un usuario.
+     */
+    fun listenToSaraChatHistory(uid: String): Flow<List<Map<String, Any>>> = callbackFlow {
+        val ref = database.child("sara_chat_history").child(uid).orderByChild("createdAt")
+        val listener = object : ValueEventListener {
+            @Suppress("UNCHECKED_CAST")
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val history = snapshot.children.mapNotNull { it.value as? Map<String, Any> }
+                trySendBlocking(history)
+            }
+            override fun onCancelled(error: DatabaseError) {
+                trySendBlocking(emptyList())
+            }
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    /**
+     * Elimina el historial completo de Sara para un usuario.
+     */
+    suspend fun clearSaraChatHistory(uid: String) {
+        database.child("sara_chat_history").child(uid).removeValue().await()
+    }
 }

@@ -313,6 +313,27 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
 
+    private var saraChatHistoryJob: Job? = null
+
+    private fun startSaraChatHistoryListener(uid: String) {
+        saraChatHistoryJob?.cancel()
+        saraChatHistoryJob = viewModelScope.launch {
+            rtdbService.listenToSaraChatHistory(uid).collect { history ->
+                val currentUser = _authUiState.value.currentUser
+                _aiChatHistory.value = history.map { map ->
+                    val role = map["role"] as? String ?: "user"
+                    ChatMessage(
+                        channelId = "ai_assistant",
+                        senderEmail = if (role == "user") currentUser?.email ?: "me" else "asistente",
+                        senderName = if (role == "user") currentUser?.displayName ?: "Yo" else "Asistente",
+                        text = map["text"] as? String ?: "",
+                        timestamp = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                    )
+                }
+            }
+        }
+    }
+
     private val _isAiLoading = MutableStateFlow(false)
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
@@ -332,7 +353,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val uid = FirebaseAuth.getInstance().currentUser?.uid
         if (uid.isNullOrBlank()) {
             _saraKnowledgeEntries.value = emptyList()
-            _saraKnowledgeFeedback.value = "Inicia sesión para ver tu biblioteca de Sara."
+            _saraKnowledgeFeedback.value = "Inicia sesión para ver tu biblioteca del asistente."
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -340,8 +361,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
             } catch (e: Exception) {
-                Log.e("OmniViewModel", "No se pudo cargar Aprendizaje de Sara desde Firebase", e)
-                _saraKnowledgeFeedback.value = "No se pudo cargar la biblioteca de Sara desde Firebase."
+                Log.e("OmniViewModel", "No se pudo cargar Aprendizaje del asistente desde Firebase", e)
+                _saraKnowledgeFeedback.value = "No se pudo cargar la biblioteca del asistente desde Firebase."
             } finally {
                 _isSaraKnowledgeLoading.value = false
             }
@@ -351,7 +372,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     fun saveSaraKnowledge(text: String) {
         val uid = FirebaseAuth.getInstance().currentUser?.uid
         if (uid.isNullOrBlank()) {
-            _saraKnowledgeFeedback.value = "Inicia sesión para guardar notas de Sara."
+            _saraKnowledgeFeedback.value = "Inicia sesión para guardar notas del asistente."
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -362,10 +383,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     _saraKnowledgeFeedback.value = "No se guardó: la biblioteca puede estar llena o el texto vacío."
                 } else {
                     _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
-                    _saraKnowledgeFeedback.value = "Guardado en Aprendizaje de Sara en Firebase."
+                    _saraKnowledgeFeedback.value = "Guardado en Aprendizaje del asistente en Firebase."
                 }
             } catch (e: Exception) {
-                Log.e("OmniViewModel", "No se pudo guardar Aprendizaje de Sara en Firebase", e)
+                Log.e("OmniViewModel", "No se pudo guardar Aprendizaje del asistente en Firebase", e)
                 _saraKnowledgeFeedback.value = "No se pudo guardar en Firebase. Las notas locales se conservaron si la migración no terminó."
             } finally {
                 _isSaraKnowledgeLoading.value = false
@@ -381,9 +402,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 saraKnowledgeStore.delete(uid, entryId)
                 _saraKnowledgeEntries.value = saraKnowledgeStore.list(uid)
-                _saraKnowledgeFeedback.value = "Nota eliminada de Aprendizaje de Sara."
+                _saraKnowledgeFeedback.value = "Nota eliminada de Aprendizaje del asistente."
             } catch (e: Exception) {
-                Log.e("OmniViewModel", "No se pudo borrar una nota de Sara en Firebase", e)
+                Log.e("OmniViewModel", "No se pudo borrar una nota del asistente en Firebase", e)
                 _saraKnowledgeFeedback.value = "No se pudo eliminar la nota de Firebase."
             } finally {
                 _isSaraKnowledgeLoading.value = false
@@ -453,7 +474,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: retrofit2.HttpException) {
                 _saraAdvancedResult.value = "Rasa respondió con HTTP ${e.code()}. Verifica que el modelo esté listo y la sesión siga activa."
             } catch (e: Exception) {
-                _saraAdvancedResult.value = e.message ?: "No se pudo consultar el endpoint de Sara."
+                _saraAdvancedResult.value = e.message ?: "No se pudo consultar el asistente."
             } finally {
                 _isSaraAdvancedLoading.value = false
             }
@@ -468,31 +489,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val userText = text.trim()
         if (userText.isBlank() || _isAiLoading.value) return
 
-        val signedInUser = FirebaseAuth.getInstance().currentUser
-        val userMsg = ChatMessage(
-            channelId = "ai_assistant",
-            senderEmail = signedInUser?.email ?: "",
-            senderName = signedInUser?.displayName ?: "Yo",
-            text = userText,
-            timestamp = System.currentTimeMillis()
-        )
-        _aiChatHistory.value = _aiChatHistory.value + userMsg
+        val firebaseUser = FirebaseAuth.getInstance().currentUser
+        if (firebaseUser == null) {
+            _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                "Inicia sesión con tu cuenta para conversar con el asistente."
+            )
+            return
+        }
+
+        val uid = firebaseUser.uid
+        viewModelScope.launch {
+            rtdbService.saveSaraChatMessage(uid, "user", userText)
+        }
 
         viewModelScope.launch {
             _isAiLoading.value = true
             try {
-                val firebaseUser = FirebaseAuth.getInstance().currentUser
-                if (firebaseUser == null) {
-                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
-                        "Inicia sesión con tu cuenta para conversar con Sara."
-                    )
-                    return@launch
-                }
                 val idToken = firebaseUser.getIdToken(false).await().token
                 if (idToken.isNullOrBlank()) {
-                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
-                        "No pude validar tu sesión. Vuelve a iniciar sesión e inténtalo de nuevo."
-                    )
+                    rtdbService.saveSaraChatMessage(uid, "assistant", "No pude validar tu sesión. Vuelve a iniciar sesión e inténtalo de nuevo.")
                     return@launch
                 }
                 val api = com.example.data.api.SaraRetrofitClient.service
@@ -503,7 +518,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val rasaAnswer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
                     .joinToString("\n")
-                    .ifBlank { "Sara no devolvió una respuesta de texto. Inténtalo de nuevo." }
+                    .ifBlank { "El asistente no devolvió una respuesta de texto. Inténtalo de nuevo." }
                 val shouldUseFeloFallback = replies.any {
                     it.custom?.get("sara_fallback")?.jsonPrimitive?.contentOrNull == "true"
                 }
@@ -519,7 +534,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                     add(buildJsonObject {
                                         put("role", "system")
                                         val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, userText)
-                                        val basePrompt = "Eres Sara, asistente de OmniStudio. Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
+                                        val basePrompt = "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
                                         put(
                                             "content",
                                             if (savedKnowledge.isBlank()) basePrompt else "$basePrompt\n\nNotas personales que el usuario aprobó guardar; úsalas solo si son pertinentes y no las trates como hechos generales:\n$savedKnowledge"
@@ -541,17 +556,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     rasaAnswer
                 }
-                _aiChatHistory.value = _aiChatHistory.value + saraMessage(answer)
+                rtdbService.saveSaraChatMessage(uid, "assistant", answer)
             } catch (e: retrofit2.HttpException) {
                 val explanation = when (e.code()) {
                     401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
                     else -> "Sara no está disponible ahora. Inténtalo de nuevo en unos momentos."
                 }
-                _aiChatHistory.value = _aiChatHistory.value + saraMessage(explanation)
+                rtdbService.saveSaraChatMessage(uid, "assistant", explanation)
             } catch (e: Exception) {
-                _aiChatHistory.value = _aiChatHistory.value + saraMessage(
-                    "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo."
-                )
+                rtdbService.saveSaraChatMessage(uid, "assistant", "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo.")
             } finally {
                 _isAiLoading.value = false
             }
@@ -626,13 +639,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val uploadData = upload["data"] as? JsonObject
                 val resourceId = uploadData?.get("id")?.jsonPrimitive?.contentOrNull
-                    ?: throw IllegalStateException("Felo no devolvió una referencia válida del archivo.")
+                    ?: throw IllegalStateException("El sistema de búsqueda no devolvió una referencia válida del archivo.")
 
                 var resourceStatus = uploadData["status"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
                 for (attempt in 0 until 20) {
                     if (resourceStatus in setOf("completed", "ready", "success")) break
                     if (resourceStatus in setOf("failed", "error")) {
-                        throw IllegalStateException("Felo no pudo procesar este formato de archivo.")
+                        throw IllegalStateException("El sistema de búsqueda no pudo procesar este formato de archivo.")
                     }
                     if (attempt == 19) {
                         throw IllegalStateException("El archivo sigue procesándose. Inténtalo de nuevo en un momento.")
@@ -661,7 +674,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         put("messages", buildJsonArray {
                             add(buildJsonObject {
                                 put("role", "system")
-                                put("content", "Eres Sara, asistente de OmniStudio. Responde en español, de forma clara y breve. Usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
+                                put("content", "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Responde en español, de forma clara y breve. Usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
                             })
                             add(buildJsonObject {
                                 put("role", "user")
@@ -726,20 +739,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     fun clearAiChat() {
-        _aiChatHistory.value = emptyList()
         val firebaseUser = FirebaseAuth.getInstance().currentUser ?: return
+        val uid = firebaseUser.uid
         viewModelScope.launch {
             try {
+                rtdbService.clearSaraChatHistory(uid)
                 val idToken = firebaseUser.getIdToken(false).await().token ?: return@launch
                 com.example.data.api.SaraRetrofitClient.service
                     .resetConversation("Bearer $idToken")
                     .use { }
             } catch (e: Exception) {
                 Log.w("OmniViewModel", "Could not reset Sara's server tracker", e)
-                _aiChatHistory.value = _aiChatHistory.value + saraMessage(
-                    "Limpié este chat, pero no pude reiniciar el historial del servidor."
-                )
+                saveSaraResponse(uid, "Limpié este chat localmente, pero no pude reiniciar el historial del servidor.")
             }
+        }
+    }
+
+    private fun saveSaraResponse(uid: String, text: String) {
+        viewModelScope.launch {
+            rtdbService.saveSaraChatMessage(uid, "assistant", text)
         }
     }
 
@@ -1035,6 +1053,20 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     triggerAutoSaveMusic()
                 }
                 syncPendingOfflineMessages()
+            }
+        }
+
+        // Observar cambios de usuario para iniciar el listener de historial de Sara
+        viewModelScope.launch {
+            _authUiState.collect { auth ->
+                val uid = auth.currentUser?.uid
+                if (auth.isLoggedIn && uid != null) {
+                    startSaraChatHistoryListener(uid)
+                    refreshSaraKnowledge()
+                } else {
+                    saraChatHistoryJob?.cancel()
+                    _aiChatHistory.value = emptyList()
+                }
             }
         }
     }

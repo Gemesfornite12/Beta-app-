@@ -384,7 +384,7 @@ fun HomeScreen(
                 ) {
                     QuickToolItem(
                         icon = Icons.Default.AutoAwesome,
-                        label = "Asistente AI",
+                        label = "Asistente",
                         bgColor = Color(0xFF818CF8),
                         modifier = Modifier.weight(1f),
                         onClick = onOpenAiAssistant
