@@ -19,6 +19,8 @@ import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.local.AppDatabase
+import com.example.data.local.SaraKnowledgeEntry
+import com.example.data.local.SaraKnowledgeStore
 import com.example.data.supabase.SupabaseMediaStorageService
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
@@ -314,6 +316,28 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAiLoading = MutableStateFlow(false)
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
+    private val saraKnowledgeStore by lazy { SaraKnowledgeStore(getApplication()) }
+    private val _saraKnowledgeEntries = MutableStateFlow<List<SaraKnowledgeEntry>>(emptyList())
+    val saraKnowledgeEntries: StateFlow<List<SaraKnowledgeEntry>> = _saraKnowledgeEntries.asStateFlow()
+
+    fun refreshSaraKnowledge() {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        _saraKnowledgeEntries.value = if (uid.isNullOrBlank()) emptyList() else saraKnowledgeStore.list(uid)
+    }
+
+    fun saveSaraKnowledge(text: String): Boolean {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return false
+        if (saraKnowledgeStore.save(uid, text) == null) return false
+        refreshSaraKnowledge()
+        return true
+    }
+
+    fun deleteSaraKnowledge(entryId: String) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        saraKnowledgeStore.delete(uid, entryId)
+        refreshSaraKnowledge()
+    }
+
     private val _saraAdvancedResult = MutableStateFlow<String?>(null)
     val saraAdvancedResult: StateFlow<String?> = _saraAdvancedResult.asStateFlow()
 
@@ -441,7 +465,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 put("messages", buildJsonArray {
                                     add(buildJsonObject {
                                         put("role", "system")
-                                        put("content", "Eres Sara, asistente de OmniStudio. Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones.")
+                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, userText)
+                                        val basePrompt = "Eres Sara, asistente de OmniStudio. Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
+                                        put(
+                                            "content",
+                                            if (savedKnowledge.isBlank()) basePrompt else "$basePrompt\n\nNotas personales que el usuario aprobó guardar; úsalas solo si son pertinentes y no las trates como hechos generales:\n$savedKnowledge"
+                                        )
                                     })
                                     add(buildJsonObject {
                                         put("role", "user")
