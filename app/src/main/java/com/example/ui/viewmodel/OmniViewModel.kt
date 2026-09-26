@@ -418,13 +418,47 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     return@launch
                 }
-                val replies = com.example.data.api.SaraRetrofitClient.service.sendMessage(
-                    authorization = "Bearer $idToken",
+                val api = com.example.data.api.SaraRetrofitClient.service
+                val authorization = "Bearer $idToken"
+                val replies = api.sendMessage(
+                    authorization = authorization,
                     request = com.example.data.api.SaraRequest(message = userText)
                 )
-                val answer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
+                val rasaAnswer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
                     .joinToString("\n")
                     .ifBlank { "Sara no devolvió una respuesta de texto. Inténtalo de nuevo." }
+                val shouldUseFeloFallback = replies.any {
+                    it.custom?.get("sara_fallback")?.jsonPrimitive?.contentOrNull == "true"
+                }
+                val answer = if (shouldUseFeloFallback) {
+                    runCatching {
+                        val llmResponse = api.askSaraWithFeloContext(
+                            authorization,
+                            buildJsonObject {
+                                put("protocol", "chat/completions")
+                                put("model", "gpt-5.6-luna")
+                                put("max_tokens", 1000)
+                                put("messages", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("role", "system")
+                                        put("content", "Eres Sara, asistente de OmniStudio. Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones.")
+                                    })
+                                    add(buildJsonObject {
+                                        put("role", "user")
+                                        put("content", userText)
+                                    })
+                                })
+                            }
+                        )
+                        val choices = llmResponse["choices"] as? JsonArray
+                        val firstChoice = choices?.firstOrNull() as? JsonObject
+                        val assistantMessage = firstChoice?.get("message") as? JsonObject
+                        assistantMessage?.get("content")?.jsonPrimitive?.contentOrNull?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                    }.getOrNull() ?: rasaAnswer
+                } else {
+                    rasaAnswer
+                }
                 _aiChatHistory.value = _aiChatHistory.value + saraMessage(answer)
             } catch (e: retrofit2.HttpException) {
                 val explanation = when (e.code()) {
