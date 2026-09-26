@@ -2,6 +2,8 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -45,11 +47,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import android.widget.Toast
-import com.example.BuildConfig
 import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -314,7 +318,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _archivedChannelIds.value = _archivedChannelIds.value + channelId
     }
 
-    // --- Sara assistant chat state; Gemini remains for multimedia modules ---
+    // --- Sara assistant chat state: Rasa with on-demand Felo skills ---
     private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
 
@@ -449,6 +453,165 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun sendAiAttachment(uri: Uri, prompt: String = "") {
+        if (_isAiLoading.value) return
+        val appContext = getApplication<Application>()
+        val currentAuthUser = FirebaseAuth.getInstance().currentUser
+        val safePrompt = prompt.trim().ifBlank { "Resume este archivo y responde según su contenido." }
+        val displayName = runCatching {
+            appContext.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
+            }
+        }.getOrNull()?.takeIf(String::isNotBlank) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "archivo_adjunto"
+        val userMessage = ChatMessage(
+            channelId = "ai_assistant",
+            senderEmail = currentAuthUser?.email ?: "",
+            senderName = currentAuthUser?.displayName ?: "Yo",
+            text = "📎 $displayName\n$safePrompt",
+            timestamp = System.currentTimeMillis()
+        )
+        _aiChatHistory.value = _aiChatHistory.value + userMessage
+
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            val api = com.example.data.api.SaraRetrofitClient.service
+            var authorization: String? = null
+            var docRef: String? = null
+            try {
+                val firebaseUser = FirebaseAuth.getInstance().currentUser
+                    ?: throw IllegalStateException("Inicia sesión con Firebase para enviar archivos a Sara.")
+                val idToken = firebaseUser.getIdToken(false).await().token
+                    ?: throw IllegalStateException("No pude validar tu sesión de Firebase.")
+                val requestAuthorization = "Bearer $idToken"
+                authorization = requestAuthorization
+
+                val resolver = appContext.contentResolver
+                val mimeType = resolver.getType(uri)?.lowercase()?.substringBefore(';') ?: "application/octet-stream"
+                if (mimeType.startsWith("image/")) {
+                    throw IllegalArgumentException("Sara no puede analizar imágenes todavía. Adjunta un documento, audio o video compatible.")
+                }
+                val fileBytes = withContext(Dispatchers.IO) { readSaraAttachment(uri, resolver) }
+                val cleanFileName = displayName.replace('\\', '_').replace('"', '_').replace("\r", "_").replace("\n", "_").take(180)
+                val requestMediaType = mimeType.toMediaTypeOrNull() ?: "application/octet-stream".toMediaTypeOrNull()
+                val filePart = MultipartBody.Part.createFormData(
+                    "file",
+                    cleanFileName,
+                    fileBytes.toRequestBody(requestMediaType)
+                )
+
+                val created = api.createSaraLiveDoc(
+                    requestAuthorization,
+                    buildJsonObject {
+                        put("name", "Adjunto temporal de Sara ${System.currentTimeMillis()}")
+                        put("description", "Contexto temporal para responder una consulta autenticada del usuario")
+                    }
+                )
+                val createdData = created["data"] as? JsonObject
+                val liveDocRef = createdData?.get("doc_ref")?.jsonPrimitive?.contentOrNull
+                    ?: throw IllegalStateException("Sara no pudo crear el contexto temporal del archivo.")
+                docRef = liveDocRef
+
+                val fileExtension = cleanFileName.substringAfterLast('.', "").lowercase()
+                val mediaExtensions = setOf("mp3", "m4a", "wav", "ogg", "opus", "mp4", "mov", "mkv", "webm", "m4v")
+                val upload = if (mimeType.startsWith("audio/") || mimeType.startsWith("video/") || fileExtension in mediaExtensions) {
+                    api.uploadSaraMediaResource(requestAuthorization, liveDocRef, filePart)
+                } else {
+                    api.uploadSaraDocument(requestAuthorization, liveDocRef, filePart)
+                }
+                val uploadData = upload["data"] as? JsonObject
+                val resourceId = uploadData?.get("id")?.jsonPrimitive?.contentOrNull
+                    ?: throw IllegalStateException("Felo no devolvió una referencia válida del archivo.")
+
+                var resourceStatus = uploadData["status"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
+                for (attempt in 0 until 20) {
+                    if (resourceStatus in setOf("completed", "ready", "success")) break
+                    if (resourceStatus in setOf("failed", "error")) {
+                        throw IllegalStateException("Felo no pudo procesar este formato de archivo.")
+                    }
+                    if (attempt == 19) {
+                        throw IllegalStateException("El archivo sigue procesándose. Inténtalo de nuevo en un momento.")
+                    }
+                    delay(1500)
+                    val resource = api.getSaraLiveDocResource(requestAuthorization, liveDocRef, resourceId)
+                    val resourceData = resource["data"] as? JsonObject
+                    resourceStatus = resourceData?.get("status")?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
+                }
+
+                val retrieval = api.retrieveSaraLiveDocContent(
+                    requestAuthorization,
+                    liveDocRef,
+                    buildJsonObject {
+                        put("query", safePrompt.take(4000))
+                        put("resource_ids", buildJsonArray { add(JsonPrimitive(resourceId)) })
+                    }
+                )
+                val extractedContext = retrieval.toString().take(12000)
+                val llmResponse = api.askSaraWithFeloContext(
+                    requestAuthorization,
+                    buildJsonObject {
+                        put("protocol", "chat/completions")
+                        put("model", "gpt-5.6-luna")
+                        put("max_tokens", 1200)
+                        put("messages", buildJsonArray {
+                            add(buildJsonObject {
+                                put("role", "system")
+                                put("content", "Eres Sara, asistente de OmniStudio. Responde en español, de forma clara y breve. Usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
+                            })
+                            add(buildJsonObject {
+                                put("role", "user")
+                                put("content", "Solicitud: $safePrompt\n\nContenido recuperado del archivo de $displayName:\n$extractedContext")
+                            })
+                        })
+                    }
+                )
+                val choices = llmResponse["choices"] as? JsonArray
+                val firstChoice = choices?.firstOrNull() as? JsonObject
+                val assistantMessage = firstChoice?.get("message") as? JsonObject
+                val answer = assistantMessage?.get("content")?.jsonPrimitive?.contentOrNull?.trim()
+                    .orEmpty()
+                    .ifBlank { "Pude recibir el archivo, pero no obtuve una respuesta utilizable. Prueba con una pregunta más específica." }
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(answer)
+            } catch (e: retrofit2.HttpException) {
+                val explanation = when (e.code()) {
+                    401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
+                    413 -> "El archivo supera el límite de 10 MB."
+                    else -> "Sara no pudo procesar el archivo ahora. Inténtalo de nuevo en unos momentos."
+                }
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(explanation)
+            } catch (e: Exception) {
+                _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                    e.message ?: "No se pudo procesar el archivo. Comprueba el formato e inténtalo de nuevo."
+                )
+            } finally {
+                val auth = authorization
+                val reference = docRef
+                if (!auth.isNullOrBlank() && !reference.isNullOrBlank()) {
+                    runCatching { api.deleteSaraLiveDoc(auth, reference) }
+                }
+                _isAiLoading.value = false
+            }
+        }
+    }
+
+    private fun readSaraAttachment(uri: Uri, resolver: android.content.ContentResolver): ByteArray {
+        val input = resolver.openInputStream(uri) ?: throw IllegalArgumentException("No pude abrir el archivo seleccionado.")
+        val output = ByteArrayOutputStream()
+        input.use { stream ->
+            val buffer = ByteArray(8192)
+            var total = 0
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > 10 * 1024 * 1024) throw IllegalArgumentException("El archivo supera el límite de 10 MB.")
+                output.write(buffer, 0, count)
+            }
+        }
+        if (output.size() == 0) throw IllegalArgumentException("El archivo está vacío.")
+        return output.toByteArray()
+    }
+
     private fun saraMessage(text: String) = ChatMessage(
         channelId = "ai_assistant",
         senderEmail = "sara",
@@ -471,39 +634,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 _aiChatHistory.value = _aiChatHistory.value + saraMessage(
                     "Limpié este chat, pero no pude reiniciar el historial del servidor."
                 )
-            }
-        }
-    }
-
-    private val _selectedGeminiModel = MutableStateFlow("")
-    val selectedGeminiModel: StateFlow<String> = _selectedGeminiModel.asStateFlow()
-
-    private val _availableGeminiModels = MutableStateFlow<List<com.example.data.api.GeminiModelInfo>>(emptyList())
-    val availableGeminiModels: StateFlow<List<com.example.data.api.GeminiModelInfo>> = _availableGeminiModels.asStateFlow()
-
-    fun updateSelectedModel(model: String) {
-        _selectedGeminiModel.value = model
-    }
-
-    fun fetchAvailableModels() {
-        viewModelScope.launch {
-            try {
-                val apiKey = BuildConfig.GEMINI_API_KEY
-                if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") return@launch
-                
-                val response = com.example.data.api.GeminiRetrofitClient.service.listModels(apiKey)
-                // Filter models that support content generation
-                val filtered = response.models.filter { 
-                    it.supportedGenerationMethods?.contains("generateContent") == true 
-                }
-                _availableGeminiModels.value = filtered
-                
-                // Auto-select first model if none is selected
-                if (_selectedGeminiModel.value.isEmpty() && filtered.isNotEmpty()) {
-                    _selectedGeminiModel.value = filtered.first().name
-                }
-            } catch (e: Exception) {
-                Log.e("OmniViewModel", "Error fetching models: ${e.message}")
             }
         }
     }

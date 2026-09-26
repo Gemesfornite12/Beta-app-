@@ -7,6 +7,11 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
+import okhttp3.MultipartBody
+import retrofit2.http.DELETE
+import retrofit2.http.Multipart
+import retrofit2.http.Path
+import retrofit2.http.Part
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
@@ -115,6 +120,54 @@ interface SaraApi {
         @Header("Authorization") authorization: String,
         @Body request: SaraSearchRequest
     ): SaraSearchResponse
+
+    @POST("api/felo/livedocs")
+    suspend fun createSaraLiveDoc(
+        @Header("Authorization") authorization: String,
+        @Body request: JsonObject
+    ): JsonObject
+
+    @Multipart
+    @POST("api/felo/livedocs/resources/upload-doc")
+    suspend fun uploadSaraDocument(
+        @Header("Authorization") authorization: String,
+        @Header("X-Felo-LiveDoc-Ref") docRef: String,
+        @Part file: MultipartBody.Part
+    ): JsonObject
+
+    @Multipart
+    @POST("api/felo/livedocs/resources/upload")
+    suspend fun uploadSaraMediaResource(
+        @Header("Authorization") authorization: String,
+        @Header("X-Felo-LiveDoc-Ref") docRef: String,
+        @Part file: MultipartBody.Part
+    ): JsonObject
+
+    @GET("api/felo/livedocs/resources/{resourceId}")
+    suspend fun getSaraLiveDocResource(
+        @Header("Authorization") authorization: String,
+        @Header("X-Felo-LiveDoc-Ref") docRef: String,
+        @Path("resourceId") resourceId: String
+    ): JsonObject
+
+    @POST("api/felo/livedocs/resources/retrieve")
+    suspend fun retrieveSaraLiveDocContent(
+        @Header("Authorization") authorization: String,
+        @Header("X-Felo-LiveDoc-Ref") docRef: String,
+        @Body request: JsonObject
+    ): JsonObject
+
+    @DELETE("api/felo/livedocs")
+    suspend fun deleteSaraLiveDoc(
+        @Header("Authorization") authorization: String,
+        @Header("X-Felo-LiveDoc-Ref") docRef: String
+    ): JsonObject
+
+    @POST("api/felo/llm")
+    suspend fun askSaraWithFeloContext(
+        @Header("Authorization") authorization: String,
+        @Body request: JsonObject
+    ): JsonObject
 }
 
 object SaraRetrofitClient {

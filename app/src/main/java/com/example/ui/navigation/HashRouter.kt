@@ -150,11 +150,11 @@ enum class HashRoute(
     AI_ASSISTANT(
         hash = "#/ai",
         routeKey = "ai_assistant",
-        displayName = "Asistente AI",
-        shortName = "AI",
+        displayName = "Asistente Sara",
+        shortName = "Sara",
         icon = Icons.Default.AutoAwesome,
         accentColor = Color(0xFF818CF8),
-        description = "Asistente inteligente potenciado por Gemini"
+        description = "Rasa con herramientas Felo bajo demanda"
     ),
     MAPS(
         hash = "#/maps",
