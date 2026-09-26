@@ -87,6 +87,12 @@ fun AiAssistantScreen(
     val isSaraAdvancedLoading by viewModel.isSaraAdvancedLoading.collectAsState()
     var showSaraAdvanced by remember { mutableStateOf(false) }
     var saraAdvancedInput by remember { mutableStateOf("") }
+    var showSaraLibrary by remember { mutableStateOf(false) }
+    var pendingKnowledge by remember { mutableStateOf<String?>(null) }
+    val saraKnowledgeEntries by viewModel.saraKnowledgeEntries.collectAsState()
+    val context = LocalContext.current
+
+    LaunchedEffect(Unit) { viewModel.refreshSaraKnowledge() }
 
     Scaffold(
         topBar = {
@@ -108,6 +114,9 @@ fun AiAssistantScreen(
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
                         }
                     }
+                    IconButton(onClick = { viewModel.refreshSaraKnowledge(); showSaraLibrary = true }) {
+                        Icon(Icons.Default.Bookmarks, contentDescription = "Biblioteca de Sara", tint = Color(0xFF94A3B8))
+                    }
                     IconButton(onClick = { showSaraAdvanced = true }) {
                         Icon(Icons.Default.Tune, contentDescription = "Herramientas de Sara", tint = Color(0xFF94A3B8))
                     }
@@ -125,8 +134,13 @@ fun AiAssistantScreen(
             history = aiChatHistory,
             isLoading = isAiLoading,
             modifier = Modifier.fillMaxSize().padding(padding),
-            onSend = viewModel::sendAiMessage,
-            onSendAttachment = viewModel::sendAiAttachment
+            onSend = { message ->
+                val saveCandidate = saraSaveCandidate(message)
+                viewModel.sendAiMessage(message)
+                if (saveCandidate != null) pendingKnowledge = saveCandidate
+            },
+            onSendAttachment = viewModel::sendAiAttachment,
+            onRequestSave = { pendingKnowledge = it }
         )
     }
 
@@ -144,6 +158,76 @@ fun AiAssistantScreen(
             }
         )
     }
+
+    pendingKnowledge?.let { textToSave ->
+        AlertDialog(
+            onDismissRequest = { pendingKnowledge = null },
+            title = { Text("¿Guardar para Sara?") },
+            text = {
+                Column {
+                    Text("Sara podrá usar este mensaje en respuestas futuras. Se guardará solo en este dispositivo, separado por tu cuenta. Si ayuda a responder con Felo, la nota se enviará a ese servicio y podría consumir créditos.")
+                    Spacer(Modifier.height(10.dp))
+                    Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
+                        Text(
+                            textToSave.take(900),
+                            color = Color.White,
+                            modifier = Modifier.padding(12.dp),
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val saved = viewModel.saveSaraKnowledge(textToSave)
+                    Toast.makeText(
+                        context,
+                        if (saved) "Guardado en la biblioteca de Sara" else "No se pudo guardar. Inicia sesión e inténtalo de nuevo.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    pendingKnowledge = null
+                }) { Text("Sí, guardar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingKnowledge = null }) { Text("No guardar") }
+            }
+        )
+    }
+
+    if (showSaraLibrary) {
+        AlertDialog(
+            onDismissRequest = { showSaraLibrary = false },
+            title = { Text("Biblioteca personal de Sara") },
+            text = {
+                if (saraKnowledgeEntries.isEmpty()) {
+                    Text("Todavía no guardaste conocimientos. En un mensaje tuyo, toca ‘Guardar para Sara’ y confirma antes de almacenarlo.")
+                } else {
+                    Column(
+                        modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                    ) {
+                        saraKnowledgeEntries.forEach { entry ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    entry.text,
+                                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                IconButton(onClick = { viewModel.deleteSaraKnowledge(entry.id) }) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Eliminar conocimiento", tint = Color(0xFFF87171))
+                                }
+                            }
+                            HorizontalDivider(color = Color(0xFF334155))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSaraLibrary = false }) { Text("Cerrar") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -152,7 +236,8 @@ private fun SaraChatView(
     isLoading: Boolean,
     modifier: Modifier = Modifier,
     onSend: (String) -> Unit,
-    onSendAttachment: (Uri, String) -> Unit
+    onSendAttachment: (Uri, String) -> Unit,
+    onRequestSave: (String) -> Unit
 ) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
@@ -284,6 +369,16 @@ private fun SaraChatView(
                                         }
                                     }
                                 )
+                                if (isUser && message.text.isNotBlank()) {
+                                    TextButton(
+                                        onClick = { onRequestSave(message.text) },
+                                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.BookmarkBorder, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Guardar para Sara", fontSize = 11.sp)
+                                    }
+                                }
                             }
                         }
                     }
@@ -382,6 +477,15 @@ private fun SaraChatView(
             }
         }
     }
+}
+
+private fun saraSaveCandidate(text: String): String? {
+    val prefix = Regex(
+        "^\\s*(?:sara[,: ]+)?(?:recuerda(?:me)?(?:\\s+(?:esto|que))?|aprende(?:\\s+(?:esto|que))?|guarda(?:r)?(?:\\s+(?:esto|esta nota|para sara|que))?|guardar\\s+para\\s+sara|anota|memoriza|no olvides|remember(?:\\s+this)?|learn(?:\\s+this)?|save(?:\\s+this)?|note(?:\\s+this)?|don't forget)\\b\\s*[:,-]?\\s*",
+        RegexOption.IGNORE_CASE
+    )
+    if (!prefix.containsMatchIn(text)) return null
+    return text.replaceFirst(prefix, "").trim().takeIf(String::isNotBlank)
 }
 
 private fun isSaraCompatibleAttachment(mimeType: String, fileName: String): Boolean {
