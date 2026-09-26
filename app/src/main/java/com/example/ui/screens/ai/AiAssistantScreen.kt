@@ -90,9 +90,17 @@ fun AiAssistantScreen(
     var showSaraLibrary by remember { mutableStateOf(false) }
     var pendingKnowledge by remember { mutableStateOf<String?>(null) }
     val saraKnowledgeEntries by viewModel.saraKnowledgeEntries.collectAsState()
+    val isSaraKnowledgeLoading by viewModel.isSaraKnowledgeLoading.collectAsState()
+    val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
     val context = LocalContext.current
 
     LaunchedEffect(Unit) { viewModel.refreshSaraKnowledge() }
+    LaunchedEffect(saraKnowledgeFeedback) {
+        saraKnowledgeFeedback?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            viewModel.clearSaraKnowledgeFeedback()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -165,7 +173,7 @@ fun AiAssistantScreen(
             title = { Text("¿Guardar para Sara?") },
             text = {
                 Column {
-                    Text("Sara podrá usar este mensaje en respuestas futuras. Se guardará solo en este dispositivo, separado por tu cuenta. Si ayuda a responder con Felo, la nota se enviará a ese servicio y podría consumir créditos.")
+                    Text("Sara podrá usar este mensaje en respuestas futuras. Se guardará en tu biblioteca privada de Firebase, separada por tu cuenta y disponible al iniciar sesión en tus dispositivos. Las notas locales anteriores se borrarán de este dispositivo solo después de verificar que se copiaron correctamente. Si una nota ayuda a responder con Felo, se enviará a ese servicio y podría consumir créditos.")
                     Spacer(Modifier.height(10.dp))
                     Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
                         Text(
@@ -180,12 +188,7 @@ fun AiAssistantScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val saved = viewModel.saveSaraKnowledge(textToSave)
-                    Toast.makeText(
-                        context,
-                        if (saved) "Guardado en la biblioteca de Sara" else "No se pudo guardar. Inicia sesión e inténtalo de nuevo.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    viewModel.saveSaraKnowledge(textToSave)
                     pendingKnowledge = null
                 }) { Text("Sí, guardar") }
             },
@@ -198,10 +201,12 @@ fun AiAssistantScreen(
     if (showSaraLibrary) {
         AlertDialog(
             onDismissRequest = { showSaraLibrary = false },
-            title = { Text("Biblioteca personal de Sara") },
+            title = { Text("Aprendizaje de Sara") },
             text = {
-                if (saraKnowledgeEntries.isEmpty()) {
-                    Text("Todavía no guardaste conocimientos. En un mensaje tuyo, toca ‘Guardar para Sara’ y confirma antes de almacenarlo.")
+                if (isSaraKnowledgeLoading) {
+                    Text("Sincronizando la biblioteca privada de Sara con Firebase…")
+                } else if (saraKnowledgeEntries.isEmpty()) {
+                    Text("Aún no hay notas. Toca ‘Guardar para Sara’ en un mensaje tuyo y confirma; solo se guardarán las notas aprobadas.")
                 } else {
                     Column(
                         modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
@@ -826,4 +831,3 @@ private fun SaraEventInput(
         )
     )
 }
-
