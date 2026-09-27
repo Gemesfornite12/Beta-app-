@@ -1069,6 +1069,94 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        // --- LISTENER GLOBAL DE LLAMADAS ENTRANTE ---
+        viewModelScope.launch {
+            firestoreChatService.listenToAllCalls().collect { allCalls ->
+                val myEmail = _authUiState.value.currentUser?.email
+                if (myEmail != null) {
+                    // Filtrar llamadas dirigidas a mí (directas) o a mis grupos
+                    val myChannels = _availableChannels.value.map { it.id }.toSet()
+                    
+                    val incoming = allCalls.firstOrNull { call ->
+                        call.status == com.example.data.model.CallStatus.RINGING &&
+                        call.callerEmail != myEmail && // No soy yo quien llama
+                        (call.peerEmail == myEmail || myChannels.contains(call.channelId))
+                    }
+                    
+                    if (incoming != null && _activeCall.value == null) {
+                        // Recibir la llamada
+                        receiveIncomingCall(incoming)
+                    }
+                    
+                    // Si ya tengo una llamada activa, observar si cambia de estado (fue respondida o terminada por el otro)
+                    val current = _activeCall.value
+                    if (current != null) {
+                        val remoteState = allCalls.firstOrNull { it.callId == current.callId }
+                        if (remoteState != null) {
+                            if (remoteState.status == com.example.data.model.CallStatus.CONNECTED && current.status == com.example.data.model.CallStatus.RINGING) {
+                                // El otro respondió
+                                if (!current.isIncoming) {
+                                    // Yo era el llamante, ahora estamos conectados
+                                    handleCallConnectedByPeer(remoteState)
+                                }
+                            } else if (remoteState.status == com.example.data.model.CallStatus.ENDED) {
+                                // El otro terminó o rechazó
+                                endActiveCall(sendSignal = false)
+                            }
+                        } else if (current.status != com.example.data.model.CallStatus.ENDED) {
+                            // La señal desapareció, terminar llamada localmente
+                            endActiveCall(sendSignal = false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleCallConnectedByPeer(remoteCall: CallSession) {
+        val current = _activeCall.value ?: return
+        ringCountdownJob?.cancel()
+        ringCountdownJob = null
+        CallSoundVibrationManager.stopOutgoingDialTone()
+        CallSoundVibrationManager.playCallConnected(getApplication())
+        
+        _activeCall.value = current.copy(
+            status = CallStatus.CONNECTED,
+            durationSeconds = 0
+        )
+        startCallTimer()
+    }
+
+    private fun receiveIncomingCall(incoming: CallSession) {
+        val timeoutSec = _callTimeoutMinutes.value * 60
+        val session = incoming.copy(
+            isIncoming = true,
+            ringSecondsLeft = timeoutSec,
+            maxRingSeconds = timeoutSec
+        )
+        _activeCall.value = session
+
+        // Iniciar sonido de timbre y vibración continua
+        CallSoundVibrationManager.startIncomingCallAlert(
+            context = getApplication(),
+            soundEnabled = _callSoundEnabled.value,
+            vibrationEnabled = _callVibrationEnabled.value,
+            ringtoneMode = _callRingtoneMode.value
+        )
+
+        // Notificación push
+        ChatNotificationManager.showIncomingCallNotification(
+            context = getApplication(),
+            callId = session.callId,
+            channelId = session.channelId,
+            callerName = session.callerName,
+            groupName = session.groupName,
+            isVideo = session.isVideo,
+            timeoutMinutes = _callTimeoutMinutes.value
+        )
+
+        startRingingCountdown(session.callId, timeoutSec, isIncoming = true)
     }
 
     // AUTH ACTIONS
@@ -3630,6 +3718,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.stopIncomingCallAlert()
         CallSoundVibrationManager.playCallConnected(getApplication())
 
         _activeCall.value = call.copy(
@@ -3637,6 +3726,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             durationSeconds = 0,
             isTimedOut = false
         )
+        
+        viewModelScope.launch {
+            firestoreChatService.updateCallStatus(call.channelId, call.callId, CallStatus.CONNECTED)
+        }
+        
         startCallTimer()
     }
 
@@ -3648,6 +3742,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.stopIncomingCallAlert()
         CallSoundVibrationManager.playCallEnded(getApplication())
 
         val chId = call.channelId
@@ -3785,13 +3880,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _activeCall.value = _activeCall.value?.let { it.copy(isFrontCamera = !it.isFrontCamera) }
     }
 
-    fun endActiveCall() {
+    fun endActiveCall(sendSignal: Boolean = true) {
         val call = _activeCall.value ?: return
         callTimerJob?.cancel()
         callTimerJob = null
         ringCountdownJob?.cancel()
         ringCountdownJob = null
+        
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        CallSoundVibrationManager.stopOutgoingDialTone()
+        CallSoundVibrationManager.stopIncomingCallAlert()
         CallSoundVibrationManager.playCallEnded(getApplication())
 
         val duration = call.durationSeconds
@@ -3802,7 +3900,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _activeCall.value = null
 
         viewModelScope.launch {
-            firestoreChatService.endCallSignal(chId, callId)
+            if (sendSignal) {
+                firestoreChatService.endCallSignal(chId, callId)
+            }
             val minutes = duration / 60
             val seconds = duration % 60
             val durationFormatted = String.format("%02d:%02d", minutes, seconds)

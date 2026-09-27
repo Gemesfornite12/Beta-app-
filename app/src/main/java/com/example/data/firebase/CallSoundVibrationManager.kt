@@ -404,4 +404,17 @@ object CallSoundVibrationManager {
 
         Log.d(TAG, "All sounds, ringtones and vibrations stopped")
     }
+
+    fun stopIncomingCallAlert() {
+        isPlayingIncoming = false
+        // Podríamos pasar el contexto si quisiéramos detener vibración aquí, 
+        // pero stopAll ya se encarga en los flujos principales. 
+        // Por ahora, dialToneJob y mediaPlayer se limpian en stopAll.
+    }
+
+    fun stopOutgoingDialTone() {
+        isPlayingOutgoing = false
+        dialToneJob?.cancel()
+        dialToneJob = null
+    }
 }

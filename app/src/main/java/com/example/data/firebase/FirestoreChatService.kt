@@ -901,6 +901,9 @@ class FirestoreChatService(private val context: Context) {
             "peerEmail" to call.peerEmail,
             "isVideo" to call.isVideo,
             "status" to call.status.name,
+            "callerName" to call.callerName,
+            "callerEmail" to call.callerEmail,
+            "groupName" to call.groupName,
             "startTimeMs" to System.currentTimeMillis()
         )
         val rtdb = rtdbRef
@@ -921,6 +924,82 @@ class FirestoreChatService(private val context: Context) {
             } catch (_: Exception) {}
         }
         return true
+    }
+
+    /**
+     * Escucha en tiempo real todas las señales de llamadas activas para detectar entrantes.
+     */
+    fun listenToAllCalls(): Flow<List<CallSession>> = callbackFlow {
+        val rtdb = rtdbRef
+        val callsRef = rtdb?.child("calls")
+        
+        val listener = if (callsRef != null) {
+            val l = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val allCalls = mutableListOf<CallSession>()
+                    snapshot.children.forEach { channelSnap ->
+                        channelSnap.children.forEach { callSnap ->
+                            val session = snapshotToCallSession(callSnap, channelSnap.key ?: "")
+                            if (session != null) {
+                                allCalls.add(session)
+                            }
+                        }
+                    }
+                    trySendBlocking(allCalls)
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            }
+            callsRef.addValueEventListener(l)
+            l
+        } else null
+        
+        awaitClose {
+            if (callsRef != null && listener != null) {
+                callsRef.removeEventListener(listener)
+            }
+        }
+    }
+
+    private fun snapshotToCallSession(snap: DataSnapshot, channelId: String): CallSession? {
+        val map = snap.value as? Map<*, *> ?: return null
+        val callId = (map["callId"] as? String) ?: snap.key ?: return null
+        val statusStr = (map["status"] as? String) ?: "RINGING"
+        
+        return CallSession(
+            callId = callId,
+            channelId = (map["channelId"] as? String) ?: channelId,
+            peerName = (map["peerName"] as? String) ?: "",
+            peerEmail = (map["peerEmail"] as? String) ?: "",
+            isVideo = (map["isVideo"] as? Boolean) ?: false,
+            status = try { com.example.data.model.CallStatus.valueOf(statusStr) } catch(_: Exception) { com.example.data.model.CallStatus.RINGING },
+            callerName = (map["callerName"] as? String) ?: "",
+            callerEmail = (map["callerEmail"] as? String) ?: "",
+            groupName = map["groupName"] as? String,
+            isIncoming = true // Por defecto si lo detectamos vía listener global
+        )
+    }
+
+    /**
+     * Actualiza el estado de una señal de llamada (CONNECTED, ENDED, etc.)
+     */
+    suspend fun updateCallStatus(channelId: String, callId: String, status: com.example.data.model.CallStatus) {
+        val rtdb = rtdbRef
+        if (rtdb != null) {
+            try {
+                rtdb.child("calls").child(channelId).child(callId).child("status").setValue(status.name).await()
+            } catch (_: Exception) {}
+        }
+        val db = getDb()
+        if (db != null) {
+            try {
+                db.collection("chat_channels")
+                    .document(channelId)
+                    .collection("active_calls")
+                    .document(callId)
+                    .update("status", status.name)
+                    .await()
+            } catch (_: Exception) {}
+        }
     }
 
     /**

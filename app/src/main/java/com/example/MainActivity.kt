@@ -337,6 +337,10 @@ fun OmniStudioApp(
                 onLogout = {
                   viewModel.logout()
                   hashRouter.replace(HashRoute.AUTH)
+                },
+                onOpenChat = { channelId ->
+                  viewModel.loadChannelMessages(channelId)
+                  hashRouter.push(HashRoute.CHAT)
                 }
               )
             }

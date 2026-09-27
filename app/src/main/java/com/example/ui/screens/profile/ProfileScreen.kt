@@ -104,7 +104,8 @@ import com.example.ui.viewmodel.OmniViewModel
 fun ProfileScreen(
     viewModel: OmniViewModel,
     onBack: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onOpenChat: (String) -> Unit = {}
 ) {
     val authState by viewModel.authUiState.collectAsState()
     val isDarkTheme by viewModel.isDarkTheme.collectAsState()
@@ -1313,7 +1314,9 @@ fun ProfileScreen(
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
                                     color = if (isDarkTheme) Color(0xFF0F172A) else Color(0xFFF8FAFC),
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onOpenChat(channel.id) }
                                 ) {
                                     Column(modifier = Modifier.padding(10.dp)) {
                                         // Cabecera del chat
