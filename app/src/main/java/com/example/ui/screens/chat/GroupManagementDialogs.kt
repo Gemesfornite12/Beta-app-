@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.PersonAdd
@@ -639,7 +641,8 @@ fun GroupManageDialog(
     onScheduleDeletion: () -> Unit,
     onCancelDeletion: () -> Unit,
     onDeletePermanently: () -> Unit,
-    onLeaveGroup: () -> Unit
+    onLeaveGroup: () -> Unit,
+    onStartDirectChat: (email: String, name: String) -> Unit = { _, _ -> }
 ) {
     val isOwner = channel.creatorEmail == currentUserEmail
     var showAddMemberSection by remember { mutableStateOf(false) }
@@ -1099,6 +1102,20 @@ fun GroupManageDialog(
                                             }
                                         }
                                         Text(text = member.email, color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                    }
+
+                                    // Botón para chat privado (solo si no es el usuario actual)
+                                    if (!isThisUser) {
+                                        IconButton(
+                                            onClick = { onStartDirectChat(member.email, member.name) }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Forum,
+                                                contentDescription = "Chat Privado",
+                                                tint = Color(0xFF38BDF8),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
 
                                     // Botón para expulsar al usuario (solo el dueño puede hacerlo y no a sí mismo)

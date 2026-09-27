@@ -1478,6 +1478,9 @@ fun ChatScreen(
                         onStartVideoCall = { peerName ->
                             viewModel.startVideoCall(peerName)
                         },
+                        onStartDirectChat = { peerEmail, peerName ->
+                            viewModel.startDirectChat(peerEmail, peerName)
+                        },
                         onOpenYouTubeOverlay = { vId, vTitle ->
                             activeOverlayVideo = Pair(vId, vTitle)
                         },
@@ -1685,6 +1688,10 @@ fun ChatScreen(
             },
             onLeaveGroup = {
                 viewModel.leaveGroup(activeChannelInfo.id)
+                showGroupManageDialog = false
+            },
+            onStartDirectChat = { email, name ->
+                viewModel.startDirectChat(email, name)
                 showGroupManageDialog = false
             }
         )
@@ -1938,6 +1945,7 @@ private fun MessageBubble(
     onPreviewMedia: (url: String, type: String) -> Unit,
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit,
+    onStartDirectChat: (peerEmail: String, peerName: String) -> Unit,
     onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> },
     onOpenStandardVideo: (videoUrl: String, title: String) -> Unit = { _, _ -> }
 ) {
@@ -1975,6 +1983,8 @@ private fun MessageBubble(
         }
     }
 
+    var showUserMenu by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
@@ -1982,19 +1992,45 @@ private fun MessageBubble(
     ) {
         // Avatar si no soy yo
         if (!isMe) {
-            Surface(
-                shape = CircleShape,
-                color = avatarColor,
-                modifier = Modifier
-                    .size(32.dp)
-                    .padding(top = 2.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = initials,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+            Box {
+                Surface(
+                    shape = CircleShape,
+                    color = avatarColor,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .padding(top = 2.dp)
+                        .clickable { showUserMenu = true }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = initials,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = showUserMenu,
+                    onDismissRequest = { showUserMenu = false },
+                    modifier = Modifier.background(Color(0xFF1E293B))
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Chat Privado", color = Color.White, fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Default.Forum, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showUserMenu = false
+                            onStartDirectChat(message.senderEmail, message.senderName)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Llamada de voz", color = Color.White, fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Default.Call, contentDescription = null, tint = Color(0xFF34D399), modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showUserMenu = false
+                            onStartVoiceCall(message.senderName)
+                        }
                     )
                 }
             }
@@ -2040,7 +2076,9 @@ private fun MessageBubble(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = avatarColor,
-                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                    modifier = Modifier
+                        .padding(start = 4.dp, bottom = 2.dp)
+                        .clickable { showUserMenu = true }
                 )
             }
 
