@@ -50,9 +50,16 @@ class SaraKnowledgeFirebaseStore(context: Context) {
     }
 
     suspend fun relevantContext(uid: String, query: String): String {
+        val entries = list(uid)
+        if (entries.isEmpty()) return ""
+        if (SaraKnowledgeQueryPolicy.isPersonalRecallQuery(query)) {
+            return entries.take(MAX_CONTEXT_ENTRIES)
+                .joinToString("\n") { entry -> "• ${entry.text}" }
+                .take(MAX_CONTEXT_CHARS)
+        }
         val queryWords = tokens(query)
         if (queryWords.isEmpty()) return ""
-        return list(uid)
+        return entries
             .map { entry -> entry to tokens(entry.text).count(queryWords::contains) }
             .filter { (_, score) -> score > 0 }
             .sortedWith(
@@ -158,3 +165,4 @@ class SaraKnowledgeFirebaseStore(context: Context) {
         )
     }
 }
+

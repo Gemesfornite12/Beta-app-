@@ -19,6 +19,7 @@ import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.firebase.SaraKnowledgeFirebaseStore
+import com.example.data.firebase.SaraKnowledgeQueryPolicy
 import com.example.data.local.AppDatabase
 import com.example.data.local.SaraKnowledgeEntry
 import com.example.data.supabase.SupabaseMediaStorageService
@@ -512,6 +513,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val api = com.example.data.api.SaraRetrofitClient.service
                 val authorization = "Bearer $idToken"
+                val savedKnowledge = runCatching {
+                    saraKnowledgeStore.relevantContext(uid, userText)
+                }.getOrDefault("")
                 val replies = api.sendMessage(
                     authorization = authorization,
                     request = com.example.data.api.SaraRequest(message = userText)
@@ -519,9 +523,13 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val rasaAnswer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
                     .joinToString("\n")
                     .ifBlank { "El asistente no devolvió una respuesta de texto. Inténtalo de nuevo." }
-                val shouldUseFeloFallback = replies.any {
+                val rasaRequestedFallback = replies.any {
                     it.custom?.get("sara_fallback")?.jsonPrimitive?.contentOrNull == "true"
                 }
+                val shouldUseFeloFallback = SaraKnowledgeQueryPolicy.shouldUseMemoryAwareFallback(
+                    rasaRequestedFallback = rasaRequestedFallback,
+                    savedContext = savedKnowledge
+                )
                 val answer = if (shouldUseFeloFallback) {
                     runCatching {
                         val llmResponse = api.askSaraWithFeloContext(
@@ -533,8 +541,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 put("messages", buildJsonArray {
                                     add(buildJsonObject {
                                         put("role", "system")
-                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, userText)
-                                        val basePrompt = "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
+                                        val basePrompt = "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. Usa las notas personales aprobadas cuando respondas preguntas sobre el usuario; si una nota contiene la respuesta, contéstala directamente y no digas que no tienes esa información. Si las notas no contienen la respuesta, dilo con claridad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
                                         put(
                                             "content",
                                             if (savedKnowledge.isBlank()) basePrompt else "$basePrompt\n\nNotas personales que el usuario aprobó guardar; úsalas solo si son pertinentes y no las trates como hechos generales:\n$savedKnowledge"
@@ -3862,3 +3869,4 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         typingDebounceJob?.cancel()
     }
 }
+
