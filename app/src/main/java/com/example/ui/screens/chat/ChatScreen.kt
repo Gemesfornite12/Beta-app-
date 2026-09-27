@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
@@ -227,6 +228,7 @@ fun ChatScreen(
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
+    val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
 
     // Launchers para solicitar permisos en tiempo de ejecución para Llamadas
     val voiceCallPermissionLauncher = rememberLauncherForActivityResult(
@@ -305,7 +307,6 @@ fun ChatScreen(
         }
     }
 
-    val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
     val isOwner = activeChannelInfo?.isGroup == true && activeChannelInfo.creatorEmail == currentUserEmail
     val myGroupMember = activeChannelInfo?.members?.firstOrNull { it.email == currentUserEmail }
     val canSendMessages = if (activeChannelInfo?.isGroup == true && myGroupMember != null) myGroupMember.canSendMessages else true
