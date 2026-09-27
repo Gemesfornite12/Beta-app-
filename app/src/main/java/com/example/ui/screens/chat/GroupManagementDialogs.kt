@@ -654,6 +654,24 @@ fun GroupManageDialog(
     var confirmDeleteGroupDialog by remember { mutableStateOf(false) }
     var confirmLeaveGroupDialog by remember { mutableStateOf(false) }
 
+    // Diálogo interno para ver info de un miembro (Perfil)
+    var memberForInfo by remember { mutableStateOf<GroupMember?>(null) }
+
+    if (memberForInfo != null) {
+        UserInfoDialog(
+            user = memberForInfo!!,
+            onDismiss = { memberForInfo = null },
+            onStartChat = {
+                memberForInfo = null
+                onStartDirectChat(it.email, it.name)
+            },
+            onVoiceCall = {
+                memberForInfo = null
+                onStartDirectChat(it.email, it.name)
+            }
+        )
+    }
+
     val editGroupPhotoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -1065,7 +1083,9 @@ fun GroupManageDialog(
                                     Surface(
                                         shape = CircleShape,
                                         color = if (isMemberOwner) Color(0xFFF59E0B) else Color(0xFF6366F1),
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clickable { if (!isThisUser) memberForInfo = member }
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Text(
@@ -1077,7 +1097,13 @@ fun GroupManageDialog(
                                         }
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                if (!isThisUser) memberForInfo = member
+                                            }
+                                    ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
                                                 text = member.name + if (isThisUser) " (Tú)" else "",
@@ -1316,4 +1342,143 @@ fun GroupManageDialog(
             }
         )
     }
+}
+
+@Composable
+fun UserInfoDialog(
+    user: GroupMember,
+    onDismiss: () -> Unit,
+    onStartChat: (GroupMember) -> Unit,
+    onVoiceCall: (GroupMember) -> Unit = {},
+    onVideoCall: (GroupMember) -> Unit = {}
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("dialog_user_info"),
+        containerColor = Color(0xFF0F172A),
+        shape = RoundedCornerShape(28.dp),
+        title = null,
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Avatar grande
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xFF6366F1),
+                    modifier = Modifier.size(80.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = user.name.take(2).uppercase(),
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = user.name,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = user.email,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Botón Chat
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onStartChat(user) },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF0284C7).copy(alpha = 0.2f),
+                            modifier = Modifier.size(50.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Forum, contentDescription = null, tint = Color(0xFF38BDF8))
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Mensaje", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+
+                    // Botón Llamada
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onVoiceCall(user) },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF059669).copy(alpha = 0.2f),
+                            modifier = Modifier.size(50.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Call, contentDescription = null, tint = Color(0xFF34D399))
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Llamada", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+
+                    // Botón Video
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onVideoCall(user) },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF7C3AED).copy(alpha = 0.2f),
+                            modifier = Modifier.size(50.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Videocam, contentDescription = null, tint = Color(0xFFA855F7))
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Video", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                ) {
+                    Text("Cerrar")
+                }
+            }
+        },
+        confirmButton = {}
+    )
 }

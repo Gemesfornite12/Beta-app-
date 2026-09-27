@@ -218,6 +218,8 @@ fun ChatScreen(
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showStartDirectChatDialog by remember { mutableStateOf(false) }
     var showGroupManageDialog by remember { mutableStateOf(false) }
+    var showUserInfoDialog by remember { mutableStateOf(false) }
+    var selectedUserForInfo by remember { mutableStateOf<GroupMember?>(null) }
     var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
     var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -231,7 +233,7 @@ fun ChatScreen(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            val peer = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
             viewModel.startVoiceCall(peerName = peer)
         } else {
             showPermissionDeniedDialog = "Se requiere permiso de Micrófono para realizar llamadas de voz."
@@ -244,7 +246,7 @@ fun ChatScreen(
         val micGranted = perms[Manifest.permission.RECORD_AUDIO] == true
         val camGranted = perms[Manifest.permission.CAMERA] == true
         if (micGranted && camGranted) {
-            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            val peer = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
             viewModel.startVideoCall(peerName = peer)
         } else {
             showPermissionDeniedDialog = "Se requieren permisos de Micrófono y Cámara para realizar videollamadas."
@@ -254,8 +256,10 @@ fun ChatScreen(
     val launchVoiceCall = {
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (hasMic) {
-            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVoiceCall(peerName = peer)
+            val peerMember = activeChannelInfo?.members?.firstOrNull { it.email != currentUserEmail }
+            val pEmail = if (currentChannel.startsWith("direct")) peerMember?.email ?: "sofia.m@cloud.io" else "broadcast"
+            val pName = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVoiceCall(peerName = pName, peerEmail = pEmail)
         } else {
             voiceCallPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -265,8 +269,10 @@ fun ChatScreen(
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val hasCam = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (hasMic && hasCam) {
-            val peer = if (currentChannel.startsWith("directo-")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVideoCall(peerName = peer)
+            val peerMember = activeChannelInfo?.members?.firstOrNull { it.email != currentUserEmail }
+            val pEmail = if (currentChannel.startsWith("direct")) peerMember?.email ?: "sofia.m@cloud.io" else "broadcast"
+            val pName = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
+            viewModel.startVideoCall(peerName = pName, peerEmail = pEmail)
         } else {
             videoCallPermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
         }
@@ -380,8 +386,16 @@ fun ChatScreen(
                         Column(
                             modifier = Modifier
                                 .weight(1f)
-                                .clickable(enabled = activeChannelInfo?.isGroup == true) {
-                                    if (activeChannelInfo?.isGroup == true) showGroupManageDialog = true
+                                .clickable {
+                                    if (activeChannelInfo?.isGroup == true) {
+                                        showGroupManageDialog = true
+                                    } else if (activeChannelInfo?.isDirect == true) {
+                                        val peer = activeChannelInfo.members.firstOrNull { it.email != currentUserEmail }
+                                        if (peer != null) {
+                                            selectedUserForInfo = peer
+                                            showUserInfoDialog = true
+                                        }
+                                    }
                                 }
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1473,10 +1487,12 @@ fun ChatScreen(
                             previewMediaType = type
                         },
                         onStartVoiceCall = { peerName ->
-                            viewModel.startVoiceCall(peerName)
+                            val pEmail = msg.senderEmail
+                            viewModel.startVoiceCall(peerName = peerName, peerEmail = pEmail)
                         },
                         onStartVideoCall = { peerName ->
-                            viewModel.startVideoCall(peerName)
+                            val pEmail = msg.senderEmail
+                            viewModel.startVideoCall(peerName = peerName, peerEmail = pEmail)
                         },
                         onStartDirectChat = { peerEmail, peerName ->
                             viewModel.startDirectChat(peerEmail, peerName)
@@ -1693,6 +1709,32 @@ fun ChatScreen(
             onStartDirectChat = { email, name ->
                 viewModel.startDirectChat(email, name)
                 showGroupManageDialog = false
+            }
+        )
+    }
+
+    // Diálogo de Información de Usuario / Perfil
+    if (showUserInfoDialog && selectedUserForInfo != null) {
+        UserInfoDialog(
+            user = selectedUserForInfo!!,
+            onDismiss = { 
+                showUserInfoDialog = false
+                selectedUserForInfo = null
+            },
+            onStartChat = {
+                viewModel.startDirectChat(it.email, it.name)
+                showUserInfoDialog = false
+                selectedUserForInfo = null
+            },
+            onVoiceCall = {
+                viewModel.startVoiceCall(peerName = it.name, peerEmail = it.email)
+                showUserInfoDialog = false
+                selectedUserForInfo = null
+            },
+            onVideoCall = {
+                viewModel.startVideoCall(peerName = it.name, peerEmail = it.email)
+                showUserInfoDialog = false
+                selectedUserForInfo = null
             }
         )
     }
@@ -2016,6 +2058,14 @@ private fun MessageBubble(
                     onDismissRequest = { showUserMenu = false },
                     modifier = Modifier.background(Color(0xFF1E293B))
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("Ver Perfil", color = Color.White, fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            showUserMenu = false
+                            onStartDirectChat(message.senderEmail, message.senderName)
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Chat Privado", color = Color.White, fontSize = 13.sp) },
                         leadingIcon = { Icon(Icons.Default.Forum, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp)) },

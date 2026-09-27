@@ -3596,7 +3596,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val chId = channelId ?: _currentChannel.value
         val callId = "call_${System.currentTimeMillis()}"
         val timeoutSec = _callTimeoutMinutes.value * 60
-        val isGroup = chId != "general" && !chId.startsWith("directo-")
+        val isGroup = chId != "general" && !chId.startsWith("direct")
         val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
         val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
 
@@ -3629,7 +3629,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val chId = channelId ?: _currentChannel.value
         val callId = "call_${System.currentTimeMillis()}"
         val timeoutSec = _callTimeoutMinutes.value * 60
-        val isGroup = chId != "general" && !chId.startsWith("directo-")
+        val isGroup = chId != "general" && !chId.startsWith("direct")
         val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
         val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
 
