@@ -298,7 +298,7 @@ private fun SaraChatView(
                 attachmentUri = uri
                 attachmentName = saraAttachmentDisplayName(context, uri)
             } else {
-                Toast.makeText(context, "El asistente acepta documentos, audio y video compatibles; las imágenes no están disponibles", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Adjunta una imagen JPEG, PNG o WebP, audio compatible, documento o video", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -422,7 +422,7 @@ private fun SaraChatView(
         }
 
         Text(
-            "Adjuntos compatibles: documentos, audio o video · máximo 10 MB. El sistema de búsqueda procesa temporalmente y se intenta borrar al terminar; no fotos.",
+            "Imágenes JPEG/PNG/WebP (≤3 MB) y audio compatible (≤6 MB) se envían a Groq sin guardar el archivo. Documentos/video compatibles (≤10 MB) usan Felo temporalmente.",
             color = Color(0xFF64748B), fontSize = 10.sp,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
         )
@@ -495,7 +495,9 @@ private fun saraSaveCandidate(text: String): String? {
 
 private fun isSaraCompatibleAttachment(mimeType: String, fileName: String): Boolean {
     val extension = fileName.substringAfterLast('.', "").lowercase()
-    if (mimeType.startsWith("image/")) return false
+    val supportedImages = setOf("jpg", "jpeg", "png", "webp")
+    if (mimeType.startsWith("image/")) return mimeType in setOf("image/jpeg", "image/png", "image/webp")
+    if (extension in supportedImages) return true
     if (mimeType.startsWith("text/") || mimeType.startsWith("audio/") || mimeType.startsWith("video/")) return true
     if (mimeType in setOf(
             "application/pdf", "application/msword", "application/rtf", "application/json",

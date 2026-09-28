@@ -25,6 +25,23 @@ import java.util.concurrent.TimeUnit
 data class SaraRequest(val message: String)
 
 @Serializable
+data class SaraGroqImage(val mimeType: String, val data: String)
+
+@Serializable
+data class SaraGroqVisionRequest(val prompt: String, val images: List<SaraGroqImage>)
+
+@Serializable
+data class SaraGroqAudioRequest(
+    val audioData: String,
+    val mimeType: String,
+    val fileName: String,
+    val mode: String
+)
+
+@Serializable
+data class SaraGroqResponse(val text: String)
+
+@Serializable
 data class SaraReply(
     val text: String? = null,
     @SerialName("recipient_id") val recipientId: String? = null,
@@ -62,6 +79,18 @@ interface SaraApi {
         @Header("Authorization") authorization: String,
         @Body request: SaraRequest
     ): List<SaraReply>
+
+    @POST("api/rasa/groq/vision")
+    suspend fun analyzeGroqImages(
+        @Header("Authorization") authorization: String,
+        @Body request: SaraGroqVisionRequest
+    ): SaraGroqResponse
+
+    @POST("api/rasa/groq/audio")
+    suspend fun transcribeGroqAudio(
+        @Header("Authorization") authorization: String,
+        @Body request: SaraGroqAudioRequest
+    ): SaraGroqResponse
 
     @GET("api/rasa/version")
     suspend fun getVersion(@Header("Authorization") authorization: String): JsonObject
