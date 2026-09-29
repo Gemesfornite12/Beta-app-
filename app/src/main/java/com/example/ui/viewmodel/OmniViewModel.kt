@@ -51,11 +51,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import android.widget.Toast
 import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.translate.DownloadConditions
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -505,6 +511,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _isAiLoading.value = true
+            var responseLanguageCode = TranslateLanguage.SPANISH
             try {
                 val idToken = firebaseUser.getIdToken(false).await().token
                 if (idToken.isNullOrBlank()) {
@@ -513,17 +520,35 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val api = com.example.data.api.SaraRetrofitClient.service
                 val authorization = "Bearer $idToken"
-                val replies = api.sendMessage(
-                    authorization = authorization,
-                    request = com.example.data.api.SaraRequest(message = userText)
-                )
+
+                val detectedLanguage = runCatching { detectSaraLanguageCode(userText) }.getOrNull()
+                    ?: TranslateLanguage.fromLanguageTag(Locale.getDefault().toLanguageTag())
+                responseLanguageCode = detectedLanguage ?: TranslateLanguage.SPANISH
+                val messageForRasa = when {
+                    detectedLanguage == null -> null
+                    detectedLanguage == TranslateLanguage.SPANISH -> userText
+                    else -> runCatching {
+                        translateSaraText(userText, detectedLanguage, TranslateLanguage.SPANISH)
+                    }.getOrNull()
+                }
+
+                // Rasa is trained in Spanish. Translate locally when supported; use the existing
+                // multilingual Felo fallback if the language/model is unavailable.
+                val replies = if (messageForRasa != null) {
+                    api.sendMessage(
+                        authorization = authorization,
+                        request = com.example.data.api.SaraRequest(message = messageForRasa)
+                    )
+                } else {
+                    emptyList()
+                }
                 val rasaAnswer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
                     .joinToString("\n")
                     .ifBlank { "El asistente no devolvió una respuesta de texto. Inténtalo de nuevo." }
-                val shouldUseFeloFallback = replies.any {
+                val shouldUseFeloFallback = messageForRasa == null || replies.any {
                     it.custom?.get("sara_fallback")?.jsonPrimitive?.contentOrNull == "true"
                 }
-                val answer = if (shouldUseFeloFallback) {
+                val feloAnswer = if (shouldUseFeloFallback) {
                     runCatching {
                         val llmResponse = api.askSaraWithFeloContext(
                             authorization,
@@ -534,7 +559,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 put("messages", buildJsonArray {
                                     add(buildJsonObject {
                                         put("role", "system")
-                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, userText)
+                                        val knowledgeQuery = messageForRasa ?: userText
+                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, knowledgeQuery)
                                         val basePrompt = "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
                                         put(
                                             "content",
@@ -553,9 +579,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         val assistantMessage = firstChoice?.get("message") as? JsonObject
                         assistantMessage?.get("content")?.jsonPrimitive?.contentOrNull?.trim()
                             ?.takeIf(String::isNotEmpty)
-                    }.getOrNull() ?: rasaAnswer
+                    }.getOrNull()
                 } else {
-                    rasaAnswer
+                    null
+                }
+                val assistantAnswer = feloAnswer ?: rasaAnswer
+                val answer = if (feloAnswer == null && responseLanguageCode != TranslateLanguage.SPANISH) {
+                    runCatching {
+                        translateSaraText(assistantAnswer, TranslateLanguage.SPANISH, responseLanguageCode)
+                    }.getOrDefault(assistantAnswer)
+                } else {
+                    assistantAnswer
                 }
                 rtdbService.saveSaraChatMessage(uid, "assistant", answer)
             } catch (e: retrofit2.HttpException) {
@@ -563,12 +597,46 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
                     else -> "Sara no está disponible ahora. Inténtalo de nuevo en unos momentos."
                 }
-                rtdbService.saveSaraChatMessage(uid, "assistant", explanation)
+                val localized = if (responseLanguageCode == TranslateLanguage.SPANISH) explanation else
+                    runCatching { translateSaraText(explanation, TranslateLanguage.SPANISH, responseLanguageCode) }.getOrDefault(explanation)
+                rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } catch (e: Exception) {
-                rtdbService.saveSaraChatMessage(uid, "assistant", "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo.")
+                val explanation = "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo."
+                val localized = if (responseLanguageCode == TranslateLanguage.SPANISH) explanation else
+                    runCatching { translateSaraText(explanation, TranslateLanguage.SPANISH, responseLanguageCode) }.getOrDefault(explanation)
+                rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } finally {
                 _isAiLoading.value = false
             }
+        }
+    }
+
+    private suspend fun detectSaraLanguageCode(text: String): String? {
+        val identifier = LanguageIdentification.getClient()
+        val detectedTag = try {
+            identifier.identifyLanguage(text).await()
+        } finally {
+            identifier.close()
+        }
+        val selectedTag = if (detectedTag == "und") Locale.getDefault().toLanguageTag() else detectedTag
+        return TranslateLanguage.fromLanguageTag(selectedTag)
+    }
+
+    private suspend fun translateSaraText(text: String, sourceLanguage: String, targetLanguage: String): String {
+        if (text.isBlank() || sourceLanguage == targetLanguage) return text
+        val translator = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(sourceLanguage)
+                .setTargetLanguage(targetLanguage)
+                .build()
+        )
+        return try {
+            translator.downloadModelIfNeeded(
+                DownloadConditions.Builder().build()
+            ).await()
+            translator.translate(text).await()
+        } finally {
+            translator.close()
         }
     }
 
@@ -583,12 +651,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
             }
         }.getOrNull()?.takeIf(String::isNotBlank) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "archivo_adjunto"
+        val defaultReplyLanguage = Locale.getDefault().getDisplayLanguage(Locale.forLanguageTag("es"))
+            .ifBlank { "español" }
         val defaultPrompt = if (groqAudioMimeType(attachmentMimeType, displayName) != null) {
             "Transcribe este audio."
         } else if (attachmentMimeType.startsWith("image/")) {
-            "Describe la imagen y extrae el texto visible con claridad."
+            "Describe la imagen, extrae el texto visible con claridad y responde en $defaultReplyLanguage."
         } else {
-            "Resume este archivo y responde según su contenido."
+            "Resume este archivo y responde en $defaultReplyLanguage."
         }
         val safePrompt = prompt.trim().ifBlank { defaultPrompt }
         val userMessage = ChatMessage(
@@ -636,7 +706,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     val response = api.analyzeGroqImages(
                         requestAuthorization,
                         com.example.data.api.SaraGroqVisionRequest(
-                            prompt = safePrompt.take(1200),
+                            prompt = "${safePrompt.take(900)}\n\nResponde en el idioma de esta solicitud; si se indica otro idioma de destino, respétalo.".take(1200),
                             images = listOf(
                                 com.example.data.api.SaraGroqImage(
                                     mimeType = imageMimeType,
@@ -741,7 +811,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         put("messages", buildJsonArray {
                             add(buildJsonObject {
                                 put("role", "system")
-                                put("content", "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Responde en español, de forma clara y breve. Usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
+                                put("content", "Eres el Asistente de OmniStudio. Responde en el idioma de la solicitud del usuario; si solicita explícitamente un idioma de destino, responde en ese idioma. Si no se puede identificar el idioma, usa español. Sé claro y breve, y usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
                             })
                             add(buildJsonObject {
                                 put("role", "user")

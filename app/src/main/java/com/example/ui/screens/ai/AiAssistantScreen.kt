@@ -268,7 +268,7 @@ private fun SaraChatView(
     val startSpeechRecognition: () -> Unit = {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale("es", "CR").toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Dicta un mensaje para Sara")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
@@ -421,6 +421,11 @@ private fun SaraChatView(
             }
         }
 
+        Text(
+            "Sara detecta el idioma de cada mensaje y responde en ese idioma. La primera traducción puede descargar un modelo al dispositivo.",
+            color = Color(0xFF64748B), fontSize = 10.sp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+        )
         Text(
             "Imágenes JPEG/PNG/WebP (≤3 MB) y transcripción/traducción al español de audio (≤6 MB) van a Groq. Otros audios, documentos y videos compatibles (≤10 MB) usan Felo temporalmente.",
             color = Color(0xFF64748B), fontSize = 10.sp,
