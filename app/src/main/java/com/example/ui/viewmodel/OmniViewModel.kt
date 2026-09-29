@@ -661,14 +661,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val defaultReplyLanguage = Locale.forLanguageTag(attachmentLanguageTag)
             .getDisplayLanguage(Locale.forLanguageTag("es"))
             .ifBlank { "español" }
-        val defaultPrompt = if (groqAudioMimeType(attachmentMimeType, displayName) != null) {
-            "Transcribe este audio."
-        } else if (attachmentMimeType.startsWith("image/")) {
-            "Describe la imagen, extrae el texto visible con claridad y responde en $defaultReplyLanguage."
-        } else {
-            "Resume este archivo y responde en $defaultReplyLanguage."
-        }
-        val safePrompt = prompt.trim().ifBlank { defaultPrompt }
+        val attachmentExtension = displayName.substringAfterLast('.', "").lowercase()
+        val isImageAttachment = attachmentMimeType.startsWith("image/") ||
+            attachmentExtension in setOf("jpg", "jpeg", "png", "webp")
+        val isAudioAttachment = groqAudioMimeType(attachmentMimeType, displayName) != null
+        val safePrompt = resolveSaraAttachmentPrompt(
+            prompt = prompt,
+            isAudio = isAudioAttachment,
+            isImage = isImageAttachment,
+            defaultReplyLanguage = defaultReplyLanguage
+        )
         val userMessage = ChatMessage(
             channelId = "ai_assistant",
             senderEmail = currentAuthUser?.email ?: "",
@@ -730,14 +732,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val audioMimeType = groqAudioMimeType(mimeType, cleanFileName)
-                val asksForTranslation = safePrompt.contains("traduc", ignoreCase = true) ||
-                    safePrompt.contains("translat", ignoreCase = true)
-                val asksForSpanish = Regex(
-                    "\\b(?:español|espanol|castellano|spanish|castilian)\\b",
-                    RegexOption.IGNORE_CASE
-                ).containsMatchIn(safePrompt)
+                val audioMode = groqAudioMode(mimeType, cleanFileName, safePrompt)
                 // The Groq audio endpoint only translates into Spanish. Send other language requests through Felo.
-                if (audioMimeType != null && (!asksForTranslation || asksForSpanish)) {
+                if (audioMimeType != null && audioMode != null) {
                     if (fileBytes.size > 6 * 1024 * 1024) {
                         throw IllegalArgumentException("El audio supera el límite de 6 MB para el procesamiento.")
                     }
@@ -747,7 +744,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             audioData = Base64.encodeToString(fileBytes, Base64.NO_WRAP),
                             mimeType = audioMimeType,
                             fileName = cleanFileName,
-                            mode = if (asksForTranslation && asksForSpanish) "translate_es" else "transcribe"
+                            mode = audioMode
                         )
                     )
                     _aiChatHistory.value = _aiChatHistory.value + saraMessage(
@@ -862,25 +859,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     runCatching { api.deleteSaraLiveDoc(auth, reference) }
                 }
                 _isAiLoading.value = false
-            }
-        }
-    }
-
-    private fun groqAudioMimeType(mimeType: String, fileName: String): String? {
-        if (mimeType.startsWith("video/")) return null
-        val extension = fileName.substringAfterLast('.', "").lowercase()
-        return when (mimeType) {
-            "audio/mpeg", "audio/wav", "audio/mp4", "audio/webm", "audio/ogg", "audio/flac" -> mimeType
-            "audio/mp3" -> "audio/mpeg"
-            "audio/x-wav" -> "audio/wav"
-            "audio/m4a" -> "audio/mp4"
-            else -> when (extension) {
-                "mp3" -> "audio/mpeg"
-                "wav" -> "audio/wav"
-                "m4a" -> "audio/mp4"
-                "ogg" -> "audio/ogg"
-                "flac" -> "audio/flac"
-                else -> null
             }
         }
     }

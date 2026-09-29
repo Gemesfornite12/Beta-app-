@@ -471,7 +471,7 @@ private fun SaraChatView(
                     val message = draft.trim()
                     val uri = attachmentUri
                     if (uri != null && !isLoading) {
-                        onSendAttachment(uri, message.ifBlank { "Resume este archivo y responde según su contenido." })
+                        onSendAttachment(uri, message)
                         attachmentUri = null
                         attachmentName = null
                         draft = ""
