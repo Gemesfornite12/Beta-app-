@@ -142,6 +142,10 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.ui.draw.scale
+import com.example.data.translation.MessageTranslationState
+import com.example.data.translation.TranslationSettings
+import com.example.data.translation.SupportedLanguage
 import com.example.data.model.AudioProject
 import com.example.data.model.ChatMessage
 import com.example.data.model.DocumentItem
@@ -225,6 +229,13 @@ fun ChatScreen(
     var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
+
+    // Estado del Sistema Multilingüe de Traducción Automática On-Device
+    val translationStates by viewModel.translationStates.collectAsState()
+    val translationSettings by viewModel.translationSettings.collectAsState()
+    val supportedLanguages = viewModel.supportedLanguages
+    var showLanguagePickerDialog by remember { mutableStateOf(false) }
+    var showOutgoingLangMenu by remember { mutableStateOf(false) }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
@@ -1008,6 +1019,114 @@ fun ChatScreen(
                             )
                         }
                     }
+
+                    // Franja Multilingüe: Detección y Traducción Automática On-Device (Google ML Kit)
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0B1120))
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF1E293B).copy(alpha = 0.95f),
+                        border = BorderStroke(1.dp, Color(0xFF334155))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "🌐",
+                                    fontSize = 15.sp,
+                                    modifier = Modifier.padding(end = 6.dp)
+                                )
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Auto-Traducción",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFF10B981).copy(alpha = 0.2f)
+                                        ) {
+                                            Text(
+                                                text = "ML Kit Offline",
+                                                color = Color(0xFF34D399),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (translationSettings.isAutoTranslateEnabled)
+                                            "Detección y traducción por mensaje activa"
+                                        else "Traducción automática en pausa",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // Selector de Idioma Destino
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF334155),
+                                    border = BorderStroke(1.dp, Color(0xFF475569)),
+                                    modifier = Modifier
+                                        .clickable { showLanguagePickerDialog = true }
+                                        .testTag("btn_select_target_language")
+                                ) {
+                                    val currentTargetLang = supportedLanguages.firstOrNull { it.code == translationSettings.targetLanguageCode }
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${currentTargetLang?.flagEmoji ?: "🌐"} ${currentTargetLang?.code?.uppercase() ?: "ES"}",
+                                            color = Color(0xFFE2E8F0),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "Cambiar idioma de traducción",
+                                            tint = Color(0xFF94A3B8),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // Switch de Activar/Desactivar Auto-Traducción
+                                Switch(
+                                    checked = translationSettings.isAutoTranslateEnabled,
+                                    onCheckedChange = { viewModel.setAutoTranslateEnabled(it) },
+                                    modifier = Modifier
+                                        .scale(0.75f)
+                                        .testTag("switch_auto_translate"),
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = Color(0xFF4F46E5),
+                                        uncheckedThumbColor = Color(0xFF94A3B8),
+                                        uncheckedTrackColor = Color(0xFF334155)
+                                    )
+                                )
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -1338,6 +1457,64 @@ fun ChatScreen(
                         maxLines = 3
                     )
 
+                    // Botón para traducir el borrador antes de enviarlo
+                    if (chatInput.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Box {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF6366F1).copy(alpha = 0.25f),
+                                border = BorderStroke(1.dp, Color(0xFF818CF8).copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .clickable { showOutgoingLangMenu = true }
+                                    .testTag("btn_translate_draft")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "🌐",
+                                        fontSize = 17.sp
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showOutgoingLangMenu,
+                                onDismissRequest = { showOutgoingLangMenu = false },
+                                modifier = Modifier.background(Color(0xFF1E293B))
+                            ) {
+                                Text(
+                                    text = "Traducir borrador a:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFA5B4FC),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                                HorizontalDivider(color = Color(0xFF334155))
+                                supportedLanguages.forEach { lang ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(text = lang.flagEmoji, fontSize = 14.sp)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "${lang.displayName} (${lang.nativeName})",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOutgoingLangMenu = false
+                                            viewModel.translateOutgoingDraft(lang.code)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.width(6.dp))
 
                     val hasAnyInput = chatInput.isNotBlank() || pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null
@@ -1464,12 +1641,18 @@ fun ChatScreen(
                         (msg.attachedAudioTitle?.contains(searchKeyword, ignoreCase = true) == true)
                     )
 
+                    val msgKey = msg.firestoreId.ifBlank { msg.id.toString() }
+                    val msgTranslationState = translationStates[msgKey]
+
                     MessageBubble(
                         message = msg,
                         isMe = isMe,
                         isPlayingAudio = playingAudioId != null && playingAudioId == msg.attachedAudioId,
                         isSearchMatch = isMatch,
                         searchKeyword = searchKeyword,
+                        translationState = msgTranslationState,
+                        onToggleShowOriginal = { viewModel.toggleShowOriginalMessage(msgKey) },
+                        onRetryTranslation = { viewModel.retryOrTranslateMessage(msgKey, msg.text, force = true) },
                         onTogglePlayAudio = { audioId -> viewModel.togglePlayChatAudio(audioId) },
                         onReact = { emoji -> viewModel.toggleReactionOnMessage(msg, emoji) },
                         onOpenReactionMenu = { messageForReactionMenu = msg },
@@ -1538,6 +1721,10 @@ fun ChatScreen(
             },
             onDelete = {
                 messageToDelete = targetMsg
+            },
+            onTranslate = {
+                val targetKey = targetMsg.firestoreId.ifBlank { targetMsg.id.toString() }
+                viewModel.retryOrTranslateMessage(targetKey, targetMsg.text, force = true)
             }
         )
     }
@@ -1593,6 +1780,94 @@ fun ChatScreen(
                     Text("Cancelar")
                 }
             }
+        )
+    }
+
+    // Modal de Selección de Idioma Destino para Traducción Automática On-Device
+    if (showLanguagePickerDialog) {
+        AlertDialog(
+            onDismissRequest = { showLanguagePickerDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🌐 ", fontSize = 20.sp)
+                    Text("Idioma de Traducción", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "Selecciona el idioma al que se traducirán automáticamente los mensajes entrantes con Google ML Kit:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF94A3B8),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    supportedLanguages.forEach { lang ->
+                        val isSelected = lang.code == translationSettings.targetLanguageCode
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) Color(0xFF4F46E5).copy(alpha = 0.25f) else Color(0xFF1E293B),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) Color(0xFF818CF8) else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable {
+                                    viewModel.setChatTargetLanguage(lang.code)
+                                    showLanguagePickerDialog = false
+                                }
+                                .testTag("lang_option_${lang.code}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(text = lang.flagEmoji, fontSize = 20.sp)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = lang.displayName,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = Color.White,
+                                            fontSize = 14.sp
+                                        )
+                                        Text(
+                                            text = lang.nativeName,
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Seleccionado",
+                                        tint = Color(0xFF38BDF8),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLanguagePickerDialog = false }) {
+                    Text("Cerrar", color = Color(0xFF818CF8), fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = Color(0xFF0F172A),
+            tonalElevation = 6.dp
         )
     }
 
@@ -1978,6 +2253,9 @@ private fun MessageBubble(
     isPlayingAudio: Boolean,
     isSearchMatch: Boolean = false,
     searchKeyword: String = "",
+    translationState: MessageTranslationState? = null,
+    onToggleShowOriginal: () -> Unit = {},
+    onRetryTranslation: () -> Unit = {},
     onTogglePlayAudio: (Long) -> Unit,
     onReact: (String) -> Unit,
     onOpenReactionMenu: () -> Unit = {},
@@ -2162,12 +2440,97 @@ private fun MessageBubble(
                     )
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
+                    // Badge de Idioma Detectado & Estado de Traducción On-Device
+                    val detectedLangCode = translationState?.detectedLanguageCode
+                    val hasTranslation = !translationState?.translatedText.isNullOrBlank()
+                    val isTranslating = translationState?.isTranslating == true
+                    val isDownloading = translationState?.isDownloadingModel == true
+                    val isDifferentLang = detectedLangCode != null && detectedLangCode != "und" &&
+                            !detectedLangCode.equals(translationState.targetLanguageCode, ignoreCase = true)
+
+                    if (isDifferentLang) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF6366F1).copy(alpha = 0.25f),
+                            border = BorderStroke(1.dp, Color(0xFF818CF8).copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .padding(bottom = 6.dp)
+                                .clickable { onToggleShowOriginal() }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "🌐 ${translationState.detectedLanguageName ?: detectedLangCode.uppercase()} ➔ ${translationState.targetLanguageCode.uppercase()}",
+                                    color = Color(0xFFA5B4FC),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (hasTranslation) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (translationState.showOriginal) "• [Ver traducido]" else "• [Ver original]",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Texto principal del mensaje (traducido u original)
+                    val displayText = when {
+                        translationState != null && hasTranslation && !translationState.showOriginal -> translationState.translatedText!!
+                        else -> message.text
+                    }
+
                     Text(
-                        text = message.text,
+                        text = displayText,
                         color = Color.White,
                         fontSize = 14.sp,
                         lineHeight = 20.sp
                     )
+
+                    // Indicador de descarga de modelo offline o traducción en progreso
+                    if (isDownloading) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "⬇️ Descargando modelo offline de traducción ML Kit...",
+                            fontSize = 10.sp,
+                            color = Color(0xFF38BDF8),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                    } else if (isTranslating) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "⚡ Traduciendo en el dispositivo...",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                    } else if (translationState?.errorMessage != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { onRetryTranslation() }
+                        ) {
+                            Text(
+                                text = "⚠️ ${translationState.errorMessage} • Toca para reintentar",
+                                fontSize = 10.sp,
+                                color = Color(0xFFFCA5A5)
+                            )
+                        }
+                    } else if (hasTranslation && !translationState.showOriginal && isDifferentLang) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "✨ Traducido automáticamente del ${translationState.detectedLanguageName?.lowercase() ?: "otro idioma"}",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8).copy(alpha = 0.8f),
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                    }
 
                     // Tarjeta de Documento adjunto
                     if (message.attachedDocId != null) {

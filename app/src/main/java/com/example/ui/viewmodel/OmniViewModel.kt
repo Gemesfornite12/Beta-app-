@@ -23,6 +23,10 @@ import com.example.data.firebase.SaraKnowledgeFirebaseStore
 import com.example.data.local.AppDatabase
 import com.example.data.local.SaraKnowledgeEntry
 import com.example.data.supabase.SupabaseMediaStorageService
+import com.example.data.translation.MultilingualTranslationManager
+import com.example.data.translation.MessageTranslationState
+import com.example.data.translation.TranslationSettings
+import com.example.data.translation.SupportedLanguage
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
 import com.example.data.model.CallStatus
@@ -970,6 +974,56 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private var chatAudioJob: Job? = null
     private var typingDebounceJob: Job? = null
 
+    // On-device Automatic Multilingual Translation (Google ML Kit)
+    val translationManager = MultilingualTranslationManager(application)
+    val translationStates: StateFlow<Map<String, MessageTranslationState>> = translationManager.translationStates
+    val translationSettings: StateFlow<TranslationSettings> = translationManager.settings
+    val supportedLanguages: List<SupportedLanguage> = translationManager.supportedLanguages
+
+    fun setAutoTranslateEnabled(enabled: Boolean) {
+        translationManager.setAutoTranslateEnabled(enabled)
+        if (enabled) {
+            triggerAutoTranslation()
+        }
+    }
+
+    fun setChatTargetLanguage(langCode: String) {
+        translationManager.setTargetLanguage(langCode)
+        triggerAutoTranslation(force = true)
+    }
+
+    fun toggleShowOriginalMessage(messageId: String) {
+        translationManager.toggleShowOriginal(messageId)
+    }
+
+    fun retryOrTranslateMessage(messageId: String, text: String, force: Boolean = true) {
+        translationManager.processMessage(messageId, text, force)
+    }
+
+    fun translateOutgoingDraft(targetLangCode: String, onComplete: ((String) -> Unit)? = null) {
+        val currentText = _chatInputText.value
+        if (currentText.isBlank()) return
+        viewModelScope.launch {
+            val result = translationManager.translateDirect(currentText, targetLangCode)
+            result.onSuccess { translated ->
+                _chatInputText.value = translated
+                onComplete?.invoke(translated)
+            }
+        }
+    }
+
+    fun triggerAutoTranslation(force: Boolean = false) {
+        val msgs = _chatMessages.value
+        if (translationManager.settings.value.isAutoTranslateEnabled) {
+            msgs.forEach { msg ->
+                if (msg.text.isNotBlank()) {
+                    val key = if (msg.firestoreId.isNotBlank()) msg.firestoreId else msg.id.toString()
+                    translationManager.processMessage(key, msg.text, force)
+                }
+            }
+        }
+    }
+
     // Format Converter Sheet State
     private val _converterDoc = MutableStateFlow<DocumentItem?>(null)
     val converterDoc: StateFlow<DocumentItem?> = _converterDoc.asStateFlow()
@@ -1180,6 +1234,20 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 syncUserFromFirebaseAuth(currentUser.email, currentUser.displayName, currentUser.photoUrl?.toString())
             }
             initDefaultSequencerTracks()
+        }
+
+        // Procesamiento automático de mensajes para traducción multilingüe on-device con ML Kit
+        viewModelScope.launch {
+            _chatMessages.collect { msgs ->
+                if (translationManager.settings.value.isAutoTranslateEnabled) {
+                    msgs.forEach { msg ->
+                        if (msg.text.isNotBlank()) {
+                            val key = if (msg.firestoreId.isNotBlank()) msg.firestoreId else msg.id.toString()
+                            translationManager.processMessage(key, msg.text)
+                        }
+                    }
+                }
+            }
         }
 
         // Escuchar canales y grupos personalizados creados y guardados en RTDB
@@ -4127,6 +4195,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        translationManager.close()
         stopSequencer()
         channelMessagesJob?.cancel()
         typingJob?.cancel()

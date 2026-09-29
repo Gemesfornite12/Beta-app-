@@ -103,7 +103,8 @@ fun MessageReactionMenuDialog(
     onCopyText: () -> Unit,
     onReply: () -> Unit,
     onShowDeliveryStatus: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTranslate: (() -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
     var showAllEmojis by remember { mutableStateOf(false) }
@@ -446,6 +447,20 @@ fun MessageReactionMenuDialog(
                                 onDismiss()
                             }
                         )
+
+                        // 4. Traducir mensaje en el dispositivo
+                        if (message.text.isNotBlank() && onTranslate != null) {
+                            ContextMenuItem(
+                                icon = Icons.Default.SentimentSatisfiedAlt, // Or standard icon
+                                title = "Traducir mensaje (ML Kit)",
+                                subtitle = "Detección y traducción on-device instantánea",
+                                tint = Color(0xFFA855F7),
+                                onClick = {
+                                    onTranslate()
+                                    onDismiss()
+                                }
+                            )
+                        }
 
                         // 4. Eliminar mensaje (si soy el remitente)
                         if (isMe) {
