@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -50,11 +51,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import android.widget.Toast
 import com.example.data.local.DeviceDownloadManager
 import com.google.firebase.auth.FirebaseAuth
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.translate.DownloadConditions
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -312,6 +319,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // --- Sara assistant chat state: Rasa with on-demand Felo skills ---
     private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
+    private var lastSaraDetectedLanguageTag: String? = null
 
     private var saraChatHistoryJob: Job? = null
 
@@ -504,6 +512,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _isAiLoading.value = true
+            var responseLanguageCode: String? = TranslateLanguage.SPANISH
             try {
                 val idToken = firebaseUser.getIdToken(false).await().token
                 if (idToken.isNullOrBlank()) {
@@ -512,17 +521,38 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val api = com.example.data.api.SaraRetrofitClient.service
                 val authorization = "Bearer $idToken"
-                val replies = api.sendMessage(
-                    authorization = authorization,
-                    request = com.example.data.api.SaraRequest(message = userText)
-                )
+
+                val detectedLanguageTag = runCatching { detectSaraLanguageTag(userText) }.getOrNull()
+                if (detectedLanguageTag != null) lastSaraDetectedLanguageTag = detectedLanguageTag
+                val detectedLanguage = detectedLanguageTag?.let { TranslateLanguage.fromLanguageTag(it) }
+                // Unknown or locally unsupported languages go to Felo with the original message;
+                // never reinterpret them as the phone's locale.
+                responseLanguageCode = detectedLanguage
+                val messageForRasa = when {
+                    detectedLanguage == null -> null
+                    detectedLanguage == TranslateLanguage.SPANISH -> userText
+                    else -> runCatching {
+                        translateSaraText(userText, detectedLanguage, TranslateLanguage.SPANISH)
+                    }.getOrNull()
+                }
+
+                // Rasa is trained in Spanish. Translate locally when supported; use the existing
+                // multilingual Felo fallback if the language/model is unavailable.
+                val replies = if (messageForRasa != null) {
+                    api.sendMessage(
+                        authorization = authorization,
+                        request = com.example.data.api.SaraRequest(message = messageForRasa)
+                    )
+                } else {
+                    emptyList()
+                }
                 val rasaAnswer = replies.mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }
                     .joinToString("\n")
                     .ifBlank { "El asistente no devolvió una respuesta de texto. Inténtalo de nuevo." }
-                val shouldUseFeloFallback = replies.any {
+                val shouldUseFeloFallback = messageForRasa == null || replies.any {
                     it.custom?.get("sara_fallback")?.jsonPrimitive?.contentOrNull == "true"
                 }
-                val answer = if (shouldUseFeloFallback) {
+                val feloAnswer = if (shouldUseFeloFallback) {
                     runCatching {
                         val llmResponse = api.askSaraWithFeloContext(
                             authorization,
@@ -533,7 +563,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 put("messages", buildJsonArray {
                                     add(buildJsonObject {
                                         put("role", "system")
-                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, userText)
+                                        val knowledgeQuery = messageForRasa ?: userText
+                                        val savedKnowledge = saraKnowledgeStore.relevantContext(firebaseUser.uid, knowledgeQuery)
                                         val basePrompt = "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Detecta automáticamente el idioma del mensaje y responde en ese mismo idioma, con claridad y brevedad. No afirmes haber ejecutado acciones, accedido a cuentas, buscado en internet ni usado herramientas. Si te piden una acción que no está disponible en esta conversación, explícalo con honestidad. No inventes datos ni ejecutes acciones. La aplicación solo guarda notas personales después de que el usuario confirme; nunca digas que algo quedó guardado antes de esa confirmación."
                                         put(
                                             "content",
@@ -552,9 +583,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         val assistantMessage = firstChoice?.get("message") as? JsonObject
                         assistantMessage?.get("content")?.jsonPrimitive?.contentOrNull?.trim()
                             ?.takeIf(String::isNotEmpty)
-                    }.getOrNull() ?: rasaAnswer
+                    }.getOrNull()
                 } else {
-                    rasaAnswer
+                    null
+                }
+                val assistantAnswer = feloAnswer ?: rasaAnswer
+                val answer = if (feloAnswer == null) {
+                    localizeSaraTextOrFallback(assistantAnswer, responseLanguageCode)
+                } else {
+                    assistantAnswer
                 }
                 rtdbService.saveSaraChatMessage(uid, "assistant", answer)
             } catch (e: retrofit2.HttpException) {
@@ -562,12 +599,50 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
                     else -> "Sara no está disponible ahora. Inténtalo de nuevo en unos momentos."
                 }
-                rtdbService.saveSaraChatMessage(uid, "assistant", explanation)
+                val localized = localizeSaraTextOrFallback(explanation, responseLanguageCode)
+                rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } catch (e: Exception) {
-                rtdbService.saveSaraChatMessage(uid, "assistant", "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo.")
+                val explanation = "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo."
+                val localized = localizeSaraTextOrFallback(explanation, responseLanguageCode)
+                rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } finally {
                 _isAiLoading.value = false
             }
+        }
+    }
+
+    private suspend fun detectSaraLanguageTag(text: String): String? {
+        val identifier = LanguageIdentification.getClient()
+        val detectedTag = try {
+            identifier.identifyLanguage(text).await()
+        } finally {
+            identifier.close()
+        }
+        return detectedTag.takeUnless { it == "und" }
+    }
+
+    private suspend fun localizeSaraTextOrFallback(text: String, languageCode: String?): String {
+        if (languageCode.isNullOrBlank() || languageCode == TranslateLanguage.SPANISH) return text
+        return runCatching {
+            translateSaraText(text, TranslateLanguage.SPANISH, languageCode)
+        }.getOrDefault(text)
+    }
+
+    private suspend fun translateSaraText(text: String, sourceLanguage: String, targetLanguage: String): String {
+        if (text.isBlank() || sourceLanguage == targetLanguage) return text
+        val translator = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(sourceLanguage)
+                .setTargetLanguage(targetLanguage)
+                .build()
+        )
+        return try {
+            translator.downloadModelIfNeeded(
+                DownloadConditions.Builder().build()
+            ).await()
+            translator.translate(text).await()
+        } finally {
+            translator.close()
         }
     }
 
@@ -575,13 +650,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         if (_isAiLoading.value) return
         val appContext = getApplication<Application>()
         val currentAuthUser = FirebaseAuth.getInstance().currentUser
-        val safePrompt = prompt.trim().ifBlank { "Resume este archivo y responde según su contenido." }
+        val attachmentMimeType = appContext.contentResolver.getType(uri)?.lowercase()?.substringBefore(';').orEmpty()
         val displayName = runCatching {
             appContext.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
             }
         }.getOrNull()?.takeIf(String::isNotBlank) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "archivo_adjunto"
+        val attachmentLanguageTag = lastSaraDetectedLanguageTag ?: Locale.getDefault().toLanguageTag()
+        val defaultReplyLanguage = Locale.forLanguageTag(attachmentLanguageTag)
+            .getDisplayLanguage(Locale.forLanguageTag("es"))
+            .ifBlank { "español" }
+        val defaultPrompt = if (groqAudioMimeType(attachmentMimeType, displayName) != null) {
+            "Transcribe este audio."
+        } else if (attachmentMimeType.startsWith("image/")) {
+            "Describe la imagen, extrae el texto visible con claridad y responde en $defaultReplyLanguage."
+        } else {
+            "Resume este archivo y responde en $defaultReplyLanguage."
+        }
+        val safePrompt = prompt.trim().ifBlank { defaultPrompt }
         val userMessage = ChatMessage(
             channelId = "ai_assistant",
             senderEmail = currentAuthUser?.email ?: "",
@@ -606,11 +693,69 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
                 val resolver = appContext.contentResolver
                 val mimeType = resolver.getType(uri)?.lowercase()?.substringBefore(';') ?: "application/octet-stream"
-                if (mimeType.startsWith("image/")) {
-                    throw IllegalArgumentException("Sara no puede analizar imágenes todavía. Adjunta un documento, audio o video compatible.")
-                }
                 val fileBytes = withContext(Dispatchers.IO) { readSaraAttachment(uri, resolver) }
                 val cleanFileName = displayName.replace('\\', '_').replace('"', '_').replace("\r", "_").replace("\n", "_").take(180)
+
+                if (mimeType.startsWith("image/") || cleanFileName.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp")) {
+                    val imageExtension = cleanFileName.substringAfterLast('.', "").lowercase()
+                    val imageMimeType = when {
+                        mimeType in setOf("image/jpeg", "image/png", "image/webp") -> mimeType
+                        mimeType.startsWith("image/") -> throw IllegalArgumentException("Formato de imagen no compatible. Usa JPEG, PNG o WebP.")
+                        else -> when (imageExtension) {
+                            "jpg", "jpeg" -> "image/jpeg"
+                            "png" -> "image/png"
+                            "webp" -> "image/webp"
+                            else -> throw IllegalArgumentException("Formato de imagen no compatible. Usa JPEG, PNG o WebP.")
+                        }
+                    }
+                    if (fileBytes.size > 3 * 1024 * 1024) {
+                        throw IllegalArgumentException("La imagen supera el límite de 3 MB para el análisis.")
+                    }
+                    val response = api.analyzeGroqImages(
+                        requestAuthorization,
+                        com.example.data.api.SaraGroqVisionRequest(
+                            prompt = "${safePrompt.take(900)}\n\nResponde en el idioma de esta solicitud; si se indica otro idioma de destino, respétalo.".take(1200),
+                            images = listOf(
+                                com.example.data.api.SaraGroqImage(
+                                    mimeType = imageMimeType,
+                                    data = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
+                                )
+                            )
+                        )
+                    )
+                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                        response.text.trim().ifBlank { "No recibí una descripción utilizable de la imagen." }
+                    )
+                    return@launch
+                }
+
+                val audioMimeType = groqAudioMimeType(mimeType, cleanFileName)
+                val asksForTranslation = safePrompt.contains("traduc", ignoreCase = true) ||
+                    safePrompt.contains("translat", ignoreCase = true)
+                val asksForSpanish = Regex(
+                    "\\b(?:español|espanol|castellano|spanish|castilian)\\b",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(safePrompt)
+                // The Groq audio endpoint only translates into Spanish. Send other language requests through Felo.
+                if (audioMimeType != null && (!asksForTranslation || asksForSpanish)) {
+                    if (fileBytes.size > 6 * 1024 * 1024) {
+                        throw IllegalArgumentException("El audio supera el límite de 6 MB para el procesamiento.")
+                    }
+                    val response = api.transcribeGroqAudio(
+                        requestAuthorization,
+                        com.example.data.api.SaraGroqAudioRequest(
+                            audioData = Base64.encodeToString(fileBytes, Base64.NO_WRAP),
+                            mimeType = audioMimeType,
+                            fileName = cleanFileName,
+                            mode = if (asksForTranslation && asksForSpanish) "translate_es" else "transcribe"
+                        )
+                    )
+                    _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                        response.text.trim().ifBlank { "No recibí una transcripción utilizable del audio." }
+                    )
+                    return@launch
+                }
+
                 val requestMediaType = mimeType.toMediaTypeOrNull() ?: "application/octet-stream".toMediaTypeOrNull()
                 val filePart = MultipartBody.Part.createFormData(
                     "file",
@@ -674,7 +819,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         put("messages", buildJsonArray {
                             add(buildJsonObject {
                                 put("role", "system")
-                                put("content", "Eres el Asistente de OmniStudio (Rasa + Cloudflare + Groq AI + DuckDuckGo Search). Responde en español, de forma clara y breve. Usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
+                                put("content", "Eres el Asistente de OmniStudio. Responde en el idioma de la solicitud del usuario; si solicita explícitamente un idioma de destino, responde en ese idioma. Si no se puede identificar el idioma, usa español. Sé claro y breve, y usa solo la información del archivo extraída abajo; si no basta, dilo con honestidad.")
                             })
                             add(buildJsonObject {
                                 put("role", "user")
@@ -691,9 +836,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     .ifBlank { "Pude recibir el archivo, pero no obtuve una respuesta utilizable. Prueba con una pregunta más específica." }
                 _aiChatHistory.value = _aiChatHistory.value + saraMessage(answer)
             } catch (e: retrofit2.HttpException) {
-                val explanation = when (e.code()) {
-                    401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
-                    413 -> "El archivo supera el límite de 10 MB."
+                val gatewayError = runCatching {
+                    e.response()?.errorBody()?.string()?.let { body ->
+                        Json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull
+                    }
+                }.getOrNull()
+                val explanation = when {
+                    gatewayError == "groq_rate_limited" || e.code() == 429 -> "Se alcanzó el límite temporal de consultas a Groq. Inténtalo más tarde."
+                    gatewayError == "groq_auth_failed" -> "Groq rechazó la solicitud. El servidor registró el error sin guardar el contenido del archivo."
+                    gatewayError == "groq_not_configured" -> "El servicio de Groq no está configurado ahora."
+                    gatewayError == "unsupported_image_type" || gatewayError == "unsupported_audio_type" -> "Ese formato no es compatible. Prueba con JPEG, PNG, WebP, MP3, WAV, M4A, OGG o FLAC."
+                    gatewayError == "media_too_large" || e.code() == 413 -> "El archivo supera el límite permitido para este tipo de adjunto."
+                    e.code() == 401 || e.code() == 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
                     else -> "Sara no pudo procesar el archivo ahora. Inténtalo de nuevo en unos momentos."
                 }
                 _aiChatHistory.value = _aiChatHistory.value + saraMessage(explanation)
@@ -708,6 +862,25 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     runCatching { api.deleteSaraLiveDoc(auth, reference) }
                 }
                 _isAiLoading.value = false
+            }
+        }
+    }
+
+    private fun groqAudioMimeType(mimeType: String, fileName: String): String? {
+        if (mimeType.startsWith("video/")) return null
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        return when (mimeType) {
+            "audio/mpeg", "audio/wav", "audio/mp4", "audio/webm", "audio/ogg", "audio/flac" -> mimeType
+            "audio/mp3" -> "audio/mpeg"
+            "audio/x-wav" -> "audio/wav"
+            "audio/m4a" -> "audio/mp4"
+            else -> when (extension) {
+                "mp3" -> "audio/mpeg"
+                "wav" -> "audio/wav"
+                "m4a" -> "audio/mp4"
+                "ogg" -> "audio/ogg"
+                "flac" -> "audio/flac"
+                else -> null
             }
         }
     }
