@@ -319,6 +319,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // --- Sara assistant chat state: Rasa with on-demand Felo skills ---
     private val _aiChatHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val aiChatHistory: StateFlow<List<ChatMessage>> = _aiChatHistory.asStateFlow()
+    private var lastSaraDetectedLanguageTag: String? = null
 
     private var saraChatHistoryJob: Job? = null
 
@@ -511,7 +512,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _isAiLoading.value = true
-            var responseLanguageCode = TranslateLanguage.SPANISH
+            var responseLanguageCode: String? = TranslateLanguage.SPANISH
             try {
                 val idToken = firebaseUser.getIdToken(false).await().token
                 if (idToken.isNullOrBlank()) {
@@ -521,9 +522,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 val api = com.example.data.api.SaraRetrofitClient.service
                 val authorization = "Bearer $idToken"
 
-                val detectedLanguage = runCatching { detectSaraLanguageCode(userText) }.getOrNull()
-                    ?: TranslateLanguage.fromLanguageTag(Locale.getDefault().toLanguageTag())
-                responseLanguageCode = detectedLanguage ?: TranslateLanguage.SPANISH
+                val detectedLanguageTag = runCatching { detectSaraLanguageTag(userText) }.getOrNull()
+                if (detectedLanguageTag != null) lastSaraDetectedLanguageTag = detectedLanguageTag
+                val detectedLanguage = detectedLanguageTag?.let { TranslateLanguage.fromLanguageTag(it) }
+                // Unknown or locally unsupported languages go to Felo with the original message;
+                // never reinterpret them as the phone's locale.
+                responseLanguageCode = detectedLanguage
                 val messageForRasa = when {
                     detectedLanguage == null -> null
                     detectedLanguage == TranslateLanguage.SPANISH -> userText
@@ -584,10 +588,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 }
                 val assistantAnswer = feloAnswer ?: rasaAnswer
-                val answer = if (feloAnswer == null && responseLanguageCode != TranslateLanguage.SPANISH) {
-                    runCatching {
-                        translateSaraText(assistantAnswer, TranslateLanguage.SPANISH, responseLanguageCode)
-                    }.getOrDefault(assistantAnswer)
+                val answer = if (feloAnswer == null) {
+                    localizeSaraTextOrFallback(assistantAnswer, responseLanguageCode)
                 } else {
                     assistantAnswer
                 }
@@ -597,13 +599,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     401, 403 -> "Tu sesión no pudo validarse. Vuelve a iniciar sesión e inténtalo de nuevo."
                     else -> "Sara no está disponible ahora. Inténtalo de nuevo en unos momentos."
                 }
-                val localized = if (responseLanguageCode == TranslateLanguage.SPANISH) explanation else
-                    runCatching { translateSaraText(explanation, TranslateLanguage.SPANISH, responseLanguageCode) }.getOrDefault(explanation)
+                val localized = localizeSaraTextOrFallback(explanation, responseLanguageCode)
                 rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } catch (e: Exception) {
                 val explanation = "No se pudo conectar con Sara. Comprueba tu conexión e inténtalo de nuevo."
-                val localized = if (responseLanguageCode == TranslateLanguage.SPANISH) explanation else
-                    runCatching { translateSaraText(explanation, TranslateLanguage.SPANISH, responseLanguageCode) }.getOrDefault(explanation)
+                val localized = localizeSaraTextOrFallback(explanation, responseLanguageCode)
                 rtdbService.saveSaraChatMessage(uid, "assistant", localized)
             } finally {
                 _isAiLoading.value = false
@@ -611,15 +611,21 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun detectSaraLanguageCode(text: String): String? {
+    private suspend fun detectSaraLanguageTag(text: String): String? {
         val identifier = LanguageIdentification.getClient()
         val detectedTag = try {
             identifier.identifyLanguage(text).await()
         } finally {
             identifier.close()
         }
-        val selectedTag = if (detectedTag == "und") Locale.getDefault().toLanguageTag() else detectedTag
-        return TranslateLanguage.fromLanguageTag(selectedTag)
+        return detectedTag.takeUnless { it == "und" }
+    }
+
+    private suspend fun localizeSaraTextOrFallback(text: String, languageCode: String?): String {
+        if (languageCode.isNullOrBlank() || languageCode == TranslateLanguage.SPANISH) return text
+        return runCatching {
+            translateSaraText(text, TranslateLanguage.SPANISH, languageCode)
+        }.getOrDefault(text)
     }
 
     private suspend fun translateSaraText(text: String, sourceLanguage: String, targetLanguage: String): String {
@@ -651,7 +657,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
             }
         }.getOrNull()?.takeIf(String::isNotBlank) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "archivo_adjunto"
-        val defaultReplyLanguage = Locale.getDefault().getDisplayLanguage(Locale.forLanguageTag("es"))
+        val attachmentLanguageTag = lastSaraDetectedLanguageTag ?: Locale.getDefault().toLanguageTag()
+        val defaultReplyLanguage = Locale.forLanguageTag(attachmentLanguageTag)
+            .getDisplayLanguage(Locale.forLanguageTag("es"))
             .ifBlank { "español" }
         val defaultPrompt = if (groqAudioMimeType(attachmentMimeType, displayName) != null) {
             "Transcribe este audio."
