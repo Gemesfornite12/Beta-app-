@@ -21,7 +21,7 @@ class GroqWorkspaceConnectorTest {
             GroqWorkspaceConnectors.find("gmail")?.scope
         )
         assertEquals(
-            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar.events.readonly",
             GroqWorkspaceConnectors.find("calendar")?.scope
         )
         assertEquals(

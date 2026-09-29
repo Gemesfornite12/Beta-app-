@@ -26,7 +26,7 @@ object GroqWorkspaceConnectors {
             id = "calendar",
             label = "Google Calendar",
             description = "Consultar eventos del calendario",
-            scope = "https://www.googleapis.com/auth/calendar.events",
+            scope = "https://www.googleapis.com/auth/calendar.events.readonly",
             groqConnectorId = "connector_googlecalendar"
         ),
         GroqWorkspaceConnector(
