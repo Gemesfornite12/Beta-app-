@@ -119,9 +119,6 @@ dependencies {
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
   implementation(libs.kotlinx.serialization.json)
-  // Automatic per-message language detection and on-device translation.
-  implementation("com.google.mlkit:language-id:17.0.6")
-  implementation("com.google.mlkit:translate:17.0.3")
   // Replaced Google Maps with MapLibre + OpenStreetMap
   implementation(libs.maplibre.android)
   implementation(libs.kotlinx.coroutines.android)
