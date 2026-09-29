@@ -422,7 +422,7 @@ private fun SaraChatView(
         }
 
         Text(
-            "Imágenes JPEG/PNG/WebP (≤3 MB) y audio compatible (≤6 MB) se envían a Groq sin guardar el archivo. Documentos/video compatibles (≤10 MB) usan Felo temporalmente.",
+            "Imágenes JPEG/PNG/WebP (≤3 MB) y transcripción/traducción al español de audio (≤6 MB) van a Groq. Otros audios, documentos y videos compatibles (≤10 MB) usan Felo temporalmente.",
             color = Color(0xFF64748B), fontSize = 10.sp,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
         )

@@ -652,19 +652,24 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val audioMimeType = groqAudioMimeType(mimeType, cleanFileName)
-                if (audioMimeType != null) {
+                val asksForTranslation = safePrompt.contains("traduc", ignoreCase = true) ||
+                    safePrompt.contains("translat", ignoreCase = true)
+                val asksForSpanish = Regex(
+                    "\\b(?:español|espanol|castellano|spanish|castilian)\\b",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(safePrompt)
+                // The Groq audio endpoint only translates into Spanish. Send other language requests through Felo.
+                if (audioMimeType != null && (!asksForTranslation || asksForSpanish)) {
                     if (fileBytes.size > 6 * 1024 * 1024) {
                         throw IllegalArgumentException("El audio supera el límite de 6 MB para el procesamiento.")
                     }
-                    val wantsSpanishTranslation = safePrompt.contains("traduc", ignoreCase = true) ||
-                        safePrompt.contains("translate", ignoreCase = true)
                     val response = api.transcribeGroqAudio(
                         requestAuthorization,
                         com.example.data.api.SaraGroqAudioRequest(
                             audioData = Base64.encodeToString(fileBytes, Base64.NO_WRAP),
                             mimeType = audioMimeType,
                             fileName = cleanFileName,
-                            mode = if (wantsSpanishTranslation) "translate_es" else "transcribe"
+                            mode = if (asksForTranslation && asksForSpanish) "translate_es" else "transcribe"
                         )
                     )
                     _aiChatHistory.value = _aiChatHistory.value + saraMessage(
@@ -795,7 +800,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 "mp3" -> "audio/mpeg"
                 "wav" -> "audio/wav"
                 "m4a" -> "audio/mp4"
-                "webm" -> "audio/webm"
                 "ogg" -> "audio/ogg"
                 "flac" -> "audio/flac"
                 else -> null
