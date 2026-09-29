@@ -39,6 +39,12 @@ data class SaraGroqAudioRequest(
 )
 
 @Serializable
+data class SaraGroqWorkspaceRequest(
+    val text: String,
+    val connectors: Map<String, String>
+)
+
+@Serializable
 data class SaraGroqResponse(val text: String)
 
 @Serializable
@@ -90,6 +96,12 @@ interface SaraApi {
     suspend fun transcribeGroqAudio(
         @Header("Authorization") authorization: String,
         @Body request: SaraGroqAudioRequest
+    ): SaraGroqResponse
+
+    @POST("api/rasa/groq/workspace")
+    suspend fun queryGroqWorkspace(
+        @Header("Authorization") authorization: String,
+        @Body request: SaraGroqWorkspaceRequest
     ): SaraGroqResponse
 
     @GET("api/rasa/version")

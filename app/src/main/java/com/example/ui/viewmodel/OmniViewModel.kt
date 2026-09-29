@@ -615,6 +615,61 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun sendAiMessageWithGroqWorkspace(text: String, connectorTokens: Map<String, String>) {
+        val userText = text.trim()
+        if (userText.isBlank() || _isAiLoading.value) return
+        val knownConnectors = com.example.data.api.GroqWorkspaceConnectors.all.map { it.id }.toSet()
+        if (connectorTokens.isEmpty() || connectorTokens.size > knownConnectors.size ||
+            connectorTokens.keys.any { it !in knownConnectors } || connectorTokens.values.any { it.isBlank() }
+        ) {
+            _aiChatHistory.value = _aiChatHistory.value + saraMessage("Selecciona y autoriza al menos un conector de Google Workspace.")
+            return
+        }
+
+        val firebaseUser = FirebaseAuth.getInstance().currentUser
+        if (firebaseUser == null) {
+            _aiChatHistory.value = _aiChatHistory.value + saraMessage(
+                "Inicia sesión con tu cuenta para consultar los conectores."
+            )
+            return
+        }
+        val uid = firebaseUser.uid
+        viewModelScope.launch { rtdbService.saveSaraChatMessage(uid, "user", userText) }
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            try {
+                val idToken = firebaseUser.getIdToken(false).await().token
+                    ?: throw IllegalStateException("firebase_session_unavailable")
+                val response = com.example.data.api.SaraRetrofitClient.service.queryGroqWorkspace(
+                    authorization = "Bearer $idToken",
+                    request = com.example.data.api.SaraGroqWorkspaceRequest(
+                        text = userText,
+                        connectors = connectorTokens
+                    )
+                )
+                val answer = response.text.trim().ifBlank {
+                    "Sara no encontró una respuesta utilizable en los conectores seleccionados."
+                }
+                rtdbService.saveSaraChatMessage(uid, "assistant", answer)
+            } catch (e: retrofit2.HttpException) {
+                val explanation = when (e.code()) {
+                    401, 403 -> "Tu sesión de OmniStudio no pudo validarse. Inicia sesión de nuevo."
+                    429 -> "Llegaste al límite temporal de consultas de Groq. Inténtalo más tarde."
+                    else -> "No pude consultar Google Workspace. Comprueba que los permisos sigan autorizados e inténtalo de nuevo."
+                }
+                rtdbService.saveSaraChatMessage(uid, "assistant", explanation)
+            } catch (_: Exception) {
+                rtdbService.saveSaraChatMessage(
+                    uid,
+                    "assistant",
+                    "No pude conectar con los servicios de Google ahora. Inténtalo de nuevo."
+                )
+            } finally {
+                _isAiLoading.value = false
+            }
+        }
+    }
+
     private suspend fun detectSaraLanguageTag(text: String): String? {
         val identifier = LanguageIdentification.getClient()
         val detectedTag = try {

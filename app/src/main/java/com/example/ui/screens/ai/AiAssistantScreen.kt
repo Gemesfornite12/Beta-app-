@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -11,6 +12,7 @@ import android.speech.RecognizerIntent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -42,10 +44,25 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.firebase.auth.FirebaseAuth
+import com.example.data.api.GroqWorkspaceConnectors
 import com.example.data.model.ChatMessage
 import com.example.ui.viewmodel.OmniViewModel
 import kotlinx.serialization.json.*
 import java.util.Locale
+
+private sealed interface PendingWorkspaceAuthorization {
+    data class Connect(val connectorId: String) : PendingWorkspaceAuthorization
+    data class Query(val text: String, val connectorIds: Set<String>) : PendingWorkspaceAuthorization
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 private data class SaraEventOption(val value: String, val label: String)
 
@@ -86,6 +103,7 @@ fun AiAssistantScreen(
     val saraAdvancedResult by viewModel.saraAdvancedResult.collectAsState()
     val isSaraAdvancedLoading by viewModel.isSaraAdvancedLoading.collectAsState()
     var showSaraAdvanced by remember { mutableStateOf(false) }
+    var showGroqConnectors by remember { mutableStateOf(false) }
     var saraAdvancedInput by remember { mutableStateOf("") }
     var showSaraLibrary by remember { mutableStateOf(false) }
     var pendingKnowledge by remember { mutableStateOf<String?>(null) }
@@ -93,6 +111,98 @@ fun AiAssistantScreen(
     val isSaraKnowledgeLoading by viewModel.isSaraKnowledgeLoading.collectAsState()
     val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
     val context = LocalContext.current
+    val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    val connectorPreferences = remember(context, firebaseUid) {
+        context.getSharedPreferences("groq_workspace_connectors", Context.MODE_PRIVATE)
+    }
+    var connectedConnectorIds by remember(firebaseUid) {
+        mutableStateOf(
+            GroqWorkspaceConnectors.all.filter { connectorPreferences.getBoolean("$firebaseUid:${it.id}", false) }
+                .map { it.id }.toSet()
+        )
+    }
+    var selectedConnectorIds by remember(firebaseUid) { mutableStateOf(emptySet<String>()) }
+    var pendingWorkspaceAuthorization by remember { mutableStateOf<PendingWorkspaceAuthorization?>(null) }
+
+    fun finishWorkspaceAuthorization(action: PendingWorkspaceAuthorization, accessToken: String?) {
+        if (accessToken.isNullOrBlank()) {
+            Toast.makeText(context, "Google no devolvió un permiso válido.", Toast.LENGTH_LONG).show()
+            return
+        }
+        when (action) {
+            is PendingWorkspaceAuthorization.Connect -> {
+                connectedConnectorIds = connectedConnectorIds + action.connectorId
+                selectedConnectorIds = selectedConnectorIds + action.connectorId
+                connectorPreferences.edit().putBoolean("$firebaseUid:${action.connectorId}", true).apply()
+                Toast.makeText(context, "${GroqWorkspaceConnectors.find(action.connectorId)?.label ?: "Conector"} autorizado.", Toast.LENGTH_SHORT).show()
+            }
+            is PendingWorkspaceAuthorization.Query -> {
+                val tokens = action.connectorIds.associateWith { accessToken }
+                viewModel.sendAiMessageWithGroqWorkspace(action.text, tokens)
+            }
+        }
+    }
+
+    val workspaceAuthorizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val pending = pendingWorkspaceAuthorization
+        pendingWorkspaceAuthorization = null
+        if (pending != null) {
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                runCatching {
+                    Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(result.data).accessToken
+                }.onSuccess { token -> finishWorkspaceAuthorization(pending, token) }
+                    .onFailure { Toast.makeText(context, "No se pudo completar la autorización de Google.", Toast.LENGTH_LONG).show() }
+            } else {
+                Toast.makeText(context, "No se concedieron los permisos seleccionados.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun requestWorkspaceAuthorization(action: PendingWorkspaceAuthorization, connectorIds: Set<String>) {
+        if (firebaseUid.isBlank()) {
+            Toast.makeText(context, "Inicia sesión en OmniStudio antes de conectar servicios.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val connectors = connectorIds.mapNotNull(GroqWorkspaceConnectors::find)
+        if (connectors.isEmpty() || connectors.size != connectorIds.size) {
+            Toast.makeText(context, "Selecciona un conector de Google válido.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val activity = context.findActivity()
+        if (activity == null) {
+            Toast.makeText(context, "No se pudo abrir la autorización de Google en esta pantalla.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val authorizationRequest = AuthorizationRequest.builder()
+            .setRequestedScopes(connectors.map { it.toGoogleScope() })
+            .build()
+        Identity.getAuthorizationClient(activity).authorize(authorizationRequest)
+            .addOnSuccessListener { authorizationResult ->
+                if (authorizationResult.hasResolution()) {
+                    val pendingIntent = authorizationResult.pendingIntent
+                    if (pendingIntent == null) {
+                        Toast.makeText(context, "Google no pudo iniciar la autorización.", Toast.LENGTH_LONG).show()
+                    } else {
+                        pendingWorkspaceAuthorization = action
+                        runCatching {
+                            workspaceAuthorizationLauncher.launch(
+                                IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                            )
+                        }.onFailure {
+                            pendingWorkspaceAuthorization = null
+                            Toast.makeText(context, "No se pudo abrir la pantalla de permisos de Google.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } else {
+                    finishWorkspaceAuthorization(action, authorizationResult.accessToken)
+                }
+            }
+            .addOnFailureListener {
+                Toast.makeText(context, "No se pudo autorizar el conector de Google.", Toast.LENGTH_LONG).show()
+            }
+    }
 
     LaunchedEffect(Unit) { viewModel.refreshSaraKnowledge() }
     LaunchedEffect(saraKnowledgeFeedback) {
@@ -117,6 +227,9 @@ fun AiAssistantScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showGroqConnectors = true }) {
+                        Icon(Icons.Default.Link, contentDescription = "Conectores de Google Workspace", tint = Color(0xFF94A3B8))
+                    }
                     if (aiChatHistory.isNotEmpty()) {
                         IconButton(onClick = { viewModel.clearAiChat() }) {
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
@@ -142,13 +255,87 @@ fun AiAssistantScreen(
             history = aiChatHistory,
             isLoading = isAiLoading,
             modifier = Modifier.fillMaxSize().padding(padding),
+            connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
             onSend = { message ->
                 val saveCandidate = saraSaveCandidate(message)
-                viewModel.sendAiMessage(message)
+                if (selectedConnectorIds.isEmpty()) {
+                    viewModel.sendAiMessage(message)
+                } else {
+                    val ids = selectedConnectorIds.toSet()
+                    requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+                }
                 if (saveCandidate != null) pendingKnowledge = saveCandidate
             },
-            onSendAttachment = viewModel::sendAiAttachment,
+            onSendAttachment = { uri, prompt ->
+                selectedConnectorIds = emptySet()
+                viewModel.sendAiAttachment(uri, prompt)
+            },
             onRequestSave = { pendingKnowledge = it }
+        )
+    }
+
+    if (showGroqConnectors) {
+        AlertDialog(
+            onDismissRequest = { showGroqConnectors = false },
+            title = { Text("Conectores de Groq") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 430.dp).verticalScroll(rememberScrollState())
+                ) {
+                    Text("Conecta solo los servicios que quieras. Marca los que Sara podrá consultar en tus próximos mensajes; todos son de solo lectura.")
+                    Spacer(Modifier.height(10.dp))
+                    GroqWorkspaceConnectors.all.forEach { connector ->
+                        val connected = connector.id in connectedConnectorIds
+                        val selected = connector.id in selectedConnectorIds
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = selected,
+                                enabled = connected,
+                                onCheckedChange = { checked ->
+                                    selectedConnectorIds = if (checked) selectedConnectorIds + connector.id else selectedConnectorIds - connector.id
+                                }
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(connector.label, fontWeight = FontWeight.SemiBold)
+                                Text(connector.description, fontSize = 11.sp, color = Color(0xFF64748B))
+                                Text(if (connected) "Autorizado" else "Sin conectar", fontSize = 10.sp, color = if (connected) Color(0xFF16A34A) else Color(0xFF64748B))
+                            }
+                            TextButton(onClick = {
+                                if (connected) {
+                                    connectedConnectorIds = connectedConnectorIds - connector.id
+                                    selectedConnectorIds = selectedConnectorIds - connector.id
+                                    connectorPreferences.edit().putBoolean("$firebaseUid:${connector.id}", false).apply()
+                                } else {
+                                    requestWorkspaceAuthorization(
+                                        PendingWorkspaceAuthorization.Connect(connector.id),
+                                        setOf(connector.id)
+                                    )
+                                }
+                            }) { Text(if (connected) "Quitar" else "Conectar") }
+                        }
+                        HorizontalDivider(color = Color(0xFF334155))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Los permisos se solicitan a Google cuando conectas cada servicio. Para una consulta, Sara enviará a Groq solo el mensaje y los conectores marcados; la respuesta se guarda en tu chat privado de Firebase.",
+                        fontSize = 11.sp,
+                        color = Color(0xFF64748B)
+                    )
+                    Text(
+                        "Quitar un conector lo desactiva en OmniStudio; también puedes revocar el permiso en tu Cuenta de Google.",
+                        fontSize = 11.sp,
+                        color = Color(0xFF64748B),
+                        modifier = Modifier.padding(top = 6.dp).clickable {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://myaccount.google.com/connections")))
+                            }
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showGroqConnectors = false }) { Text("Listo") }
+            }
         )
     }
 
@@ -240,6 +427,7 @@ private fun SaraChatView(
     history: List<ChatMessage>,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
+    connectorSelectionLabel: String,
     onSend: (String) -> Unit,
     onSendAttachment: (Uri, String) -> Unit,
     onRequestSave: (String) -> Unit
@@ -421,6 +609,13 @@ private fun SaraChatView(
             }
         }
 
+        if (connectorSelectionLabel.isNotBlank()) {
+            Text(
+                "Groq consultará: $connectorSelectionLabel",
+                color = Color(0xFF93C5FD), fontSize = 10.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+            )
+        }
         Text(
             "Sara detecta el idioma de cada mensaje y responde en ese idioma. La primera traducción puede descargar un modelo al dispositivo.",
             color = Color(0xFF64748B), fontSize = 10.sp,

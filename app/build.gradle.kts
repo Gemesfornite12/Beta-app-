@@ -118,6 +118,7 @@ dependencies {
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
+  implementation("com.google.android.gms:play-services-auth:22.0.0")
   implementation(libs.kotlinx.serialization.json)
   // Replaced Google Maps with MapLibre + OpenStreetMap
   implementation(libs.maplibre.android)
