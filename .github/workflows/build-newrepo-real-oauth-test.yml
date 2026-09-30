@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Gemesfornite12/Betaapkdebug-
-          ref: 367b414c926a6b70c300356555950c24645add81
+          ref: 03d2e666d976fecdeb6a2c7ac72d01dc3ede75a7
           path: source
 
       - name: Set up Java 17
@@ -69,7 +69,7 @@ jobs:
         run: gradle assembleDebug --stacktrace
 
       - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --stacktrace
+        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --stacktrace
 
       - name: Upload real-connection test APK (24h)
         uses: actions/upload-artifact@v4
