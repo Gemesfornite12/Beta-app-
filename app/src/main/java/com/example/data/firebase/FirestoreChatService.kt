@@ -1448,7 +1448,7 @@ class FirestoreChatService(private val context: Context) {
             )
         )
         
-        saveOrUpdateChannel(channelInfo)
+        if (!saveOrUpdateChannel(channelInfo)) return null
         return directId
     }
 
