@@ -22,6 +22,7 @@ import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.firebase.SaraKnowledgeFirebaseStore
 import com.example.data.local.AppDatabase
 import com.example.data.local.SaraKnowledgeEntry
+import com.example.data.supabase.SupabaseChatPushService
 import com.example.data.supabase.SupabaseMediaStorageService
 import com.example.data.translation.MultilingualTranslationManager
 import com.example.data.translation.MessageTranslationState
@@ -3953,8 +3954,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
 
         viewModelScope.launch {
-            firestoreChatService.startCallSignal(session)
+            val signalSaved = firestoreChatService.startCallSignal(session)
             startRingingCountdown(callId, timeoutSec, isIncoming = false)
+            if (signalSaved) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching { SupabaseChatPushService.requestCallNotification(chId, callId) }
+                        .onFailure { Log.w("OmniViewModel", "No se pudo solicitar el push de llamada", it) }
+                }
+            }
         }
     }
 
@@ -3986,8 +3993,14 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
 
         viewModelScope.launch {
-            firestoreChatService.startCallSignal(session)
+            val signalSaved = firestoreChatService.startCallSignal(session)
             startRingingCountdown(callId, timeoutSec, isIncoming = false)
+            if (signalSaved) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching { SupabaseChatPushService.requestCallNotification(chId, callId) }
+                        .onFailure { Log.w("OmniViewModel", "No se pudo solicitar el push de videollamada", it) }
+                }
+            }
         }
     }
 
@@ -4046,8 +4059,20 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * El usuario presiona el Botón Verde (Responder)
      */
-    fun answerIncomingCall() {
-        val call = _activeCall.value ?: return
+    fun answerIncomingCall(callId: String? = null, channelId: String? = null) {
+        val active = _activeCall.value
+        if (active != null && !callId.isNullOrBlank() && active.callId != callId) return
+        val call = active ?: run {
+            if (!callId.isNullOrBlank() && !channelId.isNullOrBlank()) {
+                viewModelScope.launch {
+                    val incoming = firestoreChatService.getCallSignal(channelId, callId)
+                        ?.takeIf { it.status == CallStatus.RINGING } ?: return@launch
+                    _activeCall.value = incoming.copy(isIncoming = true)
+                    answerIncomingCall()
+                }
+            }
+            return
+        }
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
@@ -4070,8 +4095,20 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * El usuario presiona el Botón Rojo (No responder / Rechazar)
      */
-    fun rejectIncomingCall() {
-        val call = _activeCall.value ?: return
+    fun rejectIncomingCall(callId: String? = null, channelId: String? = null) {
+        val active = _activeCall.value
+        if (active != null && !callId.isNullOrBlank() && active.callId != callId) return
+        val call = active ?: run {
+            if (!callId.isNullOrBlank() && !channelId.isNullOrBlank()) {
+                viewModelScope.launch {
+                    val incoming = firestoreChatService.getCallSignal(channelId, callId)
+                        ?.takeIf { it.status == CallStatus.RINGING } ?: return@launch
+                    _activeCall.value = incoming.copy(isIncoming = true)
+                    rejectIncomingCall()
+                }
+            }
+            return
+        }
         ringCountdownJob?.cancel()
         ringCountdownJob = null
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)

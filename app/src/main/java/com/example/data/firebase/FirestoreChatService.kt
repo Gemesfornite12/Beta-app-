@@ -2,6 +2,7 @@ package com.example.data.firebase
 
 import android.content.Context
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
 import com.example.data.model.ChatMessage
@@ -904,13 +905,18 @@ class FirestoreChatService(private val context: Context) {
             "callerName" to call.callerName,
             "callerEmail" to call.callerEmail,
             "groupName" to call.groupName,
+            "pushEnvironment" to if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production",
             "startTimeMs" to System.currentTimeMillis()
         )
+        var savedToRtdb = false
         val rtdb = rtdbRef
         if (rtdb != null) {
             try {
                 rtdb.child("calls").child(call.channelId).child(call.callId).setValue(data).await()
-            } catch (_: Exception) {}
+                savedToRtdb = true
+            } catch (error: Exception) {
+                Log.w(TAG, "No se pudo guardar la señal de llamada en RTDB", error)
+            }
         }
         val db = getDb()
         if (db != null) {
@@ -921,9 +927,22 @@ class FirestoreChatService(private val context: Context) {
                     .document(call.callId)
                     .set(data)
                     .await()
-            } catch (_: Exception) {}
+            } catch (error: Exception) {
+                Log.w(TAG, "No se pudo guardar el respaldo de llamada en Firestore", error)
+            }
         }
-        return true
+        return savedToRtdb
+    }
+
+    suspend fun getCallSignal(channelId: String, callId: String): CallSession? {
+        val rtdb = rtdbRef ?: return null
+        return try {
+            val snapshot = rtdb.child("calls").child(channelId).child(callId).get().await()
+            snapshotToCallSession(snapshot, channelId)
+        } catch (error: Exception) {
+            Log.w(TAG, "No se pudo recuperar la señal de llamada", error)
+            null
+        }
     }
 
     /**

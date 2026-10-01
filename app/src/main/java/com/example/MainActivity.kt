@@ -111,10 +111,16 @@ class MainActivity : ComponentActivity() {
     // Manejar acciones rápidas de respuesta / rechazo desde la notificación de llamada entrante
     when (intent?.action) {
       ChatNotificationManager.ACTION_ANSWER_CALL -> {
-        viewModel.answerIncomingCall()
+        viewModel.answerIncomingCall(
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
+        )
       }
       ChatNotificationManager.ACTION_REJECT_CALL -> {
-        viewModel.rejectIncomingCall()
+        viewModel.rejectIncomingCall(
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
+        )
       }
     }
 
@@ -149,10 +155,16 @@ class MainActivity : ComponentActivity() {
 
     when (intent.action) {
       ChatNotificationManager.ACTION_ANSWER_CALL -> {
-        viewModel.answerIncomingCall()
+        viewModel.answerIncomingCall(
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
+        )
       }
       ChatNotificationManager.ACTION_REJECT_CALL -> {
-        viewModel.rejectIncomingCall()
+        viewModel.rejectIncomingCall(
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
+        )
       }
     }
   }

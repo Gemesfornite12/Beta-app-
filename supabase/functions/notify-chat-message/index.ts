@@ -200,7 +200,9 @@ async function sendFcm(token: string, payload: Record<string, string>, accessTok
         data: payload,
         android: {
           priority: "HIGH",
-          collapseKey: `chat_${payload.channelId}`.slice(0, 64),
+          collapseKey: payload.eventType === "call"
+            ? `call_${payload.callId || payload.channelId}`.slice(0, 64)
+            : `chat_${payload.channelId}`.slice(0, 64),
         },
       },
     }),
@@ -231,14 +233,24 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Chat notifications are not configured" }, 503);
   }
 
-  let payload: { channelId?: unknown; messageId?: unknown };
+  let payload: { eventType?: unknown; channelId?: unknown; messageId?: unknown; callId?: unknown };
   try {
     payload = await request.json();
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
-  if (!isValidDatabaseKey(payload.channelId) || !isValidDatabaseKey(payload.messageId)) {
-    return jsonResponse({ error: "Invalid chat or message identifier" }, 400);
+  const eventType = payload.eventType == null ? "message" : text(payload.eventType);
+  if (eventType !== "message" && eventType !== "call") {
+    return jsonResponse({ error: "Unsupported notification event" }, 400);
+  }
+  if (!isValidDatabaseKey(payload.channelId)) {
+    return jsonResponse({ error: "Invalid chat identifier" }, 400);
+  }
+  if (eventType === "message" && !isValidDatabaseKey(payload.messageId)) {
+    return jsonResponse({ error: "Invalid message identifier" }, 400);
+  }
+  if (eventType === "call" && !isValidDatabaseKey(payload.callId)) {
+    return jsonResponse({ error: "Invalid call identifier" }, 400);
   }
 
   let identity: FirebaseIdentity | null;
@@ -260,39 +272,90 @@ Deno.serve(async (request) => {
   }
 
   try {
+    const channelId = payload.channelId;
     const accessToken = await getGoogleAccessToken(serviceAccount);
-    const [channelValue, messageValue] = await Promise.all([
-      firebaseGet(`chats/${payload.channelId}`, accessToken),
-      firebaseGet(`chats/${payload.channelId}/messages/${payload.messageId}`, accessToken),
+    const eventPath = eventType === "call"
+      ? `calls/${channelId}/${payload.callId as string}`
+      : `chats/${channelId}/messages/${payload.messageId as string}`;
+    const [channelValue, eventValue] = await Promise.all([
+      firebaseGet(`chats/${channelId}`, accessToken),
+      firebaseGet(eventPath, accessToken),
     ]);
     const channel = channelValue && typeof channelValue === "object" ? channelValue as DataMap : null;
-    const message = messageValue && typeof messageValue === "object" ? messageValue as DataMap : null;
-    if (!channel || !message) return jsonResponse({ error: "Chat message not found" }, 404);
-    if (message.pushEnvironment !== "test") return jsonResponse({ accepted: true, sent: 0 }, 200);
-    if (text(message.senderId) !== identity.uid || normalizeEmail(message.senderEmail) !== identity.email) {
-      return jsonResponse({ error: "Message sender does not match the authenticated account" }, 403);
+    const event = eventValue && typeof eventValue === "object" ? eventValue as DataMap : null;
+    if (!channel || !event) return jsonResponse({ error: "Chat event not found" }, 404);
+
+    if (eventType === "message") {
+      if (event.pushEnvironment !== "test") return jsonResponse({ accepted: true, sent: 0 }, 200);
+      if (text(event.senderId) !== identity.uid || normalizeEmail(event.senderEmail) !== identity.email) {
+        return jsonResponse({ error: "Message sender does not match the authenticated account" }, 403);
+      }
+    } else {
+      if (event.pushEnvironment !== "test") return jsonResponse({ error: "Call is not eligible for test push" }, 403);
+      if (text(event.callId) !== payload.callId || text(event.channelId) !== channelId) {
+        return jsonResponse({ error: "Call identifiers do not match" }, 403);
+      }
+      if (text(event.status) !== "RINGING") return jsonResponse({ accepted: true, sent: 0 }, 200);
+      if (normalizeEmail(event.callerEmail) !== identity.email) {
+        return jsonResponse({ error: "Call sender does not match the authenticated account" }, 403);
+      }
     }
 
     const members = asMembers(channel.members);
     const memberEmails = [...new Set(members.map((member) => normalizeEmail(member.email)).filter(Boolean))];
     if (!memberEmails.includes(identity.email)) return jsonResponse({ error: "Sender is not a chat member" }, 403);
-    const recipientEmails = memberEmails.filter((email) => email !== identity.email);
-    if (recipientEmails.length === 0) return jsonResponse({ accepted: true, sent: 0 }, 200);
+    const isGroup = channel.isGroup === true;
+    let recipientEmails = memberEmails.filter((email) => email !== identity.email);
+
+    if (eventType === "call" && !isGroup) {
+      if (channel.isDirect !== true) {
+        return jsonResponse({ error: "Call notifications require a private chat or group" }, 403);
+      }
+      const peerEmail = normalizeEmail(event.peerEmail);
+      if (!peerEmail || peerEmail === identity.email || !memberEmails.includes(peerEmail)) {
+        return jsonResponse({ error: "Call recipient is not a member of the private chat" }, 403);
+      }
+      recipientEmails = [peerEmail];
+    }
+
+    if (recipientEmails.length === 0) {
+      console.info("Test notification has no recipients", { eventType, isGroup, memberCount: members.length });
+      return jsonResponse({ accepted: true, sent: 0, recipientCount: 0, deviceCount: 0 }, 200);
+    }
 
     const devices = await findTestDeviceTokens(recipientEmails, accessToken);
-    if (devices.length === 0) return jsonResponse({ accepted: true, sent: 0 }, 200);
+    if (devices.length === 0) {
+      console.info("Test notification has no eligible test devices", {
+        eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+      });
+      return jsonResponse({ accepted: true, sent: 0, recipientCount: recipientEmails.length, deviceCount: 0 }, 200);
+    }
 
-    const isGroup = channel.isGroup === true;
-    const fcmPayload = {
-      channelId: payload.channelId,
-      channelName: text(channel.name) || "Chat",
-      senderName: text(message.senderName) || identity.email,
-      senderEmail: identity.email,
-      text: messagePreview(message),
-      isGroup: String(isGroup),
-      messageId: payload.messageId,
-      pushEnvironment: "test",
-    };
+    const fcmPayload: Record<string, string> = eventType === "call"
+      ? {
+        eventType: "call",
+        callId: text(event.callId),
+        channelId,
+        channelName: text(channel.name) || "Chat",
+        callerName: text(event.callerName) || identity.email,
+        callerEmail: identity.email,
+        groupName: isGroup ? (text(channel.name) || text(event.groupName)) : "",
+        isVideo: String(event.isVideo === true),
+        isGroup: String(isGroup),
+        timeoutMinutes: "5",
+        pushEnvironment: "test",
+      }
+      : {
+        eventType: "message",
+        channelId,
+        channelName: text(channel.name) || "Chat",
+        senderName: text(event.senderName) || identity.email,
+        senderEmail: identity.email,
+        text: messagePreview(event),
+        isGroup: String(isGroup),
+        messageId: text(event.messageId) || (payload.messageId as string),
+        pushEnvironment: "test",
+      };
 
     let sent = 0;
     for (const device of devices) {
@@ -305,14 +368,23 @@ Deno.serve(async (request) => {
         if (response.status === 404 || errorCodes.includes("UNREGISTERED")) {
           await removeStaleToken(device.documentName, accessToken);
         } else {
-          console.warn("FCM rejected a test chat notification", { status: response.status });
+          console.warn("FCM rejected a test notification", { eventType, status: response.status });
         }
       }
     }
 
-    return jsonResponse({ accepted: true, sent }, 200);
+    console.info("Test notification delivery result", {
+      eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+      deviceCount: devices.length, sent,
+    });
+    return jsonResponse({
+      accepted: true,
+      sent,
+      recipientCount: recipientEmails.length,
+      deviceCount: devices.length,
+    }, 200);
   } catch (error) {
-    console.error("Test chat notification request failed", {
+    console.error("Test notification request failed", {
       message: error instanceof Error ? error.message : "Unknown server error",
     });
     return jsonResponse({ error: "Chat notification delivery failed" }, 502);

@@ -13,7 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Requests a server-verified FCM push after a .test chat message is saved. */
+/** Requests server-verified FCM pushes for .test chat messages and call invitations. */
 object SupabaseChatPushService {
     private const val TAG = "SupabaseChatPush"
     private const val FUNCTION_PATH = "/functions/v1/notify-chat-message"
@@ -26,7 +26,25 @@ object SupabaseChatPushService {
 
     suspend fun requestNotification(channelId: String, messageId: String) {
         if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
+        postNotification(
+            JSONObject()
+                .put("eventType", "message")
+                .put("channelId", channelId)
+                .put("messageId", messageId)
+        )
+    }
 
+    suspend fun requestCallNotification(channelId: String, callId: String) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
+        postNotification(
+            JSONObject()
+                .put("eventType", "call")
+                .put("channelId", channelId)
+                .put("callId", callId)
+        )
+    }
+
+    private suspend fun postNotification(payload: JSONObject) {
         val user = FirebaseAuth.getInstance().currentUser ?: return
         val firebaseIdToken = user.getIdToken(false).await().token
         if (firebaseIdToken.isNullOrBlank()) {
@@ -41,12 +59,7 @@ object SupabaseChatPushService {
             return
         }
 
-        val body = JSONObject()
-            .put("channelId", channelId)
-            .put("messageId", messageId)
-            .toString()
-            .toRequestBody(jsonMediaType)
-
+        val body = payload.toString().toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url(supabaseUrl + FUNCTION_PATH)
             .header("apikey", publishableKey)
@@ -58,7 +71,12 @@ object SupabaseChatPushService {
         withContext(Dispatchers.IO) {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    Log.w(TAG, "Push endpoint returned HTTP ${response.code}; chat message remains saved.")
+                    Log.w(TAG, "Push endpoint returned HTTP ${response.code}.")
+                } else {
+                    val sent = runCatching {
+                        JSONObject(response.body?.string().orEmpty()).optInt("sent", -1)
+                    }.getOrDefault(-1)
+                    Log.i(TAG, "Push request accepted; sent=$sent.")
                 }
             }
         }

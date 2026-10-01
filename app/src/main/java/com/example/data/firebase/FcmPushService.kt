@@ -1,6 +1,7 @@
 package com.example.data.firebase
 
 import android.util.Log
+import com.example.BuildConfig
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
@@ -39,8 +40,32 @@ class FcmPushService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
         Log.d(TAG, "FCM Message received from: ${remoteMessage.from}")
 
-        // Extraer datos del payload 'data' o 'notification'
+        // Las llamadas se enrutan solo en la app aislada de prueba.
         val data = remoteMessage.data
+        if (data["eventType"] == "call") {
+            if (!BuildConfig.APPLICATION_ID.endsWith(".test") || data["pushEnvironment"] != "test") {
+                Log.w(TAG, "Ignoring call push outside the isolated test environment.")
+                return
+            }
+            val callId = data["callId"].orEmpty()
+            val channelId = data["channelId"].orEmpty()
+            if (callId.isBlank() || channelId.isBlank()) {
+                Log.w(TAG, "Ignoring call push without call and channel identifiers.")
+                return
+            }
+            ChatNotificationManager.showIncomingCallNotification(
+                context = applicationContext,
+                callId = callId,
+                channelId = channelId,
+                callerName = data["callerName"] ?: "Compañero",
+                groupName = data["groupName"]?.takeIf { it.isNotBlank() },
+                isVideo = data["isVideo"]?.toBoolean() ?: false,
+                timeoutMinutes = data["timeoutMinutes"]?.toIntOrNull() ?: 5
+            )
+            return
+        }
+
+        // Extraer datos del payload 'data' o 'notification'
         val channelId = data["channelId"] ?: data["channel_id"] ?: "general"
         val channelName = data["channelName"] ?: data["channel_name"] ?: "Chat"
         val senderName = data["senderName"] ?: data["sender_name"]
