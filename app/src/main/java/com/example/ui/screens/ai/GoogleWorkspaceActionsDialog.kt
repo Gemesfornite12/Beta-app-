@@ -183,3 +183,112 @@ internal fun GoogleWorkspaceActionsDialog(
         )
     }
 }
+
+@Composable
+internal fun WorkspaceActionChatCard(
+    request: GoogleWorkspaceActionRequest,
+    isRunning: Boolean,
+    onConfirm: (GoogleWorkspaceActionRequest) -> Unit,
+    onCancel: () -> Unit
+) {
+    var values by remember(request) {
+        mutableStateOf(request.type.fields.associate { field ->
+            field.key to (request.values[field.key]?.takeIf(String::isNotBlank) ?: field.defaultValue)
+        })
+    }
+    var fileUri by remember(request) { mutableStateOf(request.fileUri) }
+    var previewing by remember(request) { mutableStateOf(false) }
+    var validationError by remember(request) { mutableStateOf<String?>(null) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> fileUri = uri }
+
+    fun prepareRequest(): GoogleWorkspaceActionRequest? {
+        val missing = request.type.fields.firstOrNull { it.required && values[it.key].isNullOrBlank() }
+        if (missing != null) {
+            validationError = "Completa: ${missing.label}."
+            return null
+        }
+        val reservedIds = setOf("id", "permanentemente", "definitivamente", "consulta", "nombre", "correo", "archivo", "evento")
+        val placeholder = request.type.fields.firstOrNull { field ->
+            val value = values[field.key].orEmpty().trim()
+            value.matches(Regex("\\[[^\\]]+\\]")) ||
+                (field.key.endsWith("id", ignoreCase = true) && value.lowercase() in reservedIds)
+        }
+        if (placeholder != null) {
+            validationError = "Reemplaza el marcador por un dato real: ${placeholder.label}."
+            return null
+        }
+        if (request.type.needsFile && fileUri == null) {
+            validationError = "Elige un archivo primero."
+            return null
+        }
+        validationError = null
+        return GoogleWorkspaceActionRequest(request.type, values, fileUri)
+    }
+
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Google Workspace", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Text(request.type.title, style = MaterialTheme.typography.titleMedium)
+            if (isRunning) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Esperando autorización y respuesta de Google…", style = MaterialTheme.typography.bodySmall)
+                }
+            } else if (!previewing) {
+                Text(
+                    if (request.type.changesData) "Revisa o completa los datos. Después verás una vista previa antes de confirmar."
+                    else "Completa los datos para consultar Google Workspace.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                request.type.fields.forEach { field ->
+                    OutlinedTextField(
+                        value = values[field.key].orEmpty(),
+                        onValueChange = { values = values + (field.key to it); validationError = null },
+                        label = { Text(field.label + if (field.required) " *" else "") },
+                        singleLine = !field.multiline,
+                        minLines = if (field.multiline) 3 else 1,
+                        enabled = !isRunning,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (request.type.needsFile) {
+                    OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !isRunning) {
+                        Text(if (fileUri == null) "Elegir archivo" else "Cambiar archivo")
+                    }
+                    fileUri?.let { Text("Seleccionado: ${it.lastPathSegment ?: "archivo"}", style = MaterialTheme.typography.bodySmall) }
+                }
+            } else {
+                Text("Vista previa · confirma solo si los datos están correctos", style = MaterialTheme.typography.bodySmall)
+                request.type.fields.forEach { field ->
+                    val value = values[field.key].orEmpty()
+                    if (value.isNotBlank()) {
+                        Text("${field.label}: $value", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                fileUri?.let { Text("Archivo: ${it.lastPathSegment ?: "seleccionado"}", style = MaterialTheme.typography.bodySmall) }
+                if (request.type.irreversible) {
+                    Text("Esta acción puede ser permanente y no se podrá deshacer.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Google pedirá el permiso correspondiente antes de ejecutarla.", style = MaterialTheme.typography.bodySmall)
+            }
+            validationError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                TextButton(onClick = onCancel, enabled = !isRunning) { Text("Cancelar") }
+                if (previewing) {
+                    TextButton(onClick = { previewing = false }, enabled = !isRunning) { Text("Editar") }
+                    Button(onClick = { prepareRequest()?.let(onConfirm) }, enabled = !isRunning) {
+                        Text(if (request.type.irreversible) "Confirmar borrado" else "Confirmar y autorizar")
+                    }
+                } else {
+                    Button(onClick = {
+                        val ready = prepareRequest() ?: return@Button
+                        if (request.type.changesData) previewing = true else onConfirm(ready)
+                    }, enabled = !isRunning) {
+                        Text(if (request.type.changesData) "Vista previa" else "Consultar")
+                    }
+                }
+            }
+        }
+    }
+}
