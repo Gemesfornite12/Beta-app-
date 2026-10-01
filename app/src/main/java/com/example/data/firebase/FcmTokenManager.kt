@@ -51,6 +51,7 @@ object FcmTokenManager {
      */
     fun initialize(context: Context, userEmail: String? = null) {
         ChatNotificationManager.createNotificationChannels(context)
+        _isPushSubscribed.value = false
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -60,24 +61,12 @@ object FcmTokenManager {
                 val app = FirebaseAppProvider.get(context)
                 Log.d(TAG, "Using FirebaseApp: ${app.name} (${app.options.projectId})")
 
-                FirebaseMessaging.getInstance().token
+                FirebaseMessaging.getInstance(app).token
                     .addOnCompleteListener { task ->
                         if (!task.isSuccessful) {
-                            Log.w(TAG, "Fetching FCM registration token failed: ${task.exception?.message}")
-                            
-                            // Si es un error de registro (hard failure), desactivar auto-init para evitar spam de reintentos
-                            try {
-                                FirebaseMessaging.getInstance().isAutoInitEnabled = false
-                                Log.d(TAG, "FCM Auto-init disabled due to registration failure")
-                            } catch (_: Exception) {}
-
-                            // Si falla en emulador sin Play Services, generar un token local válido para testing
-                            val fallbackToken = "fcm_token_${System.currentTimeMillis()}_${context.packageName.takeLast(6)}"
-                            _currentToken.value = fallbackToken
-                            ChatNotificationManager.saveFcmToken(context, fallbackToken)
-                            if (!userEmail.isNullOrBlank()) {
-                                syncTokenToFirestore(context, userEmail, fallbackToken)
-                            }
+                            _currentToken.value = null
+                            _isPushSubscribed.value = false
+                            Log.w(TAG, "FCM registration token unavailable; push is not ready: ${task.exception?.message}")
                             return@addOnCompleteListener
                         }
 
@@ -87,7 +76,7 @@ object FcmTokenManager {
                         
                         // Habilitar auto-init ahora que sabemos que el registro funciona
                         try {
-                            FirebaseMessaging.getInstance().isAutoInitEnabled = true
+                            FirebaseMessaging.getInstance(app).isAutoInitEnabled = true
                         } catch (_: Exception) {}
 
                         _currentToken.value = token
@@ -99,7 +88,7 @@ object FcmTokenManager {
                         _isPushSubscribed.value = true
 
                         // Suscribirse al tema general de avisos solo si tenemos token real
-                        FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
+                        FirebaseMessaging.getInstance(app).subscribeToTopic("all_users_omnistudio")
                             .addOnCompleteListener { subscribeTask ->
                                 if (subscribeTask.isSuccessful) {
                                     Log.d(TAG, "Subscribed to all_users_omnistudio topic")
@@ -110,13 +99,9 @@ object FcmTokenManager {
                     }
 
             } catch (e: Throwable) {
-                Log.w(TAG, "FCM initialization handled with local fallback: ${e.message}")
-                val fallbackToken = "fcm_token_local_${System.currentTimeMillis()}"
-                _currentToken.value = fallbackToken
-                ChatNotificationManager.saveFcmToken(context, fallbackToken)
-                if (!userEmail.isNullOrBlank()) {
-                    syncTokenToFirestore(context, userEmail, fallbackToken)
-                }
+                _currentToken.value = null
+                _isPushSubscribed.value = false
+                Log.w(TAG, "FCM initialization failed; no push token was registered: ${e.message}")
             }
         }
     }
@@ -142,8 +127,11 @@ object FcmTokenManager {
             )
             db.collection("user_fcm_tokens").document(cleanEmail)
                 .set(data, SetOptions.merge())
+            // Un documento por dispositivo permite enviar a todos los equipos del mismo usuario.
+            db.collection("fcm_device_tokens").document(token.hashCode().toString())
+                .set(data, SetOptions.merge())
                 .addOnSuccessListener {
-                    Log.d(TAG, "FCM Token successfully synced in Firestore for: $userEmail")
+                    Log.d(TAG, "FCM Token successfully synced for the signed-in user.")
                 }
         } catch (e: Throwable) {
             Log.w(TAG, "Could not sync FCM token to Firestore: ${e.message}")
