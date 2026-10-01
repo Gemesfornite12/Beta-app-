@@ -670,6 +670,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    suspend fun translateWorkspaceCommandToSpanish(text: String): String? {
+        val detectedTag = runCatching { detectSaraLanguageTag(text) }.getOrNull() ?: return null
+        val detectedLanguage = runCatching { TranslateLanguage.fromLanguageTag(detectedTag) }.getOrNull() ?: return null
+        if (detectedLanguage == TranslateLanguage.SPANISH) return text
+        return runCatching {
+            translateSaraText(text, detectedLanguage, TranslateLanguage.SPANISH)
+        }.getOrNull()
+    }
+
     private suspend fun detectSaraLanguageTag(text: String): String? {
         val identifier = LanguageIdentification.getClient()
         val detectedTag = try {
