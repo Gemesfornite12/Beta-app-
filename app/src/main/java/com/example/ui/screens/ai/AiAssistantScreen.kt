@@ -52,6 +52,9 @@ import com.google.android.gms.common.api.Scope
 import com.google.firebase.auth.FirebaseAuth
 import com.example.data.api.GroqWorkspaceConnectors
 import com.example.data.model.ChatMessage
+import com.example.data.translation.MessageTranslationState
+import com.example.data.translation.SupportedLanguage
+import com.example.data.translation.TranslationSettings
 import com.example.ui.viewmodel.OmniViewModel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
@@ -68,6 +71,9 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+
+private fun saraTranslationKey(message: ChatMessage): String =
+    "sara:${message.channelId}:${message.senderEmail}:${message.timestamp}"
 
 private data class SaraEventOption(val value: String, val label: String)
 
@@ -121,6 +127,9 @@ fun AiAssistantScreen(
     val saraKnowledgeEntries by viewModel.saraKnowledgeEntries.collectAsState()
     val isSaraKnowledgeLoading by viewModel.isSaraKnowledgeLoading.collectAsState()
     val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
+    val translationStates by viewModel.translationStates.collectAsState()
+    val translationSettings by viewModel.translationSettings.collectAsState()
+    val supportedLanguages = viewModel.supportedLanguages
     val context = LocalContext.current
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
     var pendingChatWorkspaceAction by remember(firebaseUid) { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
@@ -129,6 +138,15 @@ fun AiAssistantScreen(
     var workspaceChatMessages by remember(firebaseUid) { mutableStateOf<List<ChatMessage>>(emptyList()) }
     val displayedAiChatHistory = remember(aiChatHistory, workspaceChatMessages) {
         (aiChatHistory + workspaceChatMessages).sortedBy { it.timestamp }
+    }
+    LaunchedEffect(displayedAiChatHistory, translationSettings.isAutoTranslateEnabled, translationSettings.targetLanguageCode) {
+        if (translationSettings.isAutoTranslateEnabled) {
+            displayedAiChatHistory.filter { it.channelId != "workspace_action" }.forEach { message ->
+                if (message.text.isNotBlank()) {
+                    viewModel.retryOrTranslateMessage(saraTranslationKey(message), message.text, force = false)
+                }
+            }
+        }
     }
     val connectorPreferences = remember(context, firebaseUid) {
         context.getSharedPreferences("groq_workspace_connectors", Context.MODE_PRIVATE)
@@ -142,10 +160,10 @@ fun AiAssistantScreen(
     var selectedConnectorIds by remember(firebaseUid) { mutableStateOf(emptySet<String>()) }
     var pendingWorkspaceAuthorization by remember { mutableStateOf<PendingWorkspaceAuthorization?>(null) }
 
-    fun addWorkspaceChatMessage(isUser: Boolean, text: String) {
+    fun addWorkspaceChatMessage(isUser: Boolean, text: String, channelId: String = "ai_assistant") {
         if (text.isBlank()) return
         workspaceChatMessages = workspaceChatMessages + ChatMessage(
-            channelId = "ai_assistant",
+            channelId = channelId,
             senderEmail = if (isUser) "workspace-user" else "sara",
             senderName = if (isUser) "Tú" else "Sara",
             text = text,
@@ -192,7 +210,7 @@ fun AiAssistantScreen(
                         else "${action.request.type.title} completado.\n\n$resultText"
                     if (action.fromChat) {
                         workspaceActionResult = null
-                        addWorkspaceChatMessage(isUser = false, text = chatResult)
+                        addWorkspaceChatMessage(isUser = false, text = chatResult, channelId = "workspace_action")
                         pendingChatWorkspaceAction = null
                         chatWorkspaceActionRunning = false
                     } else {
@@ -416,6 +434,13 @@ fun AiAssistantScreen(
             pendingWorkspaceAction = pendingChatWorkspaceAction,
             isWorkspaceActionRunning = chatWorkspaceActionRunning,
             isWorkspaceCommandTranslationLoading = workspaceCommandTranslationLoading,
+            translationStates = translationStates,
+            translationSettings = translationSettings,
+            supportedLanguages = supportedLanguages,
+            onSetAutoTranslate = { viewModel.setAutoTranslateEnabled(it) },
+            onSetTargetLanguage = { viewModel.setChatTargetLanguage(it) },
+            onToggleMessageTranslation = { viewModel.toggleShowOriginalMessage(it) },
+            onRetryMessageTranslation = { key, text -> viewModel.retryOrTranslateMessage(key, text, force = true) },
             onConfirmWorkspaceAction = { request -> requestGoogleWorkspaceAction(request, fromChat = true) },
             onCancelWorkspaceAction = {
                 pendingChatWorkspaceAction = null
@@ -651,6 +676,13 @@ private fun SaraChatView(
     pendingWorkspaceAction: GoogleWorkspaceActionRequest?,
     isWorkspaceActionRunning: Boolean,
     isWorkspaceCommandTranslationLoading: Boolean,
+    translationStates: Map<String, MessageTranslationState>,
+    translationSettings: TranslationSettings,
+    supportedLanguages: List<SupportedLanguage>,
+    onSetAutoTranslate: (Boolean) -> Unit,
+    onSetTargetLanguage: (String) -> Unit,
+    onToggleMessageTranslation: (String) -> Unit,
+    onRetryMessageTranslation: (String, String) -> Unit,
     onConfirmWorkspaceAction: (GoogleWorkspaceActionRequest) -> Unit,
     onCancelWorkspaceAction: () -> Unit,
     onSend: (String) -> Unit,
@@ -661,6 +693,7 @@ private fun SaraChatView(
     var draft by remember { mutableStateOf("") }
     var attachmentUri by remember { mutableStateOf<Uri?>(null) }
     var attachmentName by remember { mutableStateOf<String?>(null) }
+    var showSaraLanguagePicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val isInputBlocked = isLoading || pendingWorkspaceAction != null || isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading
 
@@ -728,6 +761,41 @@ private fun SaraChatView(
         modifier = modifier.background(Color(0xFF0F172A)),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        val targetLanguage = supportedLanguages.firstOrNull { it.code == translationSettings.targetLanguageCode }
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            color = Color(0xFF1E293B),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🌐", fontSize = 16.sp, modifier = Modifier.padding(end = 7.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Auto-Traducción", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (translationSettings.isAutoTranslateEnabled) "Sara traduce al idioma elegido" else "Traducción pausada",
+                        color = Color(0xFF94A3B8), fontSize = 10.sp
+                    )
+                }
+                Surface(
+                    color = Color(0xFF334155),
+                    shape = RoundedCornerShape(7.dp),
+                    modifier = Modifier.clickable { showSaraLanguagePicker = true }
+                ) {
+                    Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${targetLanguage?.flagEmoji ?: "🌐"} ${targetLanguage?.code?.uppercase() ?: "ES"}", color = Color(0xFFE2E8F0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Cambiar idioma", tint = Color(0xFF94A3B8), modifier = Modifier.size(15.dp))
+                    }
+                }
+                Switch(
+                    checked = translationSettings.isAutoTranslateEnabled,
+                    onCheckedChange = onSetAutoTranslate,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+        }
         if (history.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
@@ -767,10 +835,16 @@ private fun SaraChatView(
                                     Text("Asistente", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.height(3.dp))
                                 }
-                                val linkedText = remember(message.text) {
+                                val translationKey = saraTranslationKey(message)
+                                val translationState = if (message.channelId == "workspace_action") null else translationStates[translationKey]
+                                val hasCurrentTranslation = !translationState?.translatedText.isNullOrBlank() &&
+                                    translationState?.targetLanguageCode.equals(translationSettings.targetLanguageCode, ignoreCase = true)
+                                val showingTranslation = hasCurrentTranslation && translationState?.showOriginal != true
+                                val displayText = if (showingTranslation) translationState?.translatedText.orEmpty() else message.text
+                                val linkedText = remember(displayText) {
                                     buildAnnotatedString {
-                                        append(message.text)
-                                        Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).findAll(message.text).forEach { match ->
+                                        append(displayText)
+                                        Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).findAll(displayText).forEach { match ->
                                             val rawUrl = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
                                             val end = match.range.first + rawUrl.length
                                             if (rawUrl.isNotBlank() && end > match.range.first) {
@@ -793,11 +867,29 @@ private fun SaraChatView(
                                         }
                                     }
                                 )
+                                if (message.channelId != "workspace_action" && message.text.isNotBlank()) {
+                                    when {
+                                        translationState?.isDownloadingModel == true -> Text("Descargando idioma para traducir…", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                        translationState?.isTranslating == true -> Text("Traduciendo en este dispositivo…", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                        translationState?.errorMessage != null -> TextButton(
+                                            onClick = { onRetryMessageTranslation(translationKey, message.text) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text("No se pudo traducir · Reintentar", fontSize = 10.sp) }
+                                        hasCurrentTranslation -> TextButton(
+                                            onClick = { onToggleMessageTranslation(translationKey) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text(if (showingTranslation) "Ver original" else "Ver traducido", fontSize = 10.sp) }
+                                        translationState?.detectedLanguageCode?.equals(translationSettings.targetLanguageCode, ignoreCase = true) != true -> TextButton(
+                                            onClick = { onRetryMessageTranslation(translationKey, message.text) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text("Traducir al ${translationSettings.targetLanguageCode.uppercase()}", fontSize = 10.sp) }
+                                    }
+                                }
                                 if (isAssistant && message.text.isNotBlank()) {
                                     TextButton(
                                         onClick = {
                                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            clipboard.setPrimaryClip(ClipData.newPlainText("Respuesta de Sara", message.text))
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Respuesta de Sara", displayText))
                                             Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
                                         },
                                         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
@@ -946,6 +1038,28 @@ private fun SaraChatView(
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar a Sara", tint = Color.White)
             }
         }
+    }
+    if (showSaraLanguagePicker) {
+        AlertDialog(
+            onDismissRequest = { showSaraLanguagePicker = false },
+            title = { Text("Idioma de traducción") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    supportedLanguages.forEach { language ->
+                        TextButton(
+                            onClick = {
+                                onSetTargetLanguage(language.code)
+                                showSaraLanguagePicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("${language.flagEmoji}  ${language.nativeName} (${language.code.uppercase()})", modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showSaraLanguagePicker = false }) { Text("Cerrar") } }
+        )
     }
 }
 
