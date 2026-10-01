@@ -27,6 +27,16 @@ class GoogleWorkspaceCommandParserTest {
     }
 
     @Test
+    fun shortUploadCommandOpensTheInlineDriveUploadAction() {
+        val parsed = GoogleWorkspaceCommandParser.parse("subir")
+        requireNotNull(parsed)
+        assertEquals(GoogleWorkspaceActionType.UPLOAD_DRIVE, parsed.request.type)
+        assertEquals(true, parsed.request.type.needsFile)
+        assertEquals(true, parsed.request.type.changesData)
+        assertEquals(false, GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(parsed.request))
+    }
+
+    @Test
     fun ordinaryQuestionDoesNotOpenWorkspaceActions() {
         assertNull(GoogleWorkspaceCommandParser.parse("¿Qué hora es?"))
     }
