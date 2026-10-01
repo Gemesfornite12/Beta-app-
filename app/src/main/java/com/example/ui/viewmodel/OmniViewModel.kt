@@ -3021,12 +3021,19 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 // Supabase objects must be removed through the Firebase-verified
                 // Edge Function before the message is deleted. External media
                 // URLs (GIF providers, YouTube, etc.) are not touched.
+                val mediaStorageService = SupabaseMediaStorageService(getApplication<Application>())
                 val storagePath = msg.mediaUrl?.let {
                     SupabaseMediaStorageService.storagePathFromPublicUrl(it)
                 }
+                val thumbnailPath = msg.mediaThumbnail?.let {
+                    SupabaseMediaStorageService.storagePathFromPublicUrl(it)
+                }?.takeIf { it != storagePath }
                 if (!storagePath.isNullOrBlank()) {
-                    SupabaseMediaStorageService(getApplication<Application>())
-                        .deleteMediaObject(storagePath)
+                    mediaStorageService.deleteMediaObject(storagePath)
+                }
+                if (!thumbnailPath.isNullOrBlank()) {
+                    runCatching { mediaStorageService.deleteMediaObject(thumbnailPath) }
+                        .onFailure { Log.w("OmniViewModel", "No se pudo limpiar la miniatura del video", it) }
                 }
 
                 repo.deleteChatMessage(msg.id)
