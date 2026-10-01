@@ -489,6 +489,16 @@ class BackgroundUploadService : Service() {
     }
 
     override fun onDestroy() {
+        val activeUpload = _uploadStateFlow.value
+        if (activeUpload.isUploading) {
+            _uploadStateFlow.value = UploadState(
+                isUploading = false,
+                mediaType = activeUpload.mediaType,
+                isError = true,
+                message = "La subida se interrumpió. Vuelve a intentarlo.",
+                channelId = activeUpload.channelId
+            )
+        }
         serviceScope.cancel()
         releaseWakeLock()
         super.onDestroy()
