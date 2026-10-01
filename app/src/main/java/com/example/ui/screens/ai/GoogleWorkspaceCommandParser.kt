@@ -16,15 +16,27 @@ internal object GoogleWorkspaceCommandParser {
     private val objectIdPattern = Regex("(?:leer|abrir|ver|borrar|borra|eliminar|elimina|editar|actualizar|descargar|renombrar|detalles|papelera|read|open|delete|update|download)\\s+(?:(?:permanentemente|definitivamente)\\s+)?(?:el\\s+|la\\s+)?(?:correo|mensaje|evento|archivo|documento|borrador|etiqueta|email|file|draft)\\s+(?:(?:permanentemente|definitivamente)\\s+)?([A-Z0-9_-]{5,})", RegexOption.IGNORE_CASE)
     private val subjectPattern = Regex("(?:asunto|subject)\\s*[:=]\\s*(.+?)(?=\\s+(?:mensaje|cuerpo|body)\\s*[:=]|$)", RegexOption.IGNORE_CASE)
     private val bodyPattern = Regex("(?:mensaje|cuerpo|body)\\s*[:=]\\s*(.+)$", RegexOption.IGNORE_CASE)
+    private val placeholderPattern = Regex("\\[[^\\]]{1,40}\\]")
+    private val commandLinePattern = Regex("^(?:buscar|leer|abrir|ver|listar|etiquetas|crear|renombrar|cambiar|eliminar|borrar|enviar|mover|papelera|borradores|calendarios|disponibilidad|eventos|detalles|descargar|subir|actualizar|reemplazar)\\b")
+
+    fun isReferenceOrBatch(text: String): Boolean {
+        val lines = text.lines().map { normalize(it).trim() }
+        val sectionHeadings = listOf("gmail", "calendar", "drive").all { it in lines }
+        val commandLines = lines.count { commandLinePattern.containsMatchIn(it) }
+        return sectionHeadings || commandLines > 1 || (commandLines > 0 && placeholderPattern.containsMatchIn(text))
+    }
 
     fun parse(text: String): ParsedWorkspaceCommand? {
+        if (isReferenceOrBatch(text)) return null
         val normalized = normalize(text)
         fun has(vararg words: String) = words.any { normalized.contains(it) }
         fun request(type: GoogleWorkspaceActionType, values: Map<String, String> = emptyMap()) =
             ParsedWorkspaceCommand(GoogleWorkspaceActionRequest(type, values), text)
         fun captured(pattern: Regex) = pattern.find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val id = idPattern.find(text)?.groupValues?.getOrNull(1)
+        val rawId = idPattern.find(text)?.groupValues?.getOrNull(1)
             ?: objectIdPattern.find(text)?.groupValues?.getOrNull(1).orEmpty()
+        val reservedIdWords = setOf("id", "permanentemente", "definitivamente", "consulta", "nombre", "correo", "mensaje", "evento", "archivo", "documento", "borrador", "etiqueta")
+        val id = rawId.takeUnless { normalize(it) in reservedIdWords || placeholderPattern.containsMatchIn(it) }.orEmpty()
         val recipient = emailPattern.find(text)?.value.orEmpty()
 
         // Gmail: destructive intents are matched before more general mail commands.
