@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Gemesfornite12/Betaapkdebug-
-          ref: b3180fce237315c53e7947cc1f099aeb1fb6466b
+          ref: 4f9d53041110e5bd3da82c29a6efe1a98c554ed2
           path: source
 
       - name: Set up Java 17
