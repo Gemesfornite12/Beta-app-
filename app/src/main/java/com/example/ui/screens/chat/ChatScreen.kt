@@ -1646,6 +1646,8 @@ fun ChatScreen(
 
                     MessageBubble(
                         message = msg,
+                        senderAvatarUrl = allUsers.firstOrNull { it.email.equals(msg.senderEmail, ignoreCase = true) }?.avatarUrl?.takeIf(String::isNotBlank)
+                            ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(msg.senderEmail, ignoreCase = true) }?.avatarUrl.orEmpty(),
                         isMe = isMe,
                         isPlayingAudio = playingAudioId != null && playingAudioId == msg.attachedAudioId,
                         isSearchMatch = isMatch,
@@ -1679,14 +1681,17 @@ fun ChatScreen(
                             viewModel.startVideoCall(peerName = peerName, peerEmail = pEmail)
                         },
                         onStartDirectChat = { peerEmail, peerName ->
-                            viewModel.startDirectChat(peerEmail, peerName)
+                            val peerAvatar = allUsers.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }?.avatarUrl?.takeIf(String::isNotBlank)
+                                ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }?.avatarUrl.orEmpty()
+                            viewModel.startDirectChat(peerEmail, peerName, peerAvatar)
                         },
                         onViewProfile = { peerEmail, peerName ->
                             val registeredUser = allUsers.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }
+                            val channelMember = activeChannelInfo?.members?.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }
                             selectedUserForInfo = GroupMember(
                                 email = peerEmail,
-                                name = registeredUser?.displayName?.takeIf(String::isNotBlank) ?: peerName,
-                                avatarUrl = registeredUser?.avatarUrl.orEmpty()
+                                name = registeredUser?.displayName?.takeIf(String::isNotBlank) ?: channelMember?.name?.takeIf(String::isNotBlank) ?: peerName,
+                                avatarUrl = registeredUser?.avatarUrl?.takeIf(String::isNotBlank) ?: channelMember?.avatarUrl.orEmpty()
                             )
                             showUserInfoDialog = true
                         },
@@ -1951,8 +1956,8 @@ fun ChatScreen(
             viewModel = viewModel,
             currentUserEmail = currentUserEmail,
             onDismiss = { showStartDirectChatDialog = false },
-            onSelectUser = { email, name ->
-                viewModel.startDirectChat(peerEmail = email, peerName = name)
+            onSelectUser = { email, name, avatar ->
+                viewModel.startDirectChat(peerEmail = email, peerName = name, peerAvatar = avatar)
                 showStartDirectChatDialog = false
             }
         )
@@ -2007,7 +2012,7 @@ fun ChatScreen(
                 selectedUserForInfo = null
             },
             onStartChat = {
-                viewModel.startDirectChat(it.email, it.name)
+                viewModel.startDirectChat(it.email, it.name, it.avatarUrl)
                 showUserInfoDialog = false
                 selectedUserForInfo = null
             },
@@ -2258,6 +2263,7 @@ fun ChatScreen(
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
+    senderAvatarUrl: String = "",
     isMe: Boolean,
     isPlayingAudio: Boolean,
     isSearchMatch: Boolean = false,
@@ -2339,6 +2345,14 @@ private fun MessageBubble(
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
+                        if (senderAvatarUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = senderAvatarUrl,
+                                contentDescription = "Foto de ${message.senderName}",
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
 
