@@ -128,4 +128,5 @@ jobs:
           draft: false
           files: release_asset/app-debug.apk
           fail_on_unmatched_files: true
+          overwrite_files: true
           token: ${{ secrets.GITHUB_TOKEN }}
