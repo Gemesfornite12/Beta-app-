@@ -12,7 +12,12 @@ const MAX_ID_TOKEN_LENGTH = 4096;
 const MAX_ID_LENGTH = 256;
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FIREBASE_IDENTITY_LOOKUP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:lookup";
-const GOOGLE_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_SCOPE = [
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/firebase.database",
+  "https://www.googleapis.com/auth/datastore",
+  "https://www.googleapis.com/auth/firebase.messaging",
+].join(" ");
 
 type FirebaseIdentity = {
   uid: string;
