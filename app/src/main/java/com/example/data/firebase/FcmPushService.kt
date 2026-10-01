@@ -1,6 +1,7 @@
 package com.example.data.firebase
 
 import android.util.Log
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -15,17 +16,22 @@ class FcmPushService : FirebaseMessagingService() {
         Log.d(TAG, "FCM onNewToken received: ${token.take(20)}...")
         ChatNotificationManager.saveFcmToken(applicationContext, token)
 
-        // Sincronizar token con Firestore para el usuario activo
+        // Asociar el token al usuario autenticado, no a una cuenta fija.
+        val userEmail = FirebaseAuth.getInstance().currentUser?.email
+        if (!userEmail.isNullOrBlank()) {
+            FcmTokenManager.syncTokenToFirestore(applicationContext, userEmail, token)
+        }
         try {
-            val db = FirebaseFirestore.getInstance()
             val tokenData = hashMapOf(
                 "fcmToken" to token,
+                "email" to userEmail.orEmpty(),
                 "updatedAt" to System.currentTimeMillis()
             )
-            db.collection("fcm_device_tokens").document(token.hashCode().toString())
+            FirebaseFirestore.getInstance().collection("fcm_device_tokens")
+                .document(token.hashCode().toString())
                 .set(tokenData, SetOptions.merge())
         } catch (e: Exception) {
-            Log.w(TAG, "Error saving token in Firestore: ${e.message}")
+            Log.w(TAG, "Error saving FCM device token: ${e.message}")
         }
     }
 
