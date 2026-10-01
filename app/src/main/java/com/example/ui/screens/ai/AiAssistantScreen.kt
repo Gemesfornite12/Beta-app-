@@ -2,6 +2,7 @@ package com.example.ui.screens.ai
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -370,10 +372,21 @@ fun AiAssistantScreen(
             title = { Text("Resultado de Google Workspace") },
             text = {
                 Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
-                    Text(resultText, color = Color.White, modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(12.dp))
+                    SelectionContainer {
+                        Text(resultText, color = Color.White, modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(12.dp))
+                    }
                 }
             },
-            confirmButton = { TextButton(onClick = { workspaceActionResult = null }) { Text("Cerrar") } }
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Resultado de Google Workspace", resultText))
+                        Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
+                    }) { Text("Copiar") }
+                    TextButton(onClick = { workspaceActionResult = null }) { Text("Cerrar") }
+                }
+            }
         )
     }
 
