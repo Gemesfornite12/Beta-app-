@@ -38,4 +38,34 @@ class GoogleWorkspaceCommandParserTest {
         assertEquals("ABCDE", parsed.request.values["messageId"])
         assertEquals(true, parsed.request.type.irreversible)
     }
+
+    @Test
+    fun shortCommandsOpenTheRightFormsAndUseTrashByDefault() {
+        val mail = GoogleWorkspaceCommandParser.parse("Borrar correo ABCDE")
+        val drive = GoogleWorkspaceCommandParser.parse("Borrar archivo FGHIJ")
+        val events = GoogleWorkspaceCommandParser.parse("Eventos")
+        val labels = GoogleWorkspaceCommandParser.parse("Etiquetas")
+        val drafts = GoogleWorkspaceCommandParser.parse("Borradores")
+        requireNotNull(mail)
+        requireNotNull(drive)
+        requireNotNull(events)
+        requireNotNull(labels)
+        requireNotNull(drafts)
+        assertEquals(GoogleWorkspaceActionType.TRASH_EMAIL, mail.request.type)
+        assertEquals("ABCDE", mail.request.values["messageId"])
+        assertEquals(GoogleWorkspaceActionType.TRASH_DRIVE, drive.request.type)
+        assertEquals("FGHIJ", drive.request.values["fileId"])
+        assertEquals(GoogleWorkspaceActionType.LIST_EVENTS, events.request.type)
+        assertEquals(GoogleWorkspaceActionType.LIST_LABELS, labels.request.type)
+        assertEquals(GoogleWorkspaceActionType.LIST_DRAFTS, drafts.request.type)
+    }
+
+    @Test
+    fun simplePermanentDeleteWordsStillRequireExplicitIntent() {
+        val parsed = GoogleWorkspaceCommandParser.parse("Borrar permanentemente correo ABCDE")
+        requireNotNull(parsed)
+        assertEquals(GoogleWorkspaceActionType.DELETE_EMAIL, parsed.request.type)
+        assertEquals("ABCDE", parsed.request.values["messageId"])
+        assertEquals(true, parsed.request.type.irreversible)
+    }
 }
