@@ -80,14 +80,19 @@ async function verifyFirebaseIdToken(idToken: string, apiKey: string): Promise<F
   return { uid, email };
 }
 
-function decodePrivateKey(pem: string): Uint8Array {
+function decodePrivateKey(pem: string): ArrayBuffer {
   const clean = pem
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
     .replace(/-----END PRIVATE KEY-----/g, "")
     .replace(/\\n/g, "\n")
     .replace(/\s/g, "");
   const binary = atob(clean);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const buffer = new ArrayBuffer(binary.length);
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return buffer;
 }
 
 function base64Url(bytes: Uint8Array): string {
