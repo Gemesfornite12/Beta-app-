@@ -71,6 +71,15 @@ jobs:
       - name: Run connector and media-routing tests
         run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --stacktrace
 
+      - name: Upload unit test report after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-report
+          path: source/Beta-app--main/app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Upload real-connection test APK (24h)
         uses: actions/upload-artifact@v4
         with:
