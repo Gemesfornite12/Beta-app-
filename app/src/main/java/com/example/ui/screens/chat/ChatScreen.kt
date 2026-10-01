@@ -205,7 +205,7 @@ fun ChatScreen(
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
     // Estados para adjuntos pendientes (pre-envío) que el usuario puede revisar o borrar
-    var pendingMediaType by remember { mutableStateOf<String?>(null) } // "image", "video", "gif"
+    var pendingMediaType by remember { mutableStateOf<String?>(null) } // "image", "video", "audio", "document", "gif"
     var pendingMediaUrl by remember { mutableStateOf<String?>(null) }
     var pendingMediaTitle by remember { mutableStateOf<String?>(null) }
     var pendingDocItem by remember { mutableStateOf<com.example.data.model.DocumentItem?>(null) }
@@ -1321,6 +1321,22 @@ fun ChatScreen(
                                             )
                                         }
                                     }
+                                    pendingMediaType == "audio" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = "Audio seleccionado",
+                                            tint = Color(0xFFA855F7),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    pendingMediaType == "document" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.AttachFile,
+                                            contentDescription = "Archivo seleccionado",
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                     pendingDocItem != null -> {
                                         Icon(
                                             imageVector = Icons.Default.Description,
@@ -1349,6 +1365,8 @@ fun ChatScreen(
                                     pendingMediaType == "video" -> "🎥 Video listo para enviar"
                                     pendingMediaType == "gif" -> "🎭 GIF listo para enviar"
                                     pendingMediaType == "youtube" -> "▶️ Video de YouTube listo para enviar"
+                                    pendingMediaType == "audio" -> "🎵 Música / audio listo para enviar"
+                                    pendingMediaType == "document" -> "📁 Archivo listo para enviar"
                                     pendingDocItem != null -> "📁 Documento listo para enviar"
                                     pendingAudioProject != null -> "🎵 Audio del estudio listo para enviar"
                                     else -> "Adjunto listo"
@@ -1534,7 +1552,7 @@ fun ChatScreen(
                                                 viewModel.sendMediaMessage(
                                                     mediaType = pendingMediaType!!,
                                                     mediaUrl = selectedMediaUrl,
-                                                    caption = chatInput
+                                                    caption = chatInput.ifBlank { pendingMediaTitle.orEmpty() }
                                                 )
                                                 viewModel.onChatInputChanged("")
                                                 submitted = true
@@ -2746,6 +2764,50 @@ private fun MessageBubble(
                                 .clip(RoundedCornerShape(12.dp))
                                 .testTag("msg_video_${message.id}")
                         )
+                    }
+
+                    // Reproductor/abridor de archivos de música subidos al chat.
+                    if (message.mediaType == "audio" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        setDataAndType(android.net.Uri.parse(message.mediaUrl.orEmpty()), "audio/*")
+                                    }
+                                    runCatching { context.startActivity(intent) }
+                                }
+                                .border(1.dp, Color(0xFFA855F7).copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .testTag("msg_audio_${message.id}")
+                        ) {
+                            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color(0xFF9333EA),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = message.text.takeIf { it.isNotBlank() } ?: "Audio adjunto",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text("Toca para reproducir o abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                }
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir audio", tint = Color(0xFFA855F7))
+                            }
+                        }
                     }
 
                     // Renderizado de GIFs y Stickers animados
