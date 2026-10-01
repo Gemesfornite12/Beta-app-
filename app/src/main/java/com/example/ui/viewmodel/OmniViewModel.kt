@@ -1174,6 +1174,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     if (_mediaSendState.value.phase == "error") {
                         _mediaSendState.value = MediaSendUiState(phase = "idle")
                     }
+                } else if (_mediaSendState.value.phase == "uploading") {
+                    // The service may stop or be reclaimed before emitting success/error.
+                    // Do not leave the composer stuck at 90% after the upload is no longer active.
+                    _mediaSendState.value = MediaSendUiState(phase = "idle")
                 }
             }
         }
