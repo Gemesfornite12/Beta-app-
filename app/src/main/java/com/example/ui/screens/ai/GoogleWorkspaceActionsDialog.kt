@@ -11,7 +11,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
 internal data class WorkspaceActionField(
@@ -74,12 +73,17 @@ internal data class GoogleWorkspaceActionRequest(
 @Composable
 internal fun GoogleWorkspaceActionsDialog(
     onDismiss: () -> Unit,
-    onRun: (GoogleWorkspaceActionRequest) -> Unit
+    onRun: (GoogleWorkspaceActionRequest) -> Unit,
+    initialRequest: GoogleWorkspaceActionRequest? = null,
+    requestText: String? = null
 ) {
-    val context = LocalContext.current
-    var selected by remember { mutableStateOf<GoogleWorkspaceActionType?>(null) }
-    var search by remember { mutableStateOf("") }
-    var values by remember(selected) { mutableStateOf(selected?.fields?.associate { it.key to it.defaultValue }.orEmpty()) }
+    var selected by remember(initialRequest?.type) { mutableStateOf(initialRequest?.type) }
+    var search by remember(initialRequest?.type) { mutableStateOf("") }
+    var values by remember(selected, initialRequest) {
+        mutableStateOf(selected?.fields?.associate { field ->
+            field.key to (initialRequest?.values?.get(field.key)?.takeIf(String::isNotBlank) ?: field.defaultValue)
+        }.orEmpty())
+    }
     var fileUri by remember(selected) { mutableStateOf<Uri?>(null) }
     var preview by remember { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
@@ -99,13 +103,20 @@ internal fun GoogleWorkspaceActionsDialog(
         title = { Text("Google Workspace · pruebas") },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+                requestText?.let {
+                    Text("Entendí: ${it.take(260)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Revisa y completa los datos; no se ejecutará nada sin tu confirmación.", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text("Elige una acción. Las modificaciones muestran una vista previa antes de autorizar.", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(search, { search = it }, label = { Text("Filtrar acciones") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                LazyColumn(Modifier.heightIn(max = 150.dp).fillMaxWidth()) {
-                    items(GoogleWorkspaceActionType.entries.filter { it.title.contains(search, ignoreCase = true) }.toList()) { action ->
-                        TextButton(onClick = { selected = action; search = "" }, modifier = Modifier.fillMaxWidth()) {
-                            Text(action.title, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(search, { search = it }, label = { Text("Filtrar o cambiar acción") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (selected == null || search.isNotBlank()) {
+                    LazyColumn(Modifier.heightIn(max = 150.dp).fillMaxWidth()) {
+                        items(GoogleWorkspaceActionType.entries.filter { it.title.contains(search, ignoreCase = true) }.toList()) { action ->
+                            TextButton(onClick = { selected = action; search = "" }, modifier = Modifier.fillMaxWidth()) {
+                                Text(action.title, modifier = Modifier.fillMaxWidth())
+                            }
                         }
                     }
                 }
