@@ -93,6 +93,13 @@ internal fun GoogleWorkspaceActionsDialog(
         val action = selected ?: run { validationError = "Elige una acción."; return null }
         val missing = action.fields.firstOrNull { it.required && values[it.key].isNullOrBlank() }
         if (missing != null) { validationError = "Completa: ${missing.label}."; return null }
+        val reservedIds = setOf("id", "permanentemente", "definitivamente", "consulta", "nombre", "correo", "archivo", "evento")
+        val placeholder = action.fields.firstOrNull { field ->
+            val value = values[field.key].orEmpty().trim()
+            value.matches(Regex("\\[[^\\]]+\\]")) ||
+                (field.key.endsWith("id", ignoreCase = true) && value.lowercase() in reservedIds)
+        }
+        if (placeholder != null) { validationError = "Reemplaza el marcador por un dato real: ${placeholder.label}."; return null }
         if (action.needsFile && fileUri == null) { validationError = "Elige un archivo primero."; return null }
         validationError = null
         return GoogleWorkspaceActionRequest(action, values, fileUri)
