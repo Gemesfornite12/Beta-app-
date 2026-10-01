@@ -30,6 +30,26 @@ internal object GoogleWorkspaceCommandParser {
         !request.type.changesData && !request.type.needsFile &&
             request.type.fields.filter { it.required }.all { !request.values[it.key].isNullOrBlank() }
 
+    fun shouldTranslatePotentialWorkspaceCommand(text: String): Boolean {
+        if (text.length > 1200) return false
+        val normalized = normalize(text)
+        val serviceTerms = listOf(
+            "gmail", "google calendar", "calendar", "calendario", "calendrier", "kalender", "agenda",
+            "google drive", "drive", "correo", "email", "e-mail", "mail", "courriel", "courrier",
+            "archivo", "documento", "document", "fichier", "ficheiro", "datei", "file",
+            "evento", "event", "evenement", "appointment", "cita", "etiqueta", "label", "draft", "borrador"
+        )
+        val actionTerms = listOf(
+            "create", "add", "make", "set up", "send", "search", "find", "read", "open", "delete", "trash", "upload", "download", "schedule", "edit", "move",
+            "crear", "agregar", "agrega", "anadir", "nuevo", "enviar", "buscar", "leer", "abrir", "eliminar", "borrar", "subir", "descargar", "agendar", "editar",
+            "ajouter", "creer", "envoyer", "chercher", "rechercher", "lire", "ouvrir", "supprimer", "televerser", "telecharger", "modifier",
+            "criar", "adicionar", "enviar", "buscar", "ler", "abrir", "apagar", "excluir", "baixar", "editar",
+            "erstellen", "hinzufugen", "senden", "suchen", "lesen", "offnen", "loschen", "hochladen", "herunterladen", "bearbeiten",
+            "aggiungi", "invia", "cerca", "leggi", "apri", "elimina", "carica", "scarica"
+        )
+        return serviceTerms.any { normalized.contains(it) } && actionTerms.any { normalized.contains(it) }
+    }
+
     fun parse(text: String): ParsedWorkspaceCommand? {
         if (isReferenceOrBatch(text)) return null
         val normalized = normalize(text)
@@ -88,8 +108,15 @@ internal object GoogleWorkspaceCommandParser {
         // Calendar.
         if (has("listar calendarios", "mostrar calendarios", "ver calendarios", "calendarios", "list calendars"))
             return request(GoogleWorkspaceActionType.LIST_CALENDARS)
-        if (has("crear calendario", "nuevo calendario", "create calendar")) {
-            val title = Regex("(?:calendario)\\s+(?:llamado\\s+|con nombre\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val calendarCreationIntent = Regex("\\b(?:crear|crea|agregar|agrega|anadir|adicionar|criar|add|new|create|ajouter|creer)\\s+(?:(?:un|una|a|the|le|la)\\s+)?(?:(?:nuevo|nueva|new|nouveau)\\s+)?(?:calendario|caladario|calendar|calendrier|kalender)\\b")
+            .containsMatchIn(normalized)
+        if (calendarCreationIntent || has(
+                "crear calendario", "nuevo calendario", "create calendar", "add calendar", "new calendar",
+                "agregar calendario", "agrega calendario", "anadir calendario", "ajouter calendrier",
+                "creer calendrier", "adicionar calendario", "criar calendario"
+            )) {
+            val title = Regex("(?:calendario|caladario|calendar|calendrier|kalender)\\s+(?:(?:llamado|llamada|con nombre|named|called)\\s+)?(.+)$", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
             return request(GoogleWorkspaceActionType.CREATE_CALENDAR, mapOf("summary" to title, "timeZone" to "America/Costa_Rica"))
         }
         if (has("disponibilidad", "libre ocupado", "free busy", "free/busy"))
@@ -98,7 +125,13 @@ internal object GoogleWorkspaceCommandParser {
             return request(GoogleWorkspaceActionType.DELETE_EVENT, mapOf("eventId" to id))
         if (has("editar evento", "actualizar evento", "update event"))
             return request(GoogleWorkspaceActionType.UPDATE_EVENT, mapOf("eventId" to id))
-        if (has("crear evento", "crea evento", "crea un evento", "agendar", "programar evento", "create event"))
+        val eventCreationIntent = Regex("\\b(?:crear|crea|agregar|agrega|anadir|adicionar|criar|add|create|schedule|programar|agendar|ajouter|creer)\\s+(?:(?:un|una|a|an|the|le|la)\\s+)?(?:(?:nuevo|nueva|new)\\s+)?(?:evento|event|cita|appointment|evenement)\\b")
+            .containsMatchIn(normalized)
+        if (eventCreationIntent || has(
+                "crear evento", "crea evento", "crea un evento", "agregar evento", "agrega evento", "anadir evento",
+                "crear cita", "agregar cita", "agendar cita", "programar cita", "agendar", "programar evento",
+                "create event", "add event", "schedule event", "create appointment", "schedule appointment"
+            ))
             return request(GoogleWorkspaceActionType.CREATE_EVENT, mapOf("timeZone" to "America/Costa_Rica"))
         if (has("buscar eventos", "listar eventos", "mostrar eventos", "ver eventos", "eventos", "search events", "list events"))
             return request(GoogleWorkspaceActionType.LIST_EVENTS, mapOf("calendarId" to "primary"))
@@ -135,4 +168,7 @@ internal object GoogleWorkspaceCommandParser {
     private fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
         .replace(Regex("\\p{Mn}+"), "")
         .lowercase(Locale.ROOT)
+        .replace(Regex("\\bcaladario\\b"), "calendario")
+        .replace(Regex("\\bcalendairo\\b"), "calendario")
+        .replace(Regex("\\bcalendarioo\\b"), "calendario")
 }
