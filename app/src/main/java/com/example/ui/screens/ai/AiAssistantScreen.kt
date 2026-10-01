@@ -323,9 +323,13 @@ fun AiAssistantScreen(
                 } else {
                     val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
                     if (workspaceCommand != null) {
-                        workspaceActionInitialRequest = workspaceCommand.request
-                        workspaceActionPrompt = workspaceCommand.originalText
-                        showGoogleWorkspaceActions = true
+                        if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(workspaceCommand.request)) {
+                            requestGoogleWorkspaceAction(workspaceCommand.request)
+                        } else {
+                            workspaceActionInitialRequest = workspaceCommand.request
+                            workspaceActionPrompt = workspaceCommand.originalText
+                            showGoogleWorkspaceActions = true
+                        }
                     } else {
                         val saveCandidate = saraSaveCandidate(message)
                         if (selectedConnectorIds.isEmpty()) {
