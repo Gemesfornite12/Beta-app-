@@ -427,7 +427,7 @@ fun StartDirectChatDialog(
     viewModel: OmniViewModel,
     currentUserEmail: String,
     onDismiss: () -> Unit,
-    onSelectUser: (userEmail: String, userName: String) -> Unit
+    onSelectUser: (userEmail: String, userName: String, userAvatar: String) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val allUsers by viewModel.allUsers.collectAsState()
@@ -566,7 +566,7 @@ fun StartDirectChatDialog(
                             color = Color(0xFF0F172A),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSelectUser(user.email, uName) }
+                                .clickable { onSelectUser(user.email, uName, user.avatarUrl) }
                                 .testTag("btn_select_user_direct_${user.email}")
                         ) {
                             Row(
@@ -1382,6 +1382,14 @@ fun UserInfoDialog(
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
+                        if (user.avatarUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = user.avatarUrl,
+                                contentDescription = "Foto de perfil de ${user.name}",
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
 
@@ -1412,7 +1420,8 @@ fun UserInfoDialog(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { onStartChat(user) },
+                            .clickable { onStartChat(user) }
+                            .testTag("btn_user_profile_private_chat"),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Surface(
@@ -1425,7 +1434,7 @@ fun UserInfoDialog(
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Mensaje", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text("Chat privado", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                     }
 
                     // Botón Llamada
