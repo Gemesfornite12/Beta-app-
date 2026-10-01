@@ -1,6 +1,7 @@
 package com.example.data.firebase
 
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.firebase.ChannelInfo
 import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
@@ -313,6 +314,7 @@ class RealtimeDatabaseService {
         val messageData = mapOf(
             "messageId" to docId,
             "senderId" to user.uid,
+            "pushEnvironment" to if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production",
             "senderName" to message.senderName,
             "senderEmail" to message.senderEmail,
             "text" to message.text,
