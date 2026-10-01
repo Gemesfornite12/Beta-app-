@@ -2,6 +2,7 @@ package com.example.ui.screens.ai
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GoogleWorkspaceCommandParserTest {
@@ -67,5 +68,27 @@ class GoogleWorkspaceCommandParserTest {
         assertEquals(GoogleWorkspaceActionType.DELETE_EMAIL, parsed.request.type)
         assertEquals("ABCDE", parsed.request.values["messageId"])
         assertEquals(true, parsed.request.type.irreversible)
+    }
+
+    @Test
+    fun pastedCommandCatalogIsRejectedAsBatch() {
+        val catalog = """GMAIL
+Buscar correos [consulta]
+Borrar correo [ID]
+Borrar correo permanentemente [ID]
+CALENDAR
+Eventos
+DRIVE
+Borrar archivo permanentemente [ID]"""
+        assertTrue(GoogleWorkspaceCommandParser.isReferenceOrBatch(catalog))
+        assertNull(GoogleWorkspaceCommandParser.parse(catalog))
+    }
+
+    @Test
+    fun permanentWordCannotBecomeAnEmailId() {
+        val parsed = GoogleWorkspaceCommandParser.parse("Borrar correo permanentemente")
+        requireNotNull(parsed)
+        assertEquals(GoogleWorkspaceActionType.DELETE_EMAIL, parsed.request.type)
+        assertEquals("", parsed.request.values["messageId"])
     }
 }
