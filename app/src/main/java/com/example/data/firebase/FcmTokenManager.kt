@@ -117,9 +117,11 @@ object FcmTokenManager {
             } else {
                 FirebaseFirestore.getInstance()
             }
-            val cleanEmail = userEmail.replace(".", "_").replace("@", "_at_")
+            val normalizedEmail = userEmail.trim().lowercase()
+            val cleanEmail = normalizedEmail.replace(".", "_").replace("@", "_at_")
             val data = hashMapOf(
-                "email" to userEmail,
+                "email" to normalizedEmail,
+                "appId" to (context?.packageName ?: ""),
                 "fcmToken" to token,
                 "lastTokenRefresh" to System.currentTimeMillis(),
                 "platform" to "Android",
