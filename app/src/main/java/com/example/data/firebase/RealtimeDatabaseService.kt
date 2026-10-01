@@ -408,8 +408,8 @@ class RealtimeDatabaseService {
     suspend fun createOrGetDirectChat(targetEmail: String, targetName: String): String {
         val user = auth.currentUser ?: error("Usuario no autenticado")
         val myEmail = user.email ?: ""
-        val safeMy = myEmail.replace(".", "_")
-        val safeTarget = targetEmail.replace(".", "_")
+        val safeMy = myEmail.replace(".", "_").replace("@", "_at_")
+        val safeTarget = targetEmail.replace(".", "_").replace("@", "_at_")
         val directChatId = if (safeMy < safeTarget) "direct_${safeMy}_$safeTarget" else "direct_${safeTarget}_$safeMy"
 
         val chatData = mapOf(
