@@ -78,7 +78,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.AudioProject
-import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
 
 private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -330,7 +329,8 @@ fun MediaPickerSheet(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            onSendMedia("image", uri.toString(), "📷 Foto seleccionada desde el dispositivo")
+            val fileName = getFileNameFromUri(context, uri)
+            onSendMedia("image", uri.toString(), "📷 $fileName")
             onDismiss()
         }
     }
@@ -340,28 +340,19 @@ fun MediaPickerSheet(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            onSendMedia("video", uri.toString(), "🎥 Video seleccionado desde el dispositivo")
+            val fileName = getFileNameFromUri(context, uri)
+            onSendMedia("video", uri.toString(), "🎥 $fileName")
             onDismiss()
         }
     }
 
-    // Audio/Music Picker nativo de Android
+    // Audio/Music Picker nativo: sube el archivo real, no solo metadatos del proyecto.
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             val fileName = getFileNameFromUri(context, uri)
-            val audioProj = AudioProject(
-                id = System.currentTimeMillis(),
-                title = fileName,
-                description = "Archivo de audio seleccionado desde almacenamiento local",
-                genre = "Audio Local",
-                bpm = 120,
-                patternDataJson = "[]",
-                authorEmail = "local",
-                isPublic = true
-            )
-            onSendAudio(audioProj)
+            onSendMedia("audio", uri.toString(), "🎵 $fileName")
             onDismiss()
         }
     }
@@ -390,37 +381,8 @@ fun MediaPickerSheet(
                 isImage -> {
                     onSendMedia("image", uri.toString(), "📷 $fileName")
                 }
-                isAudio -> {
-                    val audioProj = AudioProject(
-                        id = System.currentTimeMillis(),
-                        title = fileName,
-                        description = "Archivo de audio seleccionado desde almacenamiento local",
-                        genre = "Audio Local",
-                        bpm = 120,
-                        patternDataJson = "[]",
-                        authorEmail = "local",
-                        isPublic = true
-                    )
-                    onSendAudio(audioProj)
-                }
-                else -> {
-                    val format = when (ext) {
-                        "pdf" -> DocumentFormat.PDF
-                        "docx", "doc" -> DocumentFormat.DOCX
-                        "md" -> DocumentFormat.MARKDOWN
-                        "html" -> DocumentFormat.HTML
-                        "txt" -> DocumentFormat.TXT
-                        else -> DocumentFormat.TXT
-                    }
-                    val docItem = DocumentItem(
-                        id = System.currentTimeMillis(),
-                        title = fileName,
-                        content = "Archivo adjunto enviado desde el almacenamiento local: $uri",
-                        currentFormat = format,
-                        authorEmail = "local"
-                    )
-                    onSendDoc(docItem)
-                }
+                isAudio -> onSendMedia("audio", uri.toString(), "🎵 $fileName")
+                else -> onSendMedia("document", uri.toString(), "📁 $fileName")
             }
             onDismiss()
         }
@@ -1339,7 +1301,7 @@ fun MediaPickerSheet(
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
                                             Text("Elegir archivo del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text("Documentos PDF, Word, ZIP, Markdown, TXT", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                            Text("PDF, Word, ZIP, música y otros archivos (máx. 50 MB)", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         }
                                     }
                                 }
