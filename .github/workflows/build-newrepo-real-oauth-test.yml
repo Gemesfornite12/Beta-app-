@@ -11,6 +11,12 @@ on:
       - 'app/src/test/**'
       - 'gradle/libs.versions.toml'
   workflow_dispatch:
+    inputs:
+      publish_direct_apk:
+        description: Publish the isolated test APK as a public direct-download prerelease
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,3 +101,31 @@ jobs:
       - name: Remove Firebase config and signing material
         if: always()
         run: rm -f app/google-services.json test-signing.p12 debug.keystore
+
+  publish-direct-test-apk:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_direct_apk == true
+    needs: build-test-apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the freshly built .test APK
+        uses: actions/download-artifact@v4
+        with:
+          name: omnistudio-real-oauth-test-apk
+          path: release_asset
+
+      - name: Publish a separate test-only prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zapia-workspace-chat-test-20260930
+          name: OmniStudio Workspace chat .test APK (2026-09-30)
+          body: |-
+            Temporary test-only download for the isolated OmniStudio .test branch.
+            This is not the public production APK or a Play Store release.
+          target_commitish: zapia/test-newrepo-real-oauth-20260930
+          prerelease: true
+          draft: false
+          files: release_asset/app-debug.apk
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
