@@ -6,6 +6,12 @@
         ".write": "auth != null && auth.uid == $uid"
       }
     },
+    "ultimate": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('social_test/profiles').child($uid).child('visibility').val() == 'public')",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
     "chats": {
       ".read": "auth != null",
       "$chatId": {
