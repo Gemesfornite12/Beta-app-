@@ -12,6 +12,14 @@
         ".write": "auth != null"
       }
     },
+    "calls": {
+      ".read": "auth != null",
+      "$channelId": {
+        "$callId": {
+          ".write": "auth != null && ((newData.exists() && newData.child('pushEnvironment').val() == 'test') || (!newData.exists() && data.child('pushEnvironment').val() == 'test'))"
+        }
+      }
+    },
     "presence": {
       "$chatId": {
         ".read": "auth != null",
