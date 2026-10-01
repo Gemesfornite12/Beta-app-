@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.TextFields
@@ -103,7 +104,8 @@ fun HomeScreen(
     onOpenChat: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenAiAssistant: () -> Unit,
-    onOpenMaps: () -> Unit
+    onOpenMaps: () -> Unit,
+    onOpenSocial: () -> Unit
 ) {
     val authState by viewModel.authUiState.collectAsState()
     val documents by viewModel.documents.collectAsState()
@@ -396,7 +398,13 @@ fun HomeScreen(
                         modifier = Modifier.weight(1f),
                         onClick = onOpenMaps
                     )
-                    Spacer(modifier = Modifier.weight(1f))
+                    QuickToolItem(
+                        icon = Icons.Default.Share,
+                        label = "Social",
+                        bgColor = Color(0xFFE1306C),
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenSocial
+                    )
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }

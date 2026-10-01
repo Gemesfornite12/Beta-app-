@@ -102,6 +102,15 @@ enum class HashRoute(
         accentColor = Color(0xFF6366F1),
         description = "Dashboard principal y archivos recientes"
     ),
+    SOCIAL(
+        hash = "#/social",
+        routeKey = "social",
+        displayName = "Red Social",
+        shortName = "Social",
+        icon = Icons.Default.Share,
+        accentColor = Color(0xFFE1306C),
+        description = "Publicaciones, perfiles, historias y recomendaciones"
+    ),
     DOC_EDITOR(
         hash = "#/editor",
         routeKey = "doc_editor",
@@ -175,6 +184,7 @@ enum class HashRoute(
                 .trim()
 
             return when {
+                normalized.contains("social") -> SOCIAL
                 normalized.contains("editor") || normalized.contains("doc") -> DOC_EDITOR
                 normalized.contains("music") || normalized.contains("beat") || normalized.contains("studio") -> MUSIC_STUDIO
                 normalized.contains("chat") || normalized.contains("msg") -> CHAT
@@ -297,6 +307,7 @@ fun HashRouterDock(
 
     val primaryDestinations = listOf(
         HashRoute.HOME,
+        HashRoute.SOCIAL,
         HashRoute.DOC_EDITOR,
         HashRoute.MUSIC_STUDIO,
         HashRoute.CHAT

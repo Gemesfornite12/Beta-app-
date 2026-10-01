@@ -51,6 +51,7 @@ import com.example.ui.screens.music.MusicStudioScreen
 import com.example.ui.screens.profile.ProfileScreen
 import com.example.ui.screens.ai.AiAssistantScreen
 import com.example.ui.screens.maps.MapsScreen
+import com.example.ui.screens.social.SocialScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.OmniViewModel
 import coil.Coil
@@ -300,6 +301,9 @@ fun OmniStudioApp(
                 },
                 onOpenMaps = {
                   hashRouter.push(HashRoute.MAPS)
+                },
+                onOpenSocial = {
+                  hashRouter.push(HashRoute.SOCIAL)
                 }
               )
             }
@@ -364,6 +368,15 @@ fun OmniStudioApp(
 
             HashRoute.AI_ASSISTANT -> {
               AiAssistantScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                }
+              )
+            }
+
+            HashRoute.SOCIAL -> {
+              SocialScreen(
                 viewModel = viewModel,
                 onBack = {
                   if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)

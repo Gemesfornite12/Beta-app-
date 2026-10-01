@@ -1,0 +1,687 @@
+package com.example.ui.screens.social
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.data.social.SocialFollowRequest
+import com.example.data.social.SocialPost
+import com.example.data.social.SocialProfile
+import com.example.data.social.SocialRepository
+import com.example.ui.viewmodel.OmniViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private enum class SocialSection(val label: String) {
+    FOR_YOU("Para ti"), FOLLOWING("Siguiendo"), SEARCH("Buscar"), PROFILE("Perfil")
+}
+
+@Composable
+fun SocialScreen(
+    viewModel: OmniViewModel,
+    onBack: () -> Unit
+) {
+    val authState by viewModel.authUiState.collectAsState()
+    val currentUser = authState.currentUser
+    val context = LocalContext.current
+    val repository = remember(context) { SocialRepository(context) }
+    val scope = rememberCoroutineScope()
+
+    var myProfile by remember { mutableStateOf<SocialProfile?>(null) }
+    var viewingProfile by remember { mutableStateOf<SocialProfile?>(null) }
+    var profilePosts by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
+    var feed by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
+    var searchResults by remember { mutableStateOf<List<SocialProfile>>(emptyList()) }
+    var followRequests by remember { mutableStateOf<List<SocialFollowRequest>>(emptyList()) }
+    var followedState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var selectedSection by remember { mutableStateOf(SocialSection.FOR_YOU) }
+    var searchQuery by remember { mutableStateOf("") }
+    var newPostText by remember { mutableStateOf("") }
+    var showCreatePost by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val likedPosts = remember { mutableStateMapOf<String, Boolean>() }
+
+    fun postKey(post: SocialPost) = "${post.ownerUid}:${post.id}"
+
+    suspend fun refreshFeed() {
+        val items = repository.loadFeed(followingOnly = selectedSection == SocialSection.FOLLOWING)
+        feed = items
+        items.take(40).forEach { post ->
+            likedPosts[postKey(post)] = runCatching { repository.likedByCurrentUser(post) }.getOrDefault(false)
+        }
+    }
+
+    LaunchedEffect(currentUser?.uid) {
+        if (currentUser == null) {
+            errorMessage = "Inicia sesión para usar Social."
+            isLoading = false
+            return@LaunchedEffect
+        }
+        isLoading = true
+        errorMessage = null
+        try {
+            myProfile = repository.ensureCurrentProfile(
+                displayNameHint = currentUser.displayName,
+                emailHint = currentUser.email,
+                avatarUrlHint = currentUser.avatarUrl
+            )
+            followRequests = repository.pendingFollowRequests()
+            isLoading = false
+        } catch (error: Exception) {
+            errorMessage = error.message ?: "No se pudo cargar tu perfil social."
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(selectedSection, myProfile?.uid) {
+        if (myProfile == null || (selectedSection != SocialSection.FOR_YOU && selectedSection != SocialSection.FOLLOWING)) return@LaunchedEffect
+        try {
+            refreshFeed()
+            errorMessage = null
+        } catch (error: Exception) {
+            errorMessage = "No se pudo cargar el feed. Verifica la conexión y las reglas de Social."
+        }
+    }
+
+    LaunchedEffect(searchQuery, selectedSection) {
+        if (selectedSection != SocialSection.SEARCH) return@LaunchedEffect
+        delay(250)
+        if (searchQuery.isBlank()) {
+            searchResults = emptyList()
+        } else {
+            try {
+                searchResults = repository.searchProfiles(searchQuery)
+                val ownUid = myProfile?.uid
+                val statuses = mutableMapOf<String, String>()
+                for (target in searchResults) {
+                    statuses[target.uid] = if (target.uid == ownUid) "self" else repository.followStatus(target.uid).orEmpty()
+                }
+                followedState = statuses
+            } catch (error: Exception) {
+                errorMessage = "No se pudo buscar perfiles."
+            }
+        }
+    }
+
+    BackHandler(enabled = viewingProfile != null) {
+        viewingProfile = null
+        profilePosts = emptyList()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF080D19))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = if (viewingProfile != null) {
+                    { viewingProfile = null; profilePosts = emptyList() }
+                } else onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
+                }
+                Column {
+                    Text("Social", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("Tu comunidad en OmniStudio", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                }
+            }
+            Row {
+                IconButton(onClick = {
+                    scope.launch {
+                        runCatching { refreshFeed() }
+                            .onFailure { errorMessage = "No se pudo actualizar el feed." }
+                    }
+                }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Actualizar", tint = Color(0xFFCBD5E1))
+                }
+                IconButton(
+                    onClick = { showCreatePost = true },
+                    modifier = Modifier.testTag("social_create_post")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Crear publicación", tint = Color(0xFFF472B6))
+                }
+            }
+        }
+
+        if (viewingProfile == null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SocialSection.values().forEach { section ->
+                    val selected = selectedSection == section
+                    Surface(
+                        color = if (selected) Color(0xFF4C1D3D) else Color(0xFF151C2C),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { selectedSection = section }
+                    ) {
+                        Text(
+                            text = section.label,
+                            color = if (selected) Color(0xFFF9A8D4) else Color(0xFFCBD5E1),
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 10.dp)
+                                .testTag("social_tab_${section.name.lowercase()}")
+                        )
+                    }
+                }
+            }
+        }
+
+        errorMessage?.let { message ->
+            Surface(
+                color = Color(0xFF3B1D2A),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Text(message, color = Color(0xFFFDA4AF), fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+            }
+        }
+
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color(0xFFE1306C))
+            }
+        } else if (viewingProfile != null) {
+            ViewedProfileContent(
+                profile = viewingProfile!!,
+                posts = profilePosts,
+                followStatus = followedState[viewingProfile!!.uid].orEmpty(),
+                onFollow = {
+                    viewingProfile?.let { target ->
+                        scope.launch {
+                            try {
+                                if (followedState[target.uid] == "accepted" || followedState[target.uid] == "pending") {
+                                    repository.unfollow(target.uid)
+                                    followedState = followedState + (target.uid to "")
+                                } else {
+                                    repository.follow(target)
+                                    followedState = followedState + (target.uid to if (target.isPrivate) "pending" else "accepted")
+                                }
+                            } catch (error: Exception) {
+                                errorMessage = error.message ?: "No se pudo actualizar el seguimiento."
+                            }
+                        }
+                    }
+                }
+            )
+        } else {
+            when (selectedSection) {
+                SocialSection.FOR_YOU, SocialSection.FOLLOWING -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (selectedSection == SocialSection.FOR_YOU) {
+                            item {
+                                StoriesPlaceholder(
+                                    profile = myProfile,
+                                    onAddStory = { errorMessage = "La carga privada de historias se está preparando para la siguiente etapa." }
+                                )
+                            }
+                        }
+                        if (feed.isEmpty()) {
+                            item { EmptySocialFeed(isFollowing = selectedSection == SocialSection.FOLLOWING, onCreate = { showCreatePost = true }) }
+                        } else {
+                            items(feed, key = { postKey(it) }) { post ->
+                                SocialPostCard(
+                                    post = post,
+                                    liked = likedPosts[postKey(post)] == true,
+                                    onLike = {
+                                        scope.launch {
+                                            val next = likedPosts[postKey(post)] != true
+                                            runCatching { repository.setLiked(post, next) }
+                                                .onSuccess { likedPosts[postKey(post)] = next }
+                                                .onFailure { errorMessage = "No se pudo guardar el like." }
+                                        }
+                                    },
+                                    onAuthorClick = {
+                                        scope.launch {
+                                            try {
+                                                val loadedProfile = repository.getProfile(post.ownerUid)
+                                                viewingProfile = loadedProfile ?: SocialProfile(
+                                                    uid = post.ownerUid,
+                                                    username = post.username,
+                                                    displayName = post.displayName,
+                                                    avatarUrl = post.avatarUrl
+                                                )
+                                                profilePosts = repository.loadProfilePosts(post.ownerUid)
+                                                followedState = followedState + (post.ownerUid to repository.followStatus(post.ownerUid).orEmpty())
+                                            } catch (error: Exception) {
+                                                errorMessage = "No se pudo abrir ese perfil."
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        item { Spacer(Modifier.size(12.dp)) }
+                    }
+                }
+
+                SocialSection.SEARCH -> {
+                    Column(Modifier.fillMaxSize()) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
+                                .testTag("social_search_query"),
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFFF472B6)) },
+                            placeholder = { Text("Buscar personas por nombre o @usuario") },
+                            singleLine = true
+                        )
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(searchResults, key = { it.uid }) { target ->
+                                SearchProfileRow(
+                                    profile = target,
+                                    isSelf = target.uid == myProfile?.uid,
+                                    followStatus = followedState[target.uid].orEmpty(),
+                                    onOpen = {
+                                        scope.launch {
+                                            val loaded = runCatching { repository.getProfile(target.uid) }.getOrNull()
+                                            viewingProfile = loaded ?: target
+                                            profilePosts = runCatching { repository.loadProfilePosts(target.uid) }.getOrDefault(emptyList())
+                                        }
+                                    },
+                                    onFollow = {
+                                        scope.launch {
+                                            try {
+                                                if (followedState[target.uid] == "accepted" || followedState[target.uid] == "pending") {
+                                                    repository.unfollow(target.uid)
+                                                    followedState = followedState + (target.uid to "")
+                                                } else {
+                                                    repository.follow(target)
+                                                    followedState = followedState + (target.uid to if (target.isPrivate) "pending" else "accepted")
+                                                }
+                                            } catch (error: Exception) {
+                                                errorMessage = error.message ?: "No se pudo seguir ese perfil."
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                SocialSection.PROFILE -> {
+                    val myPosts = remember(feed, myProfile?.uid) { feed.filter { it.ownerUid == myProfile?.uid } }
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        item {
+                            MyProfileCard(
+                                profile = myProfile,
+                                onVisibilityChanged = { makePublic ->
+                                    myProfile?.let { current ->
+                                        scope.launch {
+                                            try {
+                                                myProfile = repository.updateProfile(
+                                                    current = current,
+                                                    displayName = current.displayName,
+                                                    bio = current.bio,
+                                                    visibility = if (makePublic) "public" else "private"
+                                                )
+                                                followRequests = repository.pendingFollowRequests()
+                                            } catch (error: Exception) {
+                                                errorMessage = "No se pudo guardar la privacidad del perfil."
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        if (followRequests.isNotEmpty()) {
+                            item {
+                                FollowRequestsCard(
+                                    requests = followRequests,
+                                    onAccept = { request ->
+                                        scope.launch {
+                                            runCatching { repository.acceptFollowRequest(request.uid) }
+                                                .onSuccess { followRequests = repository.pendingFollowRequests() }
+                                                .onFailure { errorMessage = "No se pudo aceptar la solicitud." }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        if (myPosts.isEmpty()) item { EmptySocialFeed(isFollowing = false, onCreate = { showCreatePost = true }) }
+                        items(myPosts, key = { postKey(it) }) { post ->
+                            SocialPostCard(
+                                post = post,
+                                liked = likedPosts[postKey(post)] == true,
+                                onLike = {
+                                    scope.launch {
+                                        val next = likedPosts[postKey(post)] != true
+                                        runCatching { repository.setLiked(post, next) }
+                                            .onSuccess { likedPosts[postKey(post)] = next }
+                                            .onFailure { errorMessage = "No se pudo guardar el like." }
+                                    }
+                                },
+                                onAuthorClick = {}
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCreatePost) {
+        AlertDialog(
+            onDismissRequest = { showCreatePost = false },
+            containerColor = Color(0xFF151C2C),
+            title = { Text("Nueva publicación", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Comparte una idea con tu comunidad. Puedes usar #temas para personalizar recomendaciones.", color = Color(0xFFCBD5E1), fontSize = 12.sp)
+                    Spacer(Modifier.size(10.dp))
+                    OutlinedTextField(
+                        value = newPostText,
+                        onValueChange = { newPostText = it.take(2200) },
+                        modifier = Modifier.fillMaxWidth().testTag("social_new_post_text"),
+                        placeholder = { Text("¿Qué quieres compartir?") },
+                        minLines = 3,
+                        maxLines = 6
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = newPostText.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)),
+                    onClick = {
+                        val current = myProfile ?: return@Button
+                        scope.launch {
+                            try {
+                                repository.createTextPost(current, newPostText)
+                                newPostText = ""
+                                showCreatePost = false
+                                selectedSection = SocialSection.FOR_YOU
+                                refreshFeed()
+                                errorMessage = null
+                            } catch (error: Exception) {
+                                errorMessage = error.message ?: "No se pudo publicar."
+                            }
+                        }
+                    }
+                ) { Text("Publicar") }
+            },
+            dismissButton = { TextButton(onClick = { showCreatePost = false }) { Text("Cancelar") } }
+        )
+    }
+}
+
+@Composable
+private fun StoriesPlaceholder(profile: SocialProfile?, onAddStory: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp)) {
+        Text("Historias · 24 horas", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onAddStory)) {
+                Box(contentAlignment = Alignment.BottomEnd) {
+                    AvatarCircle(name = profile?.displayName ?: "Tú", color = Color(0xFFE1306C), size = 56)
+                    Surface(color = Color(0xFFE1306C), shape = CircleShape, modifier = Modifier.size(20.dp)) {
+                        Icon(Icons.Default.Add, contentDescription = "Agregar historia", tint = Color.White, modifier = Modifier.padding(2.dp))
+                    }
+                }
+                Text("Tu historia", color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+            Surface(color = Color(0xFF151C2C), shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f)) {
+                Text("Las historias de las personas que sigues aparecerán aquí", color = Color(0xFF94A3B8), fontSize = 11.sp, modifier = Modifier.padding(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SocialPostCard(
+    post: SocialPost,
+    liked: Boolean,
+    onLike: () -> Unit,
+    onAuthorClick: () -> Unit
+) {
+    Surface(
+        color = Color(0xFF111827),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AvatarCircle(name = post.displayName, color = Color(0xFF7C3AED), size = 40)
+                Column(Modifier.weight(1f).padding(start = 10.dp).clickable(onClick = onAuthorClick)) {
+                    Text(post.displayName, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("@${post.username}", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                }
+                Text(relativeTime(post.createdAt), color = Color(0xFF64748B), fontSize = 10.sp)
+            }
+            Text(post.caption, color = Color(0xFFE2E8F0), fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp))
+            if (post.topics.isNotEmpty()) {
+                Text(post.topics.joinToString("  ") { "#$it" }, color = Color(0xFFF472B6), fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                IconButton(onClick = onLike, modifier = Modifier.testTag("social_like_${post.id}")) {
+                    Icon(
+                        imageVector = if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (liked) "Quitar me gusta" else "Me gusta",
+                        tint = if (liked) Color(0xFFE1306C) else Color(0xFFCBD5E1)
+                    )
+                }
+                Text(if (liked) "Te gusta" else "Me gusta", color = if (liked) Color(0xFFF472B6) else Color(0xFFCBD5E1), fontSize = 12.sp)
+                Spacer(Modifier.weight(1f))
+                if (post.mediaType != "text") Text("Multimedia", color = Color(0xFF94A3B8), fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchProfileRow(
+    profile: SocialProfile,
+    isSelf: Boolean,
+    followStatus: String,
+    onOpen: () -> Unit,
+    onFollow: () -> Unit
+) {
+    Surface(color = Color(0xFF111827), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp)) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 42)
+            Column(Modifier.weight(1f).padding(start = 10.dp).clickable(onClick = onOpen)) {
+                Text(profile.displayName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                if (profile.isPrivate) Text("Cuenta privada", color = Color(0xFFFBBF24), fontSize = 10.sp)
+            }
+            if (!isSelf) {
+                TextButton(onClick = onFollow) {
+                    Text(
+                        text = when (followStatus) {
+                            "accepted" -> "Siguiendo"
+                            "pending" -> "Solicitado"
+                            else -> "Seguir"
+                        },
+                        color = if (followStatus == "") Color(0xFFF472B6) else Color(0xFFCBD5E1),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>, followStatus: String, onFollow: () -> Unit) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item {
+            Surface(color = Color(0xFF111827), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(20.dp)) {
+                    AvatarCircle(name = profile.displayName, color = Color(0xFF7C3AED), size = 72)
+                    Text(profile.displayName, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+                    Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                    Text(if (profile.isPrivate) "Perfil privado" else "Perfil público", color = Color(0xFFCBD5E1), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+                    if (profile.bio.isNotBlank()) Text(profile.bio, color = Color(0xFFE2E8F0), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                    Button(
+                        onClick = onFollow,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)),
+                        modifier = Modifier.padding(top = 12.dp)
+                    ) {
+                        Text(when (followStatus) { "accepted" -> "Dejar de seguir"; "pending" -> "Cancelar solicitud"; else -> "Seguir" })
+                    }
+                }
+            }
+        }
+        if (profile.isPrivate && followStatus != "accepted") {
+            item { Text("Las publicaciones se muestran cuando el usuario acepta tu solicitud.", color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 18.dp)) }
+        } else {
+            items(posts, key = { "${it.ownerUid}:${it.id}" }) { post ->
+                SocialPostCard(post = post, liked = false, onLike = {}, onAuthorClick = {})
+            }
+        }
+    }
+}
+
+@Composable
+private fun MyProfileCard(profile: SocialProfile?, onVisibilityChanged: (Boolean) -> Unit) {
+    if (profile == null) return
+    Surface(color = Color(0xFF111827), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 64)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(profile.displayName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                    Text(if (profile.isPrivate) "Solo seguidores aprobados verán tus publicaciones" else "Tu perfil es visible para la comunidad", color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                Icon(if (profile.isPrivate) Icons.Default.Lock else Icons.Default.Public, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
+                Text(if (profile.isPrivate) "Perfil privado" else "Perfil público", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                Switch(checked = !profile.isPrivate, onCheckedChange = onVisibilityChanged, modifier = Modifier.testTag("social_profile_visibility"))
+            }
+        }
+    }
+}
+
+@Composable
+private fun FollowRequestsCard(requests: List<SocialFollowRequest>, onAccept: (SocialFollowRequest) -> Unit) {
+    Surface(color = Color(0xFF20172B), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Solicitudes para seguirte", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            requests.forEach { request ->
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${request.displayName} · @${request.username}", color = Color(0xFFCBD5E1), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { onAccept(request) }) { Text("Aceptar", color = Color(0xFFF472B6)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptySocialFeed(isFollowing: Boolean, onCreate: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        AvatarCircle(name = "Social", color = Color(0xFF4C1D3D), size = 64)
+        Text(if (isFollowing) "Tu feed está esperando" else "Empieza tu comunidad", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+        Text(
+            if (isFollowing) "Sigue perfiles para ver sus publicaciones aquí." else "Publica una idea con #temas y tus likes ayudarán a ordenar recomendaciones.",
+            color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)
+        )
+        Button(onClick = onCreate, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)), modifier = Modifier.padding(top = 14.dp)) {
+            Text("Crear publicación")
+        }
+    }
+}
+
+@Composable
+private fun AvatarCircle(name: String, color: Color, size: Int) {
+    Surface(color = color.copy(alpha = 0.22f), shape = CircleShape, modifier = Modifier.size(size.dp)) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "S",
+                color = Color(0xFFF9A8D4),
+                fontWeight = FontWeight.Bold,
+                fontSize = (size / 2.4f).sp
+            )
+        }
+    }
+}
+
+private fun relativeTime(timestamp: Long): String {
+    if (timestamp <= 0L) return "ahora"
+    val minutes = ((System.currentTimeMillis() - timestamp).coerceAtLeast(0L) / 60_000L).toInt()
+    return when {
+        minutes < 1 -> "ahora"
+        minutes < 60 -> "${minutes}m"
+        minutes < 24 * 60 -> "${minutes / 60}h"
+        else -> SimpleDateFormat("d MMM", Locale("es", "CR")).format(Date(timestamp))
+    }
+}
