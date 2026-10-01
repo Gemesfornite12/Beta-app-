@@ -27,6 +27,33 @@ class GoogleWorkspaceCommandParserTest {
     }
 
     @Test
+    fun humanCalendarSynonymsAndCommonTypoOpenCalendarCreationCard() {
+        val misspelled = GoogleWorkspaceCommandParser.parse("agregar caladario Hola")
+        val english = GoogleWorkspaceCommandParser.parse("add a calendar Work")
+        val french = GoogleWorkspaceCommandParser.parse("ajouter un calendrier Maison")
+        val event = GoogleWorkspaceCommandParser.parse("create a new event")
+        val frenchEvent = GoogleWorkspaceCommandParser.parse("ajouter un événement")
+        requireNotNull(misspelled)
+        requireNotNull(english)
+        requireNotNull(french)
+        requireNotNull(event)
+        requireNotNull(frenchEvent)
+        assertEquals(GoogleWorkspaceActionType.CREATE_CALENDAR, misspelled.request.type)
+        assertEquals("Hola", misspelled.request.values["summary"])
+        assertEquals(GoogleWorkspaceActionType.CREATE_CALENDAR, english.request.type)
+        assertEquals(GoogleWorkspaceActionType.CREATE_CALENDAR, french.request.type)
+        assertEquals(GoogleWorkspaceActionType.CREATE_EVENT, event.request.type)
+        assertEquals(GoogleWorkspaceActionType.CREATE_EVENT, frenchEvent.request.type)
+    }
+
+    @Test
+    fun workspaceRequestsInOtherLanguagesAreMarkedForTranslation() {
+        assertTrue(GoogleWorkspaceCommandParser.shouldTranslatePotentialWorkspaceCommand("Ajouter un événement au calendrier"))
+        assertTrue(GoogleWorkspaceCommandParser.shouldTranslatePotentialWorkspaceCommand("Create a new folder in Google Drive"))
+        assertTrue(!GoogleWorkspaceCommandParser.shouldTranslatePotentialWorkspaceCommand("Hola, ¿cómo estás?"))
+    }
+
+    @Test
     fun shortUploadCommandOpensTheInlineDriveUploadAction() {
         val parsed = GoogleWorkspaceCommandParser.parse("subir")
         requireNotNull(parsed)
