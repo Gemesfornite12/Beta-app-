@@ -3047,12 +3047,29 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // GESTIÓN AVANZADA DE CANALES, CHAT PRIVADO, GRUPOS Y PERMISOS
 
     fun startDirectChat(peerEmail: String, peerName: String, peerAvatar: String = "") {
+        val normalizedPeerEmail = peerEmail.trim()
+        if (!normalizedPeerEmail.contains("@")) {
+            Toast.makeText(getApplication<Application>(), "Este usuario no tiene un correo válido para iniciar el chat privado.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (_authUiState.value.currentUser?.email.equals(normalizedPeerEmail, ignoreCase = true)) {
+            Toast.makeText(getApplication<Application>(), "Ese es tu propio chat.", Toast.LENGTH_SHORT).show()
+            return
+        }
         viewModelScope.launch {
-            val directId = rtdbService.createOrGetDirectChat(peerEmail, peerName)
-            if (directId.isNotBlank()) {
-                // Sincronizar con Firestore también
-                firestoreChatService.createOrGetDirectChat(peerEmail, peerName)
+            try {
+                val rtdbId = rtdbService.createOrGetDirectChat(normalizedPeerEmail, peerName)
+                val firestoreId = firestoreChatService.createOrGetDirectChat(normalizedPeerEmail, peerName)
+                val directId = firestoreId?.takeIf(String::isNotBlank) ?: rtdbId
+                if (directId.isBlank()) throw IllegalStateException("No se obtuvo el identificador del chat privado.")
+                if (directId != rtdbId) {
+                    Log.w("OmniViewModel", "Los identificadores de RTDB y Firestore no coinciden; se abrirá el canal sincronizado de Firestore.")
+                }
                 loadChannelMessages(directId)
+                Toast.makeText(getApplication<Application>(), "Chat privado con $peerName", Toast.LENGTH_SHORT).show()
+            } catch (error: Exception) {
+                Log.e("OmniViewModel", "No se pudo abrir el chat privado.", error)
+                Toast.makeText(getApplication<Application>(), "No se pudo abrir el chat privado. Revisa la conexión y vuelve a intentarlo.", Toast.LENGTH_LONG).show()
             }
         }
     }
