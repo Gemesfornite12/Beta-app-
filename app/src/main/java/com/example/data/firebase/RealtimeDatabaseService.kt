@@ -7,6 +7,7 @@ import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
 import com.example.data.model.ChatMessage
 import com.example.data.model.UserAccount
+import com.example.data.supabase.SupabaseChatPushService
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
@@ -351,7 +352,16 @@ class RealtimeDatabaseService {
         try {
             database.child("chats").child(message.channelId).updateChildren(channelMeta).await()
         } catch (e: Exception) {
-            Log.w(TAG, "Mensaje guardado pero no se pudieron actualizar metadatos de ${message.channelId}", e)
+            Log.w(TAG, "Mensaje guardado pero no se pudieron actualizar metadatos del chat", e)
+        }
+
+        if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
+            try {
+                SupabaseChatPushService.requestNotification(message.channelId, docId)
+            } catch (e: Exception) {
+                // The message is already saved; notification delivery must not undo or fail the send.
+                Log.w(TAG, "Mensaje guardado; no se pudo solicitar la notificación de prueba", e)
+            }
         }
 
         return docId
