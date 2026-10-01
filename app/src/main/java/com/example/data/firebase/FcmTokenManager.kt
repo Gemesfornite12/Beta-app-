@@ -61,7 +61,7 @@ object FcmTokenManager {
                 val app = FirebaseAppProvider.get(context)
                 Log.d(TAG, "Using FirebaseApp: ${app.name} (${app.options.projectId})")
 
-                FirebaseMessaging.getInstance(app).token
+                FirebaseMessaging.getInstance().token
                     .addOnCompleteListener { task ->
                         if (!task.isSuccessful) {
                             _currentToken.value = null
@@ -76,7 +76,7 @@ object FcmTokenManager {
                         
                         // Habilitar auto-init ahora que sabemos que el registro funciona
                         try {
-                            FirebaseMessaging.getInstance(app).isAutoInitEnabled = true
+                            FirebaseMessaging.getInstance().isAutoInitEnabled = true
                         } catch (_: Exception) {}
 
                         _currentToken.value = token
@@ -88,7 +88,7 @@ object FcmTokenManager {
                         _isPushSubscribed.value = true
 
                         // Suscribirse al tema general de avisos solo si tenemos token real
-                        FirebaseMessaging.getInstance(app).subscribeToTopic("all_users_omnistudio")
+                        FirebaseMessaging.getInstance().subscribeToTopic("all_users_omnistudio")
                             .addOnCompleteListener { subscribeTask ->
                                 if (subscribeTask.isSuccessful) {
                                     Log.d(TAG, "Subscribed to all_users_omnistudio topic")
