@@ -91,4 +91,17 @@ Borrar archivo permanentemente [ID]"""
         assertEquals(GoogleWorkspaceActionType.DELETE_EMAIL, parsed.request.type)
         assertEquals("", parsed.request.values["messageId"])
     }
+
+    @Test
+    fun onlyCompleteReadOnlyRequestsCanRunDirectly() {
+        val events = GoogleWorkspaceCommandParser.parse("Eventos")
+        val readWithId = GoogleWorkspaceCommandParser.parse("Leer correo ABCDE")
+        val readWithoutId = GoogleWorkspaceCommandParser.parse("Leer correo")
+        requireNotNull(events)
+        requireNotNull(readWithId)
+        requireNotNull(readWithoutId)
+        assertEquals(true, GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(events.request))
+        assertEquals(true, GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(readWithId.request))
+        assertEquals(false, GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(readWithoutId.request))
+    }
 }
