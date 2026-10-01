@@ -26,6 +26,10 @@ internal object GoogleWorkspaceCommandParser {
         return sectionHeadings || commandLines > 1 || (commandLines > 0 && placeholderPattern.containsMatchIn(text))
     }
 
+    fun canRunReadOnlyDirectly(request: GoogleWorkspaceActionRequest): Boolean =
+        !request.type.changesData && !request.type.needsFile &&
+            request.type.fields.filter { it.required }.all { !request.values[it.key].isNullOrBlank() }
+
     fun parse(text: String): ParsedWorkspaceCommand? {
         if (isReferenceOrBatch(text)) return null
         val normalized = normalize(text)
