@@ -318,20 +318,24 @@ fun AiAssistantScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
             onSend = { message ->
-                val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
-                if (workspaceCommand != null) {
-                    workspaceActionInitialRequest = workspaceCommand.request
-                    workspaceActionPrompt = workspaceCommand.originalText
-                    showGoogleWorkspaceActions = true
+                if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
+                    workspaceActionResult = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
                 } else {
-                    val saveCandidate = saraSaveCandidate(message)
-                    if (selectedConnectorIds.isEmpty()) {
-                        viewModel.sendAiMessage(message)
+                    val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
+                    if (workspaceCommand != null) {
+                        workspaceActionInitialRequest = workspaceCommand.request
+                        workspaceActionPrompt = workspaceCommand.originalText
+                        showGoogleWorkspaceActions = true
                     } else {
-                        val ids = selectedConnectorIds.toSet()
-                        requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+                        val saveCandidate = saraSaveCandidate(message)
+                        if (selectedConnectorIds.isEmpty()) {
+                            viewModel.sendAiMessage(message)
+                        } else {
+                            val ids = selectedConnectorIds.toSet()
+                            requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+                        }
+                        if (saveCandidate != null) pendingKnowledge = saveCandidate
                     }
-                    if (saveCandidate != null) pendingKnowledge = saveCandidate
                 }
             },
             onSendAttachment = { uri, prompt ->
@@ -369,7 +373,7 @@ fun AiAssistantScreen(
     workspaceActionResult?.let { resultText ->
         AlertDialog(
             onDismissRequest = { workspaceActionResult = null },
-            title = { Text("Resultado de Google Workspace") },
+            title = { Text("Google Workspace") },
             text = {
                 Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
                     SelectionContainer {
