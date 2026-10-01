@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
@@ -107,16 +109,12 @@ object FcmTokenManager {
     }
 
     /**
-     * Sincroniza el token del dispositivo en el documento del usuario en Firestore.
+     * Sincroniza el token en Firestore como respaldo y en RTDB, que usa el emisor push.
      */
     fun syncTokenToFirestore(context: Context? = null, userEmail: String, token: String) {
         try {
-            val db = if (context != null) {
-                val app = FirebaseAppProvider.get(context)
-                FirebaseFirestore.getInstance(app)
-            } else {
-                FirebaseFirestore.getInstance()
-            }
+            val app = context?.let { FirebaseAppProvider.get(it) } ?: FirebaseApp.getInstance()
+            val db = FirebaseFirestore.getInstance(app)
             val normalizedEmail = userEmail.trim().lowercase()
             val cleanEmail = normalizedEmail.replace(".", "_").replace("@", "_at_")
             val data = hashMapOf(
@@ -127,16 +125,36 @@ object FcmTokenManager {
                 "platform" to "Android",
                 "notificationsEnabled" to true
             )
+
+            // Firestore queda como respaldo; las notificaciones de chat consultan RTDB.
             db.collection("user_fcm_tokens").document(cleanEmail)
                 .set(data, SetOptions.merge())
-            // Un documento por dispositivo permite enviar a todos los equipos del mismo usuario.
             db.collection("fcm_device_tokens").document(token.hashCode().toString())
                 .set(data, SetOptions.merge())
+
+            val uid = FirebaseAuth.getInstance(app).currentUser?.uid
+            if (uid.isNullOrBlank()) {
+                Log.w(TAG, "FCM token is not linked to an authenticated RTDB user.")
+                return
+            }
+
+            FirebaseDatabase.getInstance(
+                app,
+                "https://omnistudio-caaf5-default-rtdb.firebaseio.com"
+            ).reference
+                .child("users")
+                .child(uid)
+                .child("fcmTokens")
+                .child(token.hashCode().toString())
+                .setValue(data)
                 .addOnSuccessListener {
-                    Log.d(TAG, "FCM Token successfully synced for the signed-in user.")
+                    Log.d(TAG, "FCM token synced to RTDB for the signed-in user.")
+                }
+                .addOnFailureListener { error ->
+                    Log.w(TAG, "Could not sync FCM token to RTDB: ${error.message}")
                 }
         } catch (e: Throwable) {
-            Log.w(TAG, "Could not sync FCM token to Firestore: ${e.message}")
+            Log.w(TAG, "Could not sync FCM token: ${e.message}")
         }
     }
 

@@ -32,11 +32,6 @@ type ServiceAccount = {
 
 type DataMap = Record<string, unknown>;
 
-type FirestoreDocument = {
-  name?: string;
-  fields?: Record<string, { stringValue?: string }>;
-};
-
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
@@ -154,45 +149,28 @@ async function firebaseGet(path: string, accessToken: string): Promise<unknown> 
   return await response.json();
 }
 
-function firestoreString(document: FirestoreDocument, field: string): string {
-  return text(document.fields?.[field]?.stringValue);
-}
-
 async function findTestDeviceTokens(emails: string[], accessToken: string): Promise<Array<{ token: string; documentName: string }>> {
+  const requestedEmails = new Set(emails.map(normalizeEmail));
+  const usersValue = await firebaseGet("users", accessToken);
+  if (!usersValue || typeof usersValue !== "object" || Array.isArray(usersValue)) return [];
+
   const unique = new Map<string, string>();
-  for (const email of emails) {
-    const query = {
-      structuredQuery: {
-        from: [{ collectionId: "fcm_device_tokens" }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: "email" },
-            op: "EQUAL",
-            value: { stringValue: email },
-          },
-        },
-        limit: 1000,
-      },
-    };
-    const response = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents:runQuery`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(query),
-      },
-    );
-    if (!response.ok) throw new Error(`Firebase token lookup failed (${response.status})`);
-    const rows = await response.json() as Array<{ document?: FirestoreDocument }>;
-    for (const row of rows) {
-      const doc = row.document;
-      if (!doc?.name) continue;
-      if (firestoreString(doc, "appId") !== TEST_ANDROID_PACKAGE) continue;
-      const token = firestoreString(doc, "fcmToken");
-      if (token) unique.set(token, doc.name);
+  for (const [uid, userValue] of Object.entries(usersValue as Record<string, unknown>)) {
+    if (!userValue || typeof userValue !== "object" || Array.isArray(userValue)) continue;
+    const user = userValue as DataMap;
+    const userEmail = normalizeEmail(user.email);
+    const tokenValue = user.fcmTokens;
+    if (!tokenValue || typeof tokenValue !== "object" || Array.isArray(tokenValue)) continue;
+
+    for (const [tokenId, deviceValue] of Object.entries(tokenValue as Record<string, unknown>)) {
+      if (!deviceValue || typeof deviceValue !== "object" || Array.isArray(deviceValue)) continue;
+      const device = deviceValue as DataMap;
+      const deviceEmail = normalizeEmail(device.email) || userEmail;
+      if (!requestedEmails.has(deviceEmail)) continue;
+      if (text(device.appId) !== TEST_ANDROID_PACKAGE || device.notificationsEnabled === false) continue;
+
+      const token = text(device.fcmToken);
+      if (token) unique.set(token, `users/${uid}/fcmTokens/${tokenId}`);
     }
   }
   return [...unique.entries()].map(([token, documentName]) => ({ token, documentName }));
@@ -229,8 +207,9 @@ async function sendFcm(token: string, payload: Record<string, string>, accessTok
   });
 }
 
-async function removeStaleToken(documentName: string, accessToken: string): Promise<void> {
-  const response = await fetch(`https://firestore.googleapis.com/v1/${documentName}`, {
+async function removeStaleToken(documentPath: string, accessToken: string): Promise<void> {
+  const encodedPath = documentPath.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(`${FIREBASE_DATABASE_URL}/${encodedPath}.json`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
