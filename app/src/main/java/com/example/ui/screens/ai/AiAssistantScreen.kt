@@ -108,6 +108,8 @@ fun AiAssistantScreen(
     var showSaraAdvanced by remember { mutableStateOf(false) }
     var showGroqConnectors by remember { mutableStateOf(false) }
     var showGoogleWorkspaceActions by remember { mutableStateOf(false) }
+    var workspaceActionInitialRequest by remember { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
+    var workspaceActionPrompt by remember { mutableStateOf<String?>(null) }
     var workspaceActionLoading by remember { mutableStateOf(false) }
     var workspaceActionResult by remember { mutableStateOf<String?>(null) }
     val workspaceActionScope = rememberCoroutineScope()
@@ -314,14 +316,21 @@ fun AiAssistantScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
             onSend = { message ->
-                val saveCandidate = saraSaveCandidate(message)
-                if (selectedConnectorIds.isEmpty()) {
-                    viewModel.sendAiMessage(message)
+                val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
+                if (workspaceCommand != null) {
+                    workspaceActionInitialRequest = workspaceCommand.request
+                    workspaceActionPrompt = workspaceCommand.originalText
+                    showGoogleWorkspaceActions = true
                 } else {
-                    val ids = selectedConnectorIds.toSet()
-                    requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+                    val saveCandidate = saraSaveCandidate(message)
+                    if (selectedConnectorIds.isEmpty()) {
+                        viewModel.sendAiMessage(message)
+                    } else {
+                        val ids = selectedConnectorIds.toSet()
+                        requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+                    }
+                    if (saveCandidate != null) pendingKnowledge = saveCandidate
                 }
-                if (saveCandidate != null) pendingKnowledge = saveCandidate
             },
             onSendAttachment = { uri, prompt ->
                 selectedConnectorIds = emptySet()
@@ -333,8 +342,18 @@ fun AiAssistantScreen(
 
     if (showGoogleWorkspaceActions) {
         GoogleWorkspaceActionsDialog(
-            onDismiss = { showGoogleWorkspaceActions = false },
-            onRun = { request -> requestGoogleWorkspaceAction(request) }
+            onDismiss = {
+                showGoogleWorkspaceActions = false
+                workspaceActionInitialRequest = null
+                workspaceActionPrompt = null
+            },
+            onRun = { request ->
+                requestGoogleWorkspaceAction(request)
+                workspaceActionInitialRequest = null
+                workspaceActionPrompt = null
+            },
+            initialRequest = workspaceActionInitialRequest,
+            requestText = workspaceActionPrompt
         )
     }
     if (workspaceActionLoading) {
@@ -371,6 +390,8 @@ fun AiAssistantScreen(
                     OutlinedButton(
                         onClick = {
                             showGroqConnectors = false
+                            workspaceActionInitialRequest = null
+                            workspaceActionPrompt = null
                             showGoogleWorkspaceActions = true
                         },
                         modifier = Modifier.fillMaxWidth()
