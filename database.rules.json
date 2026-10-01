@@ -8,7 +8,7 @@
     },
     "ultimate": {
       "$uid": {
-        ".read": "auth != null && (auth.uid == $uid || root.child('social_test/profiles').child($uid).child('visibility').val() == 'public')",
+        ".read": "auth != null && (auth.uid == $uid || root.child('social_test').child('profiles').child($uid).child('visibility').val() == 'public')",
         ".write": "auth != null && auth.uid == $uid"
       }
     },
@@ -93,7 +93,7 @@
       },
       "postsByUser": {
         "$ownerUid": {
-          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test/profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test/followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
           ".indexOn": ["createdAt"],
           "$postId": {
             ".write": "auth != null && auth.uid == $ownerUid",
@@ -105,7 +105,7 @@
         ".read": "auth != null",
         ".indexOn": ["createdAt"],
         "$feedKey": {
-          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test/profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
+          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test').child('profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
           ".validate": "!newData.exists() || (newData.child('ownerUid').val() == auth.uid && newData.child('id').isString() && newData.child('createdAt').isNumber())"
         }
       },
@@ -113,17 +113,17 @@
         "$followerUid": {
           ".read": "auth != null && auth.uid == $followerUid",
           "$targetUid": {
-            ".write": "auth != null && auth.uid == $followerUid && (!newData.exists() || newData.child('status').val() == 'pending' || root.child('social_test/profiles').child($targetUid).child('visibility').val() == 'public' || root.child('social_test/followers').child($targetUid).child($followerUid).child('status').val() == 'accepted')",
+            ".write": "auth != null && auth.uid == $followerUid && (!newData.exists() || newData.child('status').val() == 'pending' || root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($targetUid).child($followerUid).child('status').val() == 'accepted')",
             ".validate": "!newData.exists() || (newData.child('status').val() == 'pending' || newData.child('status').val() == 'accepted')"
           }
         }
       },
       "followers": {
         "$targetUid": {
-          ".read": "auth != null && (auth.uid == $targetUid || root.child('social_test/profiles').child($targetUid).child('visibility').val() == 'public' || data.child(auth.uid).child('status').val() == 'accepted')",
+          ".read": "auth != null && (auth.uid == $targetUid || root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' || data.child(auth.uid).child('status').val() == 'accepted')",
           "$followerUid": {
             ".read": "auth != null && (auth.uid == $targetUid || auth.uid == $followerUid)",
-            ".write": "auth != null && ((auth.uid == $followerUid && root.child('social_test/profiles').child($targetUid).child('visibility').val() == 'public' && newData.child('status').val() == 'accepted') || (auth.uid == $targetUid && newData.child('status').val() == 'accepted') || (!newData.exists() && (auth.uid == $followerUid || auth.uid == $targetUid)))",
+            ".write": "auth != null && ((auth.uid == $followerUid && root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' && newData.child('status').val() == 'accepted') || (auth.uid == $targetUid && newData.child('status').val() == 'accepted') || (!newData.exists() && (auth.uid == $followerUid || auth.uid == $targetUid)))",
             ".validate": "!newData.exists() || (newData.child('status').val() == 'accepted' && newData.child('createdAt').isNumber())"
           }
         }
@@ -141,9 +141,9 @@
       "likes": {
         "$ownerUid": {
           "$postId": {
-            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test/profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test/followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
             "$likerUid": {
-              ".write": "auth != null && auth.uid == $likerUid && root.child('social_test/postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test/profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test/followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+              ".write": "auth != null && auth.uid == $likerUid && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
               ".validate": "!newData.exists() || newData.val() == true"
             }
           }
@@ -157,7 +157,7 @@
       },
       "storiesByUser": {
         "$ownerUid": {
-          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test/profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test/followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
           ".indexOn": ["createdAt", "expiresAt"],
           "$storyId": {
             ".write": "auth != null && auth.uid == $ownerUid",
@@ -169,7 +169,7 @@
         ".read": "auth != null",
         ".indexOn": ["createdAt", "expiresAt"],
         "$storyKey": {
-          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test/profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
+          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test').child('profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
           ".validate": "!newData.exists() || (newData.child('ownerUid').val() == auth.uid && newData.child('id').isString() && newData.child('createdAt').isNumber() && newData.child('expiresAt').isNumber())"
         }
       }
