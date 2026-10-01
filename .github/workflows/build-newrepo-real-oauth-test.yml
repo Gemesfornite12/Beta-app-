@@ -1,4 +1,4 @@
-name: Build real OAuth test APK from Betaapkdebug-
+name: Build OmniStudio test APK with Workspace actions
 
 on:
   push:
@@ -17,13 +17,13 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: source/Beta-app--main
+        working-directory: source
     steps:
-      - name: Checkout source from test repository
+      - name: Checkout the isolated OmniStudio test branch
         uses: actions/checkout@v4
         with:
-          repository: Gemesfornite12/Betaapkdebug-
-          ref: 75f78667adf31c8167ba6628110b49fdf5f99f25
+          repository: Gemesfornite12/Beta-app-
+          ref: zapia/test-newrepo-real-oauth-20260930
           path: source
 
       - name: Set up Java 17
@@ -76,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: workspace-test-report
-          path: source/Beta-app--main/app/build/test-results/testDebugUnitTest/*.xml
+          path: source/app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: ignore
           retention-days: 1
 
@@ -84,7 +84,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: omnistudio-real-oauth-test-apk
-          path: source/Beta-app--main/app/build/outputs/apk/debug/app-debug.apk
+          path: source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 1
 
