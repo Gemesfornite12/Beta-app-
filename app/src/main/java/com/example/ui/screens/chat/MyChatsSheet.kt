@@ -93,7 +93,7 @@ fun MyChatsAndGroupsSheet(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) } // 0: Todos, 1: Grupos, 2: Directos, 3: Canales, 4: Archivados
-    var showGuide by remember { mutableStateOf(true) }
+    var showGuide by remember { mutableStateOf(false) }
 
     val activeChannels = remember(channels, archivedChannelIds) {
         channels.filter { !archivedChannelIds.contains(it.id) }
@@ -191,7 +191,10 @@ fun MyChatsAndGroupsSheet(
                 // Campo de búsqueda rápida
                 OutlinedTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = {
+                        searchQuery = it
+                        if (it.isNotBlank()) showGuide = false
+                    },
                     placeholder = { Text("Buscar chat, grupo o participante...", color = Color(0xFF64748B), fontSize = 13.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF94A3B8)) },
                     trailingIcon = {
