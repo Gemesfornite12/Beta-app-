@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.FcmTokenManager
@@ -124,9 +125,6 @@ class MainActivity : ComponentActivity() {
       }
     }
 
-    // Inicializar FCM y sincronizar token del dispositivo
-    FcmTokenManager.initialize(applicationContext, "gonzalez24029@gmail.com")
-
     setContent {
       val isDarkTheme by viewModel.isDarkTheme.collectAsState()
       MyApplicationTheme(darkTheme = isDarkTheme) {
@@ -189,6 +187,13 @@ fun OmniStudioApp(
 ) {
   val authState by viewModel.authUiState.collectAsState()
   val activeCall by viewModel.activeCall.collectAsState()
+  val appContext = LocalContext.current.applicationContext
+  LaunchedEffect(authState.isLoggedIn, authState.currentUser?.email) {
+    val signedInEmail = authState.currentUser?.email
+    if (authState.isLoggedIn && !signedInEmail.isNullOrBlank()) {
+      FcmTokenManager.initialize(appContext, signedInEmail)
+    }
+  }
   val initialRoute = if (authState.isLoggedIn) HashRoute.HOME else HashRoute.AUTH
   val hashRouter = rememberHashRouter(initialRoute = initialRoute)
   val currentRoute by hashRouter.currentRoute.collectAsState()
