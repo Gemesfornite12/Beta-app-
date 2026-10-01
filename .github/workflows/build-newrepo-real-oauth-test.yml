@@ -118,11 +118,11 @@ jobs:
       - name: Publish a separate test-only prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: zapia-workspace-chat-test-20260930
-          name: OmniStudio Workspace chat .test APK (2026-09-30)
+          tag_name: zapia-social-test-20261001
+          name: OmniStudio Social .test APK (2026-10-01)
           body: |-
-            Temporary test-only download for the isolated OmniStudio .test branch.
-            This is not the public production APK or a Play Store release.
+            Temporary direct-download APK to test OmniStudio Social features from the isolated .test branch.
+            This is not the production APK or a Play Store release.
           target_commitish: zapia/test-newrepo-real-oauth-20260930
           prerelease: true
           draft: false
