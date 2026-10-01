@@ -3053,36 +3053,52 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val currentUser = _authUiState.value.currentUser
-        val currentUserEmail = currentUser?.email.orEmpty()
+        val firebaseUser = FirebaseAuth.getInstance().currentUser
+        val currentUserEmail = currentUser?.email ?: firebaseUser?.email.orEmpty()
+        if (currentUserEmail.isBlank()) {
+            Toast.makeText(getApplication<Application>(), "Inicia sesión para abrir un chat privado.", Toast.LENGTH_LONG).show()
+            return
+        }
         if (currentUserEmail.equals(normalizedPeerEmail, ignoreCase = true)) {
             Toast.makeText(getApplication<Application>(), "Ese es tu propio chat.", Toast.LENGTH_SHORT).show()
             return
         }
+
         val safePeerName = peerName.ifBlank { normalizedPeerEmail.substringBefore("@") }
+        val currentUserName = currentUser?.displayName ?: firebaseUser?.displayName ?: currentUserEmail
+        val currentAvatar = currentUser?.avatarUrl?.takeIf(String::isNotBlank)
+            ?: firebaseUser?.photoUrl?.toString().orEmpty()
+        val safeCurrent = currentUserEmail.replace(".", "_").replace("@", "_at_")
+        val safePeer = normalizedPeerEmail.replace(".", "_").replace("@", "_at_")
+        val directId = if (safeCurrent < safePeer) "direct_${safeCurrent}_$safePeer" else "direct_${safePeer}_$safeCurrent"
+        val channel = ChannelInfo(
+            id = directId,
+            name = safePeerName,
+            description = "Chat privado con $safePeerName",
+            iconEmoji = "💬",
+            isDirect = true,
+            groupPhotoUrl = peerAvatar,
+            creatorEmail = currentUserEmail,
+            creatorName = currentUserName,
+            members = listOf(
+                GroupMember(currentUserEmail, currentUserName, avatarUrl = currentAvatar),
+                GroupMember(normalizedPeerEmail, safePeerName, avatarUrl = peerAvatar)
+            )
+        )
+
+        // Cambiar la vista al instante; la sincronización queda en segundo plano.
+        _availableChannels.value = _availableChannels.value.filterNot { it.id == directId } + channel
+        loadChannelMessages(directId)
         viewModelScope.launch {
             try {
-                // FirestoreChatService sincroniza el mismo canal en RTDB y Firestore; no crear dos IDs aparte.
-                val directId = firestoreChatService.createOrGetDirectChat(normalizedPeerEmail, safePeerName)
-                    ?: throw IllegalStateException("No se pudo guardar el canal privado.")
-                val channel = ChannelInfo(
-                    id = directId,
-                    name = safePeerName,
-                    description = "Chat privado con $safePeerName",
-                    iconEmoji = "💬",
-                    isDirect = true,
-                    creatorEmail = currentUserEmail,
-                    creatorName = currentUser?.displayName ?: currentUserEmail,
-                    members = listOf(
-                        GroupMember(currentUserEmail, currentUser?.displayName ?: currentUserEmail, avatarUrl = currentUser?.avatarUrl.orEmpty()),
-                        GroupMember(normalizedPeerEmail, safePeerName, avatarUrl = peerAvatar)
-                    )
-                )
-                _availableChannels.value = (_availableChannels.value.filterNot { it.id == directId } + channel)
-                loadChannelMessages(directId)
+                // RTDB almacena los mensajes; guardar allí es requisito para poder conversar.
+                rtdbService.saveOrUpdateChannel(channel)
+                // Mantener Firestore como respaldo sin cambiar el ID del canal.
+                firestoreChatService.saveOrUpdateChannel(channel)
                 Toast.makeText(getApplication<Application>(), "Chat privado abierto con $safePeerName", Toast.LENGTH_SHORT).show()
             } catch (error: Exception) {
-                Log.e("OmniViewModel", "No se pudo abrir el chat privado.", error)
-                Toast.makeText(getApplication<Application>(), "No se pudo abrir el chat privado. Revisa la conexión y vuelve a intentarlo.", Toast.LENGTH_LONG).show()
+                Log.e("OmniViewModel", "No se pudo sincronizar el chat privado.", error)
+                Toast.makeText(getApplication<Application>(), "El chat se abrió, pero no se pudo sincronizar. Revisa la conexión.", Toast.LENGTH_LONG).show()
             }
         }
     }
