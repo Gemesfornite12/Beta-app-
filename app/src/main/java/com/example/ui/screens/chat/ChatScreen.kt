@@ -1681,6 +1681,15 @@ fun ChatScreen(
                         onStartDirectChat = { peerEmail, peerName ->
                             viewModel.startDirectChat(peerEmail, peerName)
                         },
+                        onViewProfile = { peerEmail, peerName ->
+                            val registeredUser = allUsers.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }
+                            selectedUserForInfo = GroupMember(
+                                email = peerEmail,
+                                name = registeredUser?.displayName?.takeIf(String::isNotBlank) ?: peerName,
+                                avatarUrl = registeredUser?.avatarUrl.orEmpty()
+                            )
+                            showUserInfoDialog = true
+                        },
                         onOpenYouTubeOverlay = { vId, vTitle ->
                             activeOverlayVideo = Pair(vId, vTitle)
                         },
@@ -2267,6 +2276,7 @@ private fun MessageBubble(
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit,
     onStartDirectChat: (peerEmail: String, peerName: String) -> Unit,
+    onViewProfile: (peerEmail: String, peerName: String) -> Unit,
     onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> },
     onOpenStandardVideo: (videoUrl: String, title: String) -> Unit = { _, _ -> }
 ) {
@@ -2342,7 +2352,7 @@ private fun MessageBubble(
                         leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp)) },
                         onClick = {
                             showUserMenu = false
-                            onStartDirectChat(message.senderEmail, message.senderName)
+                            onViewProfile(message.senderEmail, message.senderName)
                         }
                     )
                     DropdownMenuItem(
