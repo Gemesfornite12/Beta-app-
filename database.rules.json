@@ -71,7 +71,7 @@
     "social_test": {
       "profiles": {
         "$uid": {
-          ".read": "auth != null && (auth.uid == $uid || data.child('visibility').val() == 'public' || root.child('social_test/followers').child($uid).child(auth.uid).child('status').val() == 'accepted')",
+          ".read": "auth != null && (auth.uid == $uid || data.child('visibility').val() == 'public' || root.child('social_test/followers').child($uid).child(auth.uid).child('status').val() == 'accepted' || root.child('social_test/followRequests').child(auth.uid).child($uid).child('status').val() == 'pending')",
           ".write": "auth != null && auth.uid == $uid",
           ".validate": "!newData.exists() || (newData.child('uid').val() == $uid && (newData.child('visibility').val() == 'public' || newData.child('visibility').val() == 'private'))"
         }

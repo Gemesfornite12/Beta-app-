@@ -1,6 +1,9 @@
 package com.example.ui.screens.social
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,9 +13,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,20 +49,29 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import com.example.ui.components.StandardVideoPlayerDialog
+import com.example.ui.components.VideoPlayer
 import com.example.data.social.SocialFollowRequest
 import com.example.data.social.SocialPost
 import com.example.data.social.SocialProfile
+import com.example.data.social.SocialStory
+import android.net.Uri
 import com.example.data.social.SocialRepository
 import com.example.ui.viewmodel.OmniViewModel
 import kotlinx.coroutines.delay
@@ -85,16 +99,49 @@ fun SocialScreen(
     var viewingProfile by remember { mutableStateOf<SocialProfile?>(null) }
     var profilePosts by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
     var feed by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
+    var stories by remember { mutableStateOf<List<SocialStory>>(emptyList()) }
     var searchResults by remember { mutableStateOf<List<SocialProfile>>(emptyList()) }
     var followRequests by remember { mutableStateOf<List<SocialFollowRequest>>(emptyList()) }
     var followedState by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedSection by remember { mutableStateOf(SocialSection.FOR_YOU) }
     var searchQuery by remember { mutableStateOf("") }
     var newPostText by remember { mutableStateOf("") }
+    var newPostMediaUri by remember { mutableStateOf<Uri?>(null) }
+    var pickerTarget by remember { mutableStateOf("post") }
+    var activeStory by remember { mutableStateOf<SocialStory?>(null) }
+    var videoToPlay by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showCreatePost by remember { mutableStateOf(false) }
+    var isUploadingMedia by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val likedPosts = remember { mutableStateMapOf<String, Boolean>() }
+
+    val mediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            if (pickerTarget == "story") {
+                val current = myProfile
+                if (current != null) {
+                    scope.launch {
+                        isUploadingMedia = true
+                        try {
+                            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+                            repository.createStory(current, uri, mimeType)
+                            stories = repository.loadStories()
+                            errorMessage = null
+                        } catch (error: Exception) {
+                            errorMessage = error.message ?: "No se pudo subir la historia."
+                        } finally {
+                            isUploadingMedia = false
+                        }
+                    }
+                }
+            } else {
+                newPostMediaUri = uri
+            }
+        }
+    }
 
     fun postKey(post: SocialPost) = "${post.ownerUid}:${post.id}"
 
@@ -121,6 +168,7 @@ fun SocialScreen(
                 avatarUrlHint = currentUser.avatarUrl
             )
             followRequests = repository.pendingFollowRequests()
+            stories = repository.loadStories()
             isLoading = false
         } catch (error: Exception) {
             errorMessage = error.message ?: "No se pudo cargar tu perfil social."
@@ -252,6 +300,7 @@ fun SocialScreen(
             ViewedProfileContent(
                 profile = viewingProfile!!,
                 posts = profilePosts,
+                repository = repository,
                 followStatus = followedState[viewingProfile!!.uid].orEmpty(),
                 onFollow = {
                     viewingProfile?.let { target ->
@@ -282,7 +331,21 @@ fun SocialScreen(
                             item {
                                 StoriesPlaceholder(
                                     profile = myProfile,
-                                    onAddStory = { errorMessage = "La carga privada de historias se está preparando para la siguiente etapa." }
+                                    stories = stories,
+                                    onAddStory = {
+                                        pickerTarget = "story"
+                                        mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                                    },
+                                    onOpenStory = { story ->
+                                        scope.launch {
+                                            try {
+                                                val url = repository.signedMediaUrl(story.mediaPath, "story", story.id)
+                                                activeStory = story.copy(mediaUrl = url)
+                                            } catch (error: Exception) {
+                                                errorMessage = "No se pudo abrir esta historia privada."
+                                            }
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -292,6 +355,7 @@ fun SocialScreen(
                             items(feed, key = { postKey(it) }) { post ->
                                 SocialPostCard(
                                     post = post,
+                                    repository = repository,
                                     liked = likedPosts[postKey(post)] == true,
                                     onLike = {
                                         scope.launch {
@@ -413,6 +477,7 @@ fun SocialScreen(
                         items(myPosts, key = { postKey(it) }) { post ->
                             SocialPostCard(
                                 post = post,
+                                repository = repository,
                                 liked = likedPosts[postKey(post)] == true,
                                 onLike = {
                                     scope.launch {
@@ -429,6 +494,37 @@ fun SocialScreen(
                 }
             }
         }
+    }
+
+    activeStory?.let { story ->
+        Dialog(onDismissRequest = { activeStory = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Surface(color = Color(0xFF05070D), modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
+                    if (story.mediaType == "video") {
+                        VideoPlayer(
+                            videoUrl = story.mediaUrl,
+                            title = "Historia de @${story.username}",
+                            showActionButtons = false,
+                            onLaunchStandardVideo = { url, title -> videoToPlay = url to title }
+                        )
+                    } else {
+                        AsyncImage(
+                            model = story.mediaUrl,
+                            contentDescription = "Historia de ${story.displayName}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    TextButton(onClick = { activeStory = null }, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                        Text("Cerrar", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+
+    videoToPlay?.let { (url, title) ->
+        StandardVideoPlayerDialog(videoUrl = url, title = title, onDismiss = { videoToPlay = null })
     }
 
     if (showCreatePost) {
@@ -448,24 +544,44 @@ fun SocialScreen(
                         minLines = 3,
                         maxLines = 6
                     )
+                    TextButton(onClick = {
+                        pickerTarget = "post"
+                        mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
+                        Text(if (newPostMediaUri == null) "Adjuntar foto o video" else "Cambiar foto o video", color = Color(0xFFF472B6))
+                    }
+                    newPostMediaUri?.let {
+                        Text("Multimedia seleccionada · máximo 50 MB", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = newPostText.isNotBlank(),
+                    enabled = (newPostText.isNotBlank() || newPostMediaUri != null) && !isUploadingMedia,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)),
                     onClick = {
                         val current = myProfile ?: return@Button
                         scope.launch {
+                            isUploadingMedia = true
                             try {
-                                repository.createTextPost(current, newPostText)
+                                val mediaUri = newPostMediaUri
+                                if (mediaUri == null) {
+                                    repository.createTextPost(current, newPostText)
+                                } else {
+                                    val mimeType = context.contentResolver.getType(mediaUri) ?: "image/jpeg"
+                                    repository.createMediaPost(current, newPostText, mediaUri, mimeType)
+                                }
                                 newPostText = ""
+                                newPostMediaUri = null
                                 showCreatePost = false
                                 selectedSection = SocialSection.FOR_YOU
                                 refreshFeed()
                                 errorMessage = null
                             } catch (error: Exception) {
                                 errorMessage = error.message ?: "No se pudo publicar."
+                            } finally {
+                                isUploadingMedia = false
                             }
                         }
                     }
@@ -477,25 +593,39 @@ fun SocialScreen(
 }
 
 @Composable
-private fun StoriesPlaceholder(profile: SocialProfile?, onAddStory: () -> Unit) {
+private fun StoriesPlaceholder(
+    profile: SocialProfile?,
+    stories: List<SocialStory>,
+    onAddStory: () -> Unit,
+    onOpenStory: (SocialStory) -> Unit
+) {
+    val latestStories = stories
+        .filter { it.ownerUid != profile?.uid }
+        .groupBy { it.ownerUid }
+        .values
+        .mapNotNull { group -> group.maxByOrNull { it.createdAt } }
     Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp)) {
         Text("Historias · 24 horas", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onAddStory)) {
-                Box(contentAlignment = Alignment.BottomEnd) {
-                    AvatarCircle(name = profile?.displayName ?: "Tú", color = Color(0xFFE1306C), size = 56)
-                    Surface(color = Color(0xFFE1306C), shape = CircleShape, modifier = Modifier.size(20.dp)) {
-                        Icon(Icons.Default.Add, contentDescription = "Agregar historia", tint = Color.White, modifier = Modifier.padding(2.dp))
+            item {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onAddStory)) {
+                    Box(contentAlignment = Alignment.BottomEnd) {
+                        AvatarCircle(name = profile?.displayName ?: "Tú", color = Color(0xFFE1306C), size = 56)
+                        Surface(color = Color(0xFFE1306C), shape = CircleShape, modifier = Modifier.size(20.dp)) {
+                            Icon(Icons.Default.Add, contentDescription = "Agregar historia", tint = Color.White, modifier = Modifier.padding(2.dp))
+                        }
                     }
+                    Text("Tu historia", color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                 }
-                Text("Tu historia", color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
             }
-            Surface(color = Color(0xFF151C2C), shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f)) {
-                Text("Las historias de las personas que sigues aparecerán aquí", color = Color(0xFF94A3B8), fontSize = 11.sp, modifier = Modifier.padding(12.dp))
+            items(latestStories, key = { it.ownerUid }) { story ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onOpenStory(story) }) {
+                    AvatarCircle(name = story.displayName, color = Color(0xFFE1306C), size = 56)
+                    Text(story.username.take(12), color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                }
             }
         }
     }
@@ -504,10 +634,18 @@ private fun StoriesPlaceholder(profile: SocialProfile?, onAddStory: () -> Unit) 
 @Composable
 private fun SocialPostCard(
     post: SocialPost,
+    repository: SocialRepository,
     liked: Boolean,
     onLike: () -> Unit,
     onAuthorClick: () -> Unit
 ) {
+    val signedMediaUrl by produceState(initialValue = post.mediaUrl, post.mediaPath, post.id) {
+        if (post.mediaPath.isNotBlank() && value.isBlank()) {
+            value = runCatching { repository.signedMediaUrl(post.mediaPath, "post", post.id) }.getOrDefault("")
+        }
+    }
+    var videoToPlay by remember(post.id) { mutableStateOf<Pair<String, String>?>(null) }
+
     Surface(
         color = Color(0xFF111827),
         shape = RoundedCornerShape(18.dp),
@@ -522,7 +660,31 @@ private fun SocialPostCard(
                 }
                 Text(relativeTime(post.createdAt), color = Color(0xFF64748B), fontSize = 10.sp)
             }
-            Text(post.caption, color = Color(0xFFE2E8F0), fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp))
+            if (post.caption.isNotBlank()) {
+                Text(post.caption, color = Color(0xFFE2E8F0), fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp))
+            }
+            if (post.mediaPath.isNotBlank()) {
+                if (signedMediaUrl.isBlank()) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color(0xFFE1306C), modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    }
+                } else if (post.mediaType == "video") {
+                    VideoPlayer(
+                        videoUrl = signedMediaUrl,
+                        title = "Video de @${post.username}",
+                        showActionButtons = false,
+                        modifier = Modifier.padding(top = 10.dp),
+                        onLaunchStandardVideo = { url, title -> videoToPlay = url to title }
+                    )
+                } else {
+                    AsyncImage(
+                        model = signedMediaUrl,
+                        contentDescription = "Publicación de ${post.displayName}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(300.dp)
+                    )
+                }
+            }
             if (post.topics.isNotEmpty()) {
                 Text(post.topics.joinToString("  ") { "#$it" }, color = Color(0xFFF472B6), fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
             }
@@ -539,6 +701,9 @@ private fun SocialPostCard(
                 if (post.mediaType != "text") Text("Multimedia", color = Color(0xFF94A3B8), fontSize = 10.sp)
             }
         }
+    }
+    videoToPlay?.let { (url, title) ->
+        StandardVideoPlayerDialog(videoUrl = url, title = title, onDismiss = { videoToPlay = null })
     }
 }
 
@@ -576,7 +741,7 @@ private fun SearchProfileRow(
 }
 
 @Composable
-private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>, followStatus: String, onFollow: () -> Unit) {
+private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>, repository: SocialRepository, followStatus: String, onFollow: () -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Surface(color = Color(0xFF111827), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(12.dp)) {
@@ -600,7 +765,7 @@ private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>
             item { Text("Las publicaciones se muestran cuando el usuario acepta tu solicitud.", color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 18.dp)) }
         } else {
             items(posts, key = { "${it.ownerUid}:${it.id}" }) { post ->
-                SocialPostCard(post = post, liked = false, onLike = {}, onAuthorClick = {})
+                SocialPostCard(post = post, repository = repository, liked = false, onLike = {}, onAuthorClick = {})
             }
         }
     }

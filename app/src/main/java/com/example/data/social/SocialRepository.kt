@@ -33,7 +33,21 @@ data class SocialPost(
     val createdAt: Long = 0L,
     val topics: List<String> = emptyList(),
     val mediaPath: String = "",
-    val mediaType: String = "text"
+    val mediaType: String = "text",
+    val mediaUrl: String = ""
+)
+
+data class SocialStory(
+    val id: String = "",
+    val ownerUid: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val avatarUrl: String = "",
+    val mediaPath: String = "",
+    val mediaType: String = "image",
+    val createdAt: Long = 0L,
+    val expiresAt: Long = 0L,
+    val mediaUrl: String = ""
 )
 
 data class SocialFollowRequest(
@@ -43,9 +57,11 @@ data class SocialFollowRequest(
 )
 
 class SocialRepository(context: Context) {
-    private val app = FirebaseAppProvider.get(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val app = FirebaseAppProvider.get(appContext)
     private val auth = FirebaseAuth.getInstance(app)
     private val root = FirebaseDatabase.getInstance(app).reference.child("social_test")
+    private val mediaService = SupabaseSocialMediaService(appContext)
 
     private fun currentUid(): String = auth.currentUser?.uid
         ?: error("Inicia sesión para usar Social.")
@@ -119,6 +135,16 @@ class SocialRepository(context: Context) {
                 publicRef.removeValue().await()
             } else {
                 publicRef.setValue(post.value).await()
+            }
+        }
+        val stories = root.child("storiesByUser").child(uid).get().await()
+        for (story in stories.children) {
+            val storyId = story.key ?: continue
+            val publicRef = root.child("publicStories").child(publicStoryKey(uid, storyId))
+            if (updated.isPrivate) {
+                publicRef.removeValue().await()
+            } else {
+                publicRef.setValue(story.value).await()
             }
         }
         return updated
@@ -212,6 +238,93 @@ class SocialRepository(context: Context) {
         }
         return post
     }
+
+    suspend fun createMediaPost(
+        profile: SocialProfile,
+        caption: String,
+        uri: android.net.Uri,
+        mimeType: String
+    ): SocialPost {
+        val uid = currentUid()
+        require(uid == profile.uid) { "El perfil actual no coincide con la sesión." }
+        val cleanCaption = caption.trim().take(2200)
+        val mediaPath = mediaService.upload(uri, "post", mimeType)
+        val postRef = root.child("postsByUser").child(uid).push()
+        val postId = postRef.key ?: error("No se pudo crear el identificador de la publicación.")
+        val mediaType = if (mimeType.startsWith("video/")) "video" else "image"
+        val post = SocialPost(
+            id = postId,
+            ownerUid = uid,
+            username = profile.username,
+            displayName = profile.displayName,
+            avatarUrl = profile.avatarUrl,
+            caption = cleanCaption,
+            createdAt = System.currentTimeMillis(),
+            topics = extractTopics(cleanCaption),
+            mediaPath = mediaPath,
+            mediaType = mediaType
+        )
+        try {
+            postRef.setValue(post.toMap()).await()
+            if (!profile.isPrivate) {
+                root.child("publicFeed").child(publicFeedKey(uid, postId)).setValue(post.toMap()).await()
+            }
+        } catch (error: Exception) {
+            runCatching { mediaService.delete(mediaPath) }
+            throw error
+        }
+        return post
+    }
+
+    suspend fun createStory(profile: SocialProfile, uri: android.net.Uri, mimeType: String): SocialStory {
+        val uid = currentUid()
+        require(uid == profile.uid) { "El perfil actual no coincide con la sesión." }
+        val mediaPath = mediaService.upload(uri, "story", mimeType)
+        val storyRef = root.child("storiesByUser").child(uid).push()
+        val storyId = storyRef.key ?: error("No se pudo crear la historia.")
+        val now = System.currentTimeMillis()
+        val mediaType = if (mimeType.startsWith("video/")) "video" else "image"
+        val story = SocialStory(
+            id = storyId,
+            ownerUid = uid,
+            username = profile.username,
+            displayName = profile.displayName,
+            avatarUrl = profile.avatarUrl,
+            mediaPath = mediaPath,
+            mediaType = mediaType,
+            createdAt = now,
+            expiresAt = now + 24L * 60L * 60L * 1000L
+        )
+        try {
+            storyRef.setValue(story.toMap()).await()
+            if (!profile.isPrivate) {
+                root.child("publicStories").child(publicStoryKey(uid, storyId)).setValue(story.toMap()).await()
+            }
+        } catch (error: Exception) {
+            runCatching { mediaService.delete(mediaPath) }
+            throw error
+        }
+        return story
+    }
+
+    suspend fun loadStories(): List<SocialStory> {
+        val uid = currentUid()
+        val followed = readAcceptedFollowing(uid)
+        val stories = linkedMapOf<String, SocialStory>()
+        root.child("publicStories").get().await().children
+            .mapNotNull { it.toSocialStory() }
+            .forEach { stories["${it.ownerUid}:${it.id}"] = it }
+        (followed + uid).distinct().forEach { ownerUid ->
+            root.child("storiesByUser").child(ownerUid).get().await().children
+                .mapNotNull { it.toSocialStory() }
+                .forEach { stories["${it.ownerUid}:${it.id}"] = it }
+        }
+        val now = System.currentTimeMillis()
+        return stories.values.filter { it.expiresAt > now }.sortedBy { it.createdAt }
+    }
+
+    suspend fun signedMediaUrl(mediaPath: String, entityType: String, entityId: String): String =
+        mediaService.signedDownload(mediaPath, entityType, entityId)
 
     suspend fun setLiked(post: SocialPost, liked: Boolean) {
         val uid = currentUid()
@@ -346,6 +459,7 @@ class SocialRepository(context: Context) {
             .toList()
 
     private fun publicFeedKey(uid: String, postId: String) = "${uid}_$postId"
+    private fun publicStoryKey(uid: String, storyId: String) = "${uid}_$storyId"
 
     private fun SocialProfile.toMap(): Map<String, Any?> = mapOf(
         "uid" to uid,
@@ -369,6 +483,36 @@ class SocialRepository(context: Context) {
         "mediaPath" to mediaPath,
         "mediaType" to mediaType
     )
+
+    private fun SocialStory.toMap(): Map<String, Any?> = mapOf(
+        "id" to id,
+        "ownerUid" to ownerUid,
+        "username" to username,
+        "displayName" to displayName,
+        "avatarUrl" to avatarUrl,
+        "mediaPath" to mediaPath,
+        "mediaType" to mediaType,
+        "createdAt" to createdAt,
+        "expiresAt" to expiresAt
+    )
+
+    private fun DataSnapshot.toSocialStory(): SocialStory? {
+        if (!exists()) return null
+        val ownerUid = child("ownerUid").getValue(String::class.java).orEmpty()
+        val id = child("id").getValue(String::class.java) ?: key.orEmpty()
+        if (ownerUid.isBlank() || id.isBlank()) return null
+        return SocialStory(
+            id = id,
+            ownerUid = ownerUid,
+            username = child("username").getValue(String::class.java).orEmpty(),
+            displayName = child("displayName").getValue(String::class.java) ?: "Usuario",
+            avatarUrl = child("avatarUrl").getValue(String::class.java).orEmpty(),
+            mediaPath = child("mediaPath").getValue(String::class.java).orEmpty(),
+            mediaType = child("mediaType").getValue(String::class.java) ?: "image",
+            createdAt = child("createdAt").getValue(Long::class.java) ?: 0L,
+            expiresAt = child("expiresAt").getValue(Long::class.java) ?: 0L
+        )
+    }
 
     private fun DataSnapshot.toSocialProfile(): SocialProfile? {
         if (!exists()) return null

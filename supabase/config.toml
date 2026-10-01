@@ -6,3 +6,7 @@ verify_jwt = false
 # This endpoint validates the Firebase ID token itself.
 [functions.notify-chat-message]
 verify_jwt = false
+
+# Private Social media endpoints verify Firebase ID tokens themselves.
+[functions.social-media-access]
+verify_jwt = false
