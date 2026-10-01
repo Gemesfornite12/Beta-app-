@@ -60,7 +60,7 @@ import java.util.Locale
 private sealed interface PendingWorkspaceAuthorization {
     data class Connect(val connectorId: String) : PendingWorkspaceAuthorization
     data class Query(val text: String, val connectorIds: Set<String>) : PendingWorkspaceAuthorization
-    data class Action(val request: GoogleWorkspaceActionRequest) : PendingWorkspaceAuthorization
+    data class Action(val request: GoogleWorkspaceActionRequest, val fromChat: Boolean = false) : PendingWorkspaceAuthorization
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -123,6 +123,8 @@ fun AiAssistantScreen(
     val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
     val context = LocalContext.current
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    var pendingChatWorkspaceAction by remember(firebaseUid) { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
+    var chatWorkspaceActionRunning by remember(firebaseUid) { mutableStateOf(false) }
     var workspaceChatMessages by remember(firebaseUid) { mutableStateOf<List<ChatMessage>>(emptyList()) }
     val displayedAiChatHistory = remember(aiChatHistory, workspaceChatMessages) {
         (aiChatHistory + workspaceChatMessages).sortedBy { it.timestamp }
@@ -150,9 +152,19 @@ fun AiAssistantScreen(
         )
     }
 
+    fun failChatWorkspaceAction(message: String) {
+        pendingChatWorkspaceAction = null
+        chatWorkspaceActionRunning = false
+        addWorkspaceChatMessage(isUser = false, text = message)
+    }
+
     fun finishWorkspaceAuthorization(action: PendingWorkspaceAuthorization, accessToken: String?) {
         if (accessToken.isNullOrBlank()) {
-            Toast.makeText(context, "Google no devolvió un permiso válido.", Toast.LENGTH_LONG).show()
+            if (action is PendingWorkspaceAuthorization.Action && action.fromChat) {
+                failChatWorkspaceAction("Google no devolvió el permiso; no se ejecutó la acción.")
+            } else {
+                Toast.makeText(context, "Google no devolvió un permiso válido.", Toast.LENGTH_LONG).show()
+            }
             return
         }
         when (action) {
@@ -167,7 +179,7 @@ fun AiAssistantScreen(
                 viewModel.sendAiMessageWithGroqWorkspace(action.text, tokens)
             }
             is PendingWorkspaceAuthorization.Action -> {
-                workspaceActionLoading = true
+                if (action.fromChat) chatWorkspaceActionRunning = true else workspaceActionLoading = true
                 workspaceActionScope.launch {
                     val resultText = runCatching {
                         executeGoogleWorkspaceAction(context, action.request, accessToken)
@@ -175,11 +187,17 @@ fun AiAssistantScreen(
                         onSuccess = { it },
                         onFailure = { "No se completó la acción: ${it.message ?: "error de Google"}" }
                     )
-                    workspaceActionResult = resultText
                     val chatResult = if (resultText.startsWith("No se completó la acción")) resultText
                         else "${action.request.type.title} completado.\n\n$resultText"
-                    addWorkspaceChatMessage(isUser = false, text = chatResult)
-                    workspaceActionLoading = false
+                    if (action.fromChat) {
+                        workspaceActionResult = null
+                        addWorkspaceChatMessage(isUser = false, text = chatResult)
+                        pendingChatWorkspaceAction = null
+                        chatWorkspaceActionRunning = false
+                    } else {
+                        workspaceActionResult = resultText
+                        workspaceActionLoading = false
+                    }
                 }
             }
         }
@@ -195,9 +213,13 @@ fun AiAssistantScreen(
                 runCatching {
                     Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(result.data).accessToken
                 }.onSuccess { token -> finishWorkspaceAuthorization(pending, token) }
-                    .onFailure { Toast.makeText(context, "No se pudo completar la autorización de Google.", Toast.LENGTH_LONG).show() }
+                    .onFailure {
+                        if (pending is PendingWorkspaceAuthorization.Action && pending.fromChat) failChatWorkspaceAction("No se pudo completar el permiso de Google; no se ejecutó la acción.")
+                        else Toast.makeText(context, "No se pudo completar la autorización de Google.", Toast.LENGTH_LONG).show()
+                    }
             } else {
-                Toast.makeText(context, "No se concedieron los permisos seleccionados.", Toast.LENGTH_LONG).show()
+                if (pending is PendingWorkspaceAuthorization.Action && pending.fromChat) failChatWorkspaceAction("No concediste el permiso; no se ejecutó la acción.")
+                else Toast.makeText(context, "No se concedieron los permisos seleccionados.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -246,17 +268,25 @@ fun AiAssistantScreen(
             }
     }
 
-    fun requestGoogleWorkspaceAction(request: GoogleWorkspaceActionRequest) {
+    fun requestGoogleWorkspaceAction(request: GoogleWorkspaceActionRequest, fromChat: Boolean = false) {
+        fun fail(message: String) {
+            if (fromChat) failChatWorkspaceAction(message)
+            else Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+        if (fromChat) {
+            chatWorkspaceActionRunning = true
+            workspaceActionResult = null
+        }
         if (firebaseUid.isBlank()) {
-            Toast.makeText(context, "Inicia sesión en OmniStudio antes de usar Google Workspace.", Toast.LENGTH_LONG).show()
+            fail("Inicia sesión en OmniStudio antes de usar Google Workspace.")
             return
         }
         val activity = context.findActivity()
         if (activity == null) {
-            Toast.makeText(context, "No se pudo abrir la autorización de Google.", Toast.LENGTH_LONG).show()
+            fail("No se pudo abrir la autorización de Google.")
             return
         }
-        val pending = PendingWorkspaceAuthorization.Action(request)
+        val pending = PendingWorkspaceAuthorization.Action(request, fromChat)
         val authorizationRequest = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(request.type.scope)))
             .build()
@@ -265,14 +295,14 @@ fun AiAssistantScreen(
                 if (authorizationResult.hasResolution()) {
                     val pendingIntent = authorizationResult.pendingIntent
                     if (pendingIntent == null) {
-                        Toast.makeText(context, "Google no pudo iniciar la autorización.", Toast.LENGTH_LONG).show()
+                        fail("Google no pudo iniciar la autorización.")
                     } else {
                         pendingWorkspaceAuthorization = pending
                         runCatching {
                             workspaceAuthorizationLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
                         }.onFailure {
                             pendingWorkspaceAuthorization = null
-                            Toast.makeText(context, "No se pudo abrir el permiso de Google.", Toast.LENGTH_LONG).show()
+                            fail("No se pudo abrir el permiso de Google.")
                         }
                     }
                 } else {
@@ -280,7 +310,7 @@ fun AiAssistantScreen(
                 }
             }
             .addOnFailureListener {
-                Toast.makeText(context, "No se pudo autorizar el permiso de Google.", Toast.LENGTH_LONG).show()
+                fail("No se pudo autorizar el permiso de Google.")
             }
     }
 
@@ -336,21 +366,26 @@ fun AiAssistantScreen(
             isLoading = isAiLoading,
             modifier = Modifier.fillMaxSize().padding(padding),
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
+            pendingWorkspaceAction = pendingChatWorkspaceAction,
+            isWorkspaceActionRunning = chatWorkspaceActionRunning,
+            onConfirmWorkspaceAction = { request -> requestGoogleWorkspaceAction(request, fromChat = true) },
+            onCancelWorkspaceAction = {
+                pendingChatWorkspaceAction = null
+                addWorkspaceChatMessage(isUser = false, text = "Acción cancelada. No se realizó ningún cambio.")
+            },
             onSend = { message ->
                 if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
                     val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
-                    workspaceActionResult = notice
+                    workspaceActionResult = null
                     addWorkspaceChatMessage(isUser = false, text = notice)
                 } else {
                     val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
                     if (workspaceCommand != null) {
+                        addWorkspaceChatMessage(isUser = true, text = message)
                         if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(workspaceCommand.request)) {
-                            addWorkspaceChatMessage(isUser = true, text = message)
-                            requestGoogleWorkspaceAction(workspaceCommand.request)
+                            requestGoogleWorkspaceAction(workspaceCommand.request, fromChat = true)
                         } else {
-                            workspaceActionInitialRequest = workspaceCommand.request
-                            workspaceActionPrompt = workspaceCommand.originalText
-                            showGoogleWorkspaceActions = true
+                            pendingChatWorkspaceAction = workspaceCommand.request
                         }
                     } else {
                         val saveCandidate = saraSaveCandidate(message)
@@ -590,6 +625,10 @@ private fun SaraChatView(
     isLoading: Boolean,
     modifier: Modifier = Modifier,
     connectorSelectionLabel: String,
+    pendingWorkspaceAction: GoogleWorkspaceActionRequest?,
+    isWorkspaceActionRunning: Boolean,
+    onConfirmWorkspaceAction: (GoogleWorkspaceActionRequest) -> Unit,
+    onCancelWorkspaceAction: () -> Unit,
     onSend: (String) -> Unit,
     onSendAttachment: (Uri, String) -> Unit,
     onRequestSave: (String) -> Unit
@@ -599,6 +638,7 @@ private fun SaraChatView(
     var attachmentUri by remember { mutableStateOf<Uri?>(null) }
     var attachmentName by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val isInputBlocked = isLoading || pendingWorkspaceAction != null || isWorkspaceActionRunning
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -653,8 +693,10 @@ private fun SaraChatView(
         }
     }
 
-    LaunchedEffect(history.size, isLoading) {
-        val lastIndex = history.lastIndex
+    LaunchedEffect(history.size, isLoading, pendingWorkspaceAction, isWorkspaceActionRunning) {
+        val extraItems = (if (pendingWorkspaceAction != null) 1 else 0) +
+            (if (isWorkspaceActionRunning && pendingWorkspaceAction == null) 1 else 0)
+        val lastIndex = history.lastIndex + extraItems
         if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
     }
 
@@ -751,6 +793,27 @@ private fun SaraChatView(
                         }
                     }
                 }
+                pendingWorkspaceAction?.let { request ->
+                    item(key = "workspace-action-card") {
+                        WorkspaceActionChatCard(
+                            request = request,
+                            isRunning = isWorkspaceActionRunning,
+                            onConfirm = onConfirmWorkspaceAction,
+                            onCancel = onCancelWorkspaceAction
+                        )
+                    }
+                }
+                if (isWorkspaceActionRunning && pendingWorkspaceAction == null) {
+                    item(key = "workspace-read-status") {
+                        Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(18.dp)) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
+                                Spacer(Modifier.width(9.dp))
+                                Text("Consultando Google Workspace…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
                 if (isLoading) {
                     item {
                         Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(18.dp)) {
@@ -777,7 +840,7 @@ private fun SaraChatView(
                 ) {
                     Icon(Icons.Default.AttachFile, contentDescription = null, tint = Color(0xFFA5B4FC), modifier = Modifier.size(18.dp))
                     Text(attachmentName ?: "Archivo adjunto", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                    IconButton(onClick = { attachmentUri = null; attachmentName = null }, enabled = !isLoading) {
+                    IconButton(onClick = { attachmentUri = null; attachmentName = null }, enabled = !isInputBlocked) {
                         Icon(Icons.Default.Close, contentDescription = "Quitar adjunto", tint = Color(0xFFCBD5E1), modifier = Modifier.size(18.dp))
                     }
                 }
@@ -807,7 +870,7 @@ private fun SaraChatView(
         ) {
             IconButton(
                 onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 modifier = Modifier.size(42.dp)
             ) {
                 Icon(Icons.Default.AttachFile, contentDescription = "Adjuntar documento, audio o video", tint = Color(0xFFA5B4FC))
@@ -818,7 +881,7 @@ private fun SaraChatView(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Escribe o busca aquí…", color = Color(0xFF94A3B8)) },
                 maxLines = 4,
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
@@ -831,7 +894,7 @@ private fun SaraChatView(
             )
             IconButton(
                 onClick = { micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO) },
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 modifier = Modifier.size(42.dp)
             ) {
                 Icon(Icons.Default.Mic, contentDescription = "Dictar a Sara", tint = Color(0xFFA5B4FC))
@@ -840,17 +903,17 @@ private fun SaraChatView(
                 onClick = {
                     val message = draft.trim()
                     val uri = attachmentUri
-                    if (uri != null && !isLoading) {
+                    if (uri != null && !isInputBlocked) {
                         onSendAttachment(uri, message)
                         attachmentUri = null
                         attachmentName = null
                         draft = ""
-                    } else if (message.isNotEmpty() && !isLoading) {
+                    } else if (message.isNotEmpty() && !isInputBlocked) {
                         onSend(message)
                         draft = ""
                     }
                 },
-                enabled = (draft.isNotBlank() || attachmentUri != null) && !isLoading,
+                enabled = (draft.isNotBlank() || attachmentUri != null) && !isInputBlocked,
                 modifier = Modifier.size(44.dp).background(Color(0xFF6366F1), CircleShape)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar a Sara", tint = Color.White)
