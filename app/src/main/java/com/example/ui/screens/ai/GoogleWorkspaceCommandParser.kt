@@ -114,7 +114,7 @@ internal object GoogleWorkspaceCommandParser {
         }
         if ((has("mover archivo a la papelera", "papelera archivo", "eliminar archivo", "elimina archivo", "borrar archivo", "borra archivo", "mover archivo", "trash drive file") && has("drive", "archivo", "documento", "file")))
             return request(GoogleWorkspaceActionType.TRASH_DRIVE, mapOf("fileId" to id))
-        if (has("subir archivo", "subir documento", "upload file"))
+        if (has("subir archivo", "subir documento", "upload file") || normalized.trim() in setOf("subir", "subir a drive", "upload"))
             return request(GoogleWorkspaceActionType.UPLOAD_DRIVE)
         if (has("crear carpeta", "nueva carpeta", "create folder") && has("drive", "carpeta")) {
             val name = Regex("(?:carpeta)\\s+(?:llamada\\s+|con nombre\\s+)?(.+)$", RegexOption.IGNORE_CASE).find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
