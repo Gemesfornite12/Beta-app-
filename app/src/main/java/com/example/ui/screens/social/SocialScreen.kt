@@ -111,6 +111,11 @@ fun SocialScreen(
     var activeStory by remember { mutableStateOf<SocialStory?>(null) }
     var videoToPlay by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showCreatePost by remember { mutableStateOf(false) }
+    var showEditProfile by remember { mutableStateOf(false) }
+    var editDisplayName by remember { mutableStateOf("") }
+    var editUsername by remember { mutableStateOf("") }
+    var editBio by remember { mutableStateOf("") }
+    var isSavingProfile by remember { mutableStateOf(false) }
     var isUploadingMedia by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -440,6 +445,14 @@ fun SocialScreen(
                         item {
                             MyProfileCard(
                                 profile = myProfile,
+                                onEdit = {
+                                    myProfile?.let { profile ->
+                                        editDisplayName = profile.displayName
+                                        editUsername = profile.username
+                                        editBio = profile.bio
+                                        showEditProfile = true
+                                    }
+                                },
                                 onVisibilityChanged = { makePublic ->
                                     myProfile?.let { current ->
                                         scope.launch {
@@ -525,6 +538,78 @@ fun SocialScreen(
 
     videoToPlay?.let { (url, title) ->
         StandardVideoPlayerDialog(videoUrl = url, title = title, onDismiss = { videoToPlay = null })
+    }
+
+    if (showEditProfile) {
+        AlertDialog(
+            onDismissRequest = { if (!isSavingProfile) showEditProfile = false },
+            containerColor = Color(0xFF151C2C),
+            title = { Text("Editar perfil", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editDisplayName,
+                        onValueChange = { editDisplayName = it.take(48) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Nombre visible") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editUsername,
+                        onValueChange = { value ->
+                            editUsername = value.lowercase(Locale.ROOT)
+                                .filter { it in 'a'..'z' || it in '0'..'9' || it == '_' }
+                                .take(20)
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("social_edit_username"),
+                        label = { Text("Nombre de usuario (sin @)") },
+                        singleLine = true
+                    )
+                    Text("Si ya está ocupado, se agregará un número para hacerlo único.", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    OutlinedTextField(
+                        value = editBio,
+                        onValueChange = { editBio = it.take(160) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Descripción") },
+                        maxLines = 3
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = editUsername.length >= 3 && !isSavingProfile,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)),
+                    onClick = {
+                        val current = myProfile ?: return@Button
+                        scope.launch {
+                            isSavingProfile = true
+                            try {
+                                val requestedUsername = editUsername.trim().removePrefix("@").lowercase(Locale.ROOT)
+                                val updated = repository.updateProfile(
+                                    current = current,
+                                    displayName = editDisplayName,
+                                    bio = editBio,
+                                    visibility = current.visibility,
+                                    username = requestedUsername
+                                )
+                                myProfile = updated
+                                showEditProfile = false
+                                refreshFeed()
+                                profilePosts = repository.loadProfilePosts(current.uid)
+                                errorMessage = if (updated.username != requestedUsername) {
+                                    "Ese nombre ya estaba usado; se asignó @${updated.username}."
+                                } else null
+                            } catch (error: Exception) {
+                                errorMessage = error.message ?: "No se pudo guardar el perfil."
+                            } finally {
+                                isSavingProfile = false
+                            }
+                        }
+                    }
+                ) { Text(if (isSavingProfile) "Guardando…" else "Guardar") }
+            },
+            dismissButton = { TextButton(onClick = { showEditProfile = false }, enabled = !isSavingProfile) { Text("Cancelar") } }
+        )
     }
 
     if (showCreatePost) {
@@ -613,7 +698,7 @@ private fun StoriesPlaceholder(
             item {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onAddStory)) {
                     Box(contentAlignment = Alignment.BottomEnd) {
-                        AvatarCircle(name = profile?.displayName ?: "Tú", color = Color(0xFFE1306C), size = 56)
+                        AvatarCircle(name = profile?.displayName ?: "Tú", color = Color(0xFFE1306C), size = 56, imageUrl = profile?.avatarUrl.orEmpty())
                         Surface(color = Color(0xFFE1306C), shape = CircleShape, modifier = Modifier.size(20.dp)) {
                             Icon(Icons.Default.Add, contentDescription = "Agregar historia", tint = Color.White, modifier = Modifier.padding(2.dp))
                         }
@@ -623,7 +708,7 @@ private fun StoriesPlaceholder(
             }
             items(latestStories, key = { it.ownerUid }) { story ->
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onOpenStory(story) }) {
-                    AvatarCircle(name = story.displayName, color = Color(0xFFE1306C), size = 56)
+                    AvatarCircle(name = story.displayName, color = Color(0xFFE1306C), size = 56, imageUrl = story.avatarUrl)
                     Text(story.username.take(12), color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
@@ -653,7 +738,7 @@ private fun SocialPostCard(
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AvatarCircle(name = post.displayName, color = Color(0xFF7C3AED), size = 40)
+                AvatarCircle(name = post.displayName, color = Color(0xFF7C3AED), size = 40, imageUrl = post.avatarUrl)
                 Column(Modifier.weight(1f).padding(start = 10.dp).clickable(onClick = onAuthorClick)) {
                     Text(post.displayName, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("@${post.username}", color = Color(0xFF94A3B8), fontSize = 10.sp)
@@ -717,7 +802,7 @@ private fun SearchProfileRow(
 ) {
     Surface(color = Color(0xFF111827), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 42)
+            AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 42, imageUrl = profile.avatarUrl)
             Column(Modifier.weight(1f).padding(start = 10.dp).clickable(onClick = onOpen)) {
                 Text(profile.displayName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 11.sp)
@@ -746,7 +831,7 @@ private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>
         item {
             Surface(color = Color(0xFF111827), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(20.dp)) {
-                    AvatarCircle(name = profile.displayName, color = Color(0xFF7C3AED), size = 72)
+                    AvatarCircle(name = profile.displayName, color = Color(0xFF7C3AED), size = 72, imageUrl = profile.avatarUrl)
                     Text(profile.displayName, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                     Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 12.sp)
                     Text(if (profile.isPrivate) "Perfil privado" else "Perfil público", color = Color(0xFFCBD5E1), fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
@@ -772,17 +857,20 @@ private fun ViewedProfileContent(profile: SocialProfile, posts: List<SocialPost>
 }
 
 @Composable
-private fun MyProfileCard(profile: SocialProfile?, onVisibilityChanged: (Boolean) -> Unit) {
+private fun MyProfileCard(profile: SocialProfile?, onEdit: () -> Unit, onVisibilityChanged: (Boolean) -> Unit) {
     if (profile == null) return
     Surface(color = Color(0xFF111827), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 64)
+                AvatarCircle(name = profile.displayName, color = Color(0xFFE1306C), size = 64, imageUrl = profile.avatarUrl)
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text(profile.displayName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text("@${profile.username}", color = Color(0xFF94A3B8), fontSize = 12.sp)
                     Text(if (profile.isPrivate) "Solo seguidores aprobados verán tus publicaciones" else "Tu perfil es visible para la comunidad", color = Color(0xFFCBD5E1), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                 }
+            }
+            TextButton(onClick = onEdit, modifier = Modifier.padding(top = 2.dp)) {
+                Text("Editar perfil", color = Color(0xFFF472B6))
             }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
                 Icon(if (profile.isPrivate) Icons.Default.Lock else Icons.Default.Public, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
@@ -827,15 +915,24 @@ private fun EmptySocialFeed(isFollowing: Boolean, onCreate: () -> Unit) {
 }
 
 @Composable
-private fun AvatarCircle(name: String, color: Color, size: Int) {
+private fun AvatarCircle(name: String, color: Color, size: Int, imageUrl: String = "") {
     Surface(color = color.copy(alpha = 0.22f), shape = CircleShape, modifier = Modifier.size(size.dp)) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "S",
-                color = Color(0xFFF9A8D4),
-                fontWeight = FontWeight.Bold,
-                fontSize = (size / 2.4f).sp
+        if (imageUrl.isNotBlank()) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = "Foto de perfil de $name",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(CircleShape)
             )
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "S",
+                    color = Color(0xFFF9A8D4),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (size / 2.4f).sp
+                )
+            }
         }
     }
 }

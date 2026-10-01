@@ -87,10 +87,16 @@ class SocialRepository(context: Context) {
                 avatarUrl = avatarUrlHint,
                 visibility = "private",
                 createdAt = System.currentTimeMillis()
-            ).also { ref.setValue(it.toMap()).await() }
+            )
         }
-        writeDirectoryEntry(profile)
-        return profile
+        val uniqueUsername = chooseAvailableUsername(profile.username, uid)
+        val finalProfile = profile.copy(username = uniqueUsername)
+        ref.setValue(finalProfile.toMap()).await()
+        writeDirectoryEntry(finalProfile)
+        if (!profile.username.equals(finalProfile.username, ignoreCase = true)) {
+            root.child("directory").child(profile.username.lowercase(Locale.ROOT)).child(uid).removeValue().await()
+        }
+        return finalProfile
     }
 
     suspend fun getProfile(uid: String): SocialProfile? =
@@ -115,37 +121,49 @@ class SocialRepository(context: Context) {
         current: SocialProfile,
         displayName: String,
         bio: String,
-        visibility: String
+        visibility: String,
+        username: String = current.username
     ): SocialProfile {
         val uid = currentUid()
         require(uid == current.uid) { "Solo puedes editar tu propio perfil." }
+        val uniqueUsername = chooseAvailableUsername(username, uid)
         val updated = current.copy(
+            username = uniqueUsername,
             displayName = displayName.trim().take(48).ifBlank { current.displayName },
             bio = bio.trim().take(160),
             visibility = if (visibility == "public") "public" else "private"
         )
         root.child("profiles").child(uid).setValue(updated.toMap()).await()
         writeDirectoryEntry(updated)
+        if (!current.username.equals(updated.username, ignoreCase = true)) {
+            root.child("directory").child(current.username.lowercase(Locale.ROOT)).child(uid).removeValue().await()
+        }
 
         val posts = root.child("postsByUser").child(uid).get().await()
         for (post in posts.children) {
             val postId = post.key ?: continue
+            val postFields = (post.value as? Map<*, *>)?.entries
+                ?.mapNotNull { (key, value) -> (key as? String)?.let { it to value } }
+                ?.toMap()?.toMutableMap() ?: continue
+            postFields["username"] = updated.username
+            postFields["displayName"] = updated.displayName
+            postFields["avatarUrl"] = updated.avatarUrl
+            root.child("postsByUser").child(uid).child(postId).setValue(postFields).await()
             val publicRef = root.child("publicFeed").child(publicFeedKey(uid, postId))
-            if (updated.isPrivate) {
-                publicRef.removeValue().await()
-            } else {
-                publicRef.setValue(post.value).await()
-            }
+            if (updated.isPrivate) publicRef.removeValue().await() else publicRef.setValue(postFields).await()
         }
         val stories = root.child("storiesByUser").child(uid).get().await()
         for (story in stories.children) {
             val storyId = story.key ?: continue
+            val storyFields = (story.value as? Map<*, *>)?.entries
+                ?.mapNotNull { (key, value) -> (key as? String)?.let { it to value } }
+                ?.toMap()?.toMutableMap() ?: continue
+            storyFields["username"] = updated.username
+            storyFields["displayName"] = updated.displayName
+            storyFields["avatarUrl"] = updated.avatarUrl
+            root.child("storiesByUser").child(uid).child(storyId).setValue(storyFields).await()
             val publicRef = root.child("publicStories").child(publicStoryKey(uid, storyId))
-            if (updated.isPrivate) {
-                publicRef.removeValue().await()
-            } else {
-                publicRef.setValue(story.value).await()
-            }
+            if (updated.isPrivate) publicRef.removeValue().await() else publicRef.setValue(storyFields).await()
         }
         return updated
     }
@@ -440,6 +458,20 @@ class SocialRepository(context: Context) {
 
             override fun onComplete(error: com.google.firebase.database.DatabaseError?, committed: Boolean, currentData: DataSnapshot?) = Unit
         })
+    }
+
+    private suspend fun chooseAvailableUsername(requested: String, uid: String): String {
+        val base = requested.trim().removePrefix("@").lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9_]"), "")
+        require(base.length in 3..20) { "El nombre de usuario debe tener entre 3 y 20 caracteres: letras, números o guion bajo." }
+        for (attempt in 1..999) {
+            val suffix = if (attempt == 1) "" else "_$attempt"
+            val candidate = base.take(20 - suffix.length) + suffix
+            val occupants = root.child("directory").child(candidate).get().await()
+            val takenByOther = occupants.children.any { it.key != uid }
+            if (!takenByOther) return candidate
+        }
+        error("No encontré un nombre de usuario disponible. Prueba otro.")
     }
 
     private suspend fun writeDirectoryEntry(profile: SocialProfile) {
