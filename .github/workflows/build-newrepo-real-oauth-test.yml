@@ -6,6 +6,10 @@ on:
       - zapia/test-newrepo-real-oauth-20260930
     paths:
       - '.github/workflows/build-newrepo-real-oauth-test.yml'
+      - 'app/build.gradle.kts'
+      - 'app/src/main/**'
+      - 'app/src/test/**'
+      - 'gradle/libs.versions.toml'
   workflow_dispatch:
 
 permissions:
@@ -69,7 +73,7 @@ jobs:
         run: gradle assembleDebug --stacktrace
 
       - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --stacktrace
+        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --stacktrace
 
       - name: Upload unit test report after failure
         if: failure()
