@@ -125,6 +125,7 @@ fun AiAssistantScreen(
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
     var pendingChatWorkspaceAction by remember(firebaseUid) { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
     var chatWorkspaceActionRunning by remember(firebaseUid) { mutableStateOf(false) }
+    var workspaceCommandTranslationLoading by remember(firebaseUid) { mutableStateOf(false) }
     var workspaceChatMessages by remember(firebaseUid) { mutableStateOf<List<ChatMessage>>(emptyList()) }
     val displayedAiChatHistory = remember(aiChatHistory, workspaceChatMessages) {
         (aiChatHistory + workspaceChatMessages).sortedBy { it.timestamp }
@@ -314,6 +315,52 @@ fun AiAssistantScreen(
             }
     }
 
+    fun sendOrdinarySaraMessage(message: String) {
+        val saveCandidate = saraSaveCandidate(message)
+        if (selectedConnectorIds.isEmpty()) {
+            viewModel.sendAiMessage(message)
+        } else {
+            val ids = selectedConnectorIds.toSet()
+            requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+        }
+        if (saveCandidate != null) pendingKnowledge = saveCandidate
+    }
+
+    fun dispatchWorkspaceChatCommand(originalText: String, command: ParsedWorkspaceCommand) {
+        addWorkspaceChatMessage(isUser = true, text = originalText)
+        if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(command.request)) {
+            requestGoogleWorkspaceAction(command.request, fromChat = true)
+        } else {
+            pendingChatWorkspaceAction = command.request
+        }
+    }
+
+    fun handleSaraMessage(message: String) {
+        if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
+            val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
+            workspaceActionResult = null
+            addWorkspaceChatMessage(isUser = false, text = notice)
+            return
+        }
+        val directCommand = GoogleWorkspaceCommandParser.parse(message)
+        if (directCommand != null) {
+            dispatchWorkspaceChatCommand(message, directCommand)
+            return
+        }
+        if (GoogleWorkspaceCommandParser.shouldTranslatePotentialWorkspaceCommand(message)) {
+            workspaceCommandTranslationLoading = true
+            workspaceActionScope.launch {
+                val translated = runCatching { viewModel.translateWorkspaceCommandToSpanish(message) }.getOrNull()
+                workspaceCommandTranslationLoading = false
+                val translatedCommand = translated?.let { GoogleWorkspaceCommandParser.parse(it) }
+                if (translatedCommand != null) dispatchWorkspaceChatCommand(message, translatedCommand)
+                else sendOrdinarySaraMessage(message)
+            }
+            return
+        }
+        sendOrdinarySaraMessage(message)
+    }
+
     LaunchedEffect(Unit) { viewModel.refreshSaraKnowledge() }
     LaunchedEffect(saraKnowledgeFeedback) {
         saraKnowledgeFeedback?.let { message ->
@@ -368,37 +415,13 @@ fun AiAssistantScreen(
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
             pendingWorkspaceAction = pendingChatWorkspaceAction,
             isWorkspaceActionRunning = chatWorkspaceActionRunning,
+            isWorkspaceCommandTranslationLoading = workspaceCommandTranslationLoading,
             onConfirmWorkspaceAction = { request -> requestGoogleWorkspaceAction(request, fromChat = true) },
             onCancelWorkspaceAction = {
                 pendingChatWorkspaceAction = null
                 addWorkspaceChatMessage(isUser = false, text = "Acción cancelada. No se realizó ningún cambio.")
             },
-            onSend = { message ->
-                if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
-                    val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
-                    workspaceActionResult = null
-                    addWorkspaceChatMessage(isUser = false, text = notice)
-                } else {
-                    val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
-                    if (workspaceCommand != null) {
-                        addWorkspaceChatMessage(isUser = true, text = message)
-                        if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(workspaceCommand.request)) {
-                            requestGoogleWorkspaceAction(workspaceCommand.request, fromChat = true)
-                        } else {
-                            pendingChatWorkspaceAction = workspaceCommand.request
-                        }
-                    } else {
-                        val saveCandidate = saraSaveCandidate(message)
-                        if (selectedConnectorIds.isEmpty()) {
-                            viewModel.sendAiMessage(message)
-                        } else {
-                            val ids = selectedConnectorIds.toSet()
-                            requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
-                        }
-                        if (saveCandidate != null) pendingKnowledge = saveCandidate
-                    }
-                }
-            },
+            onSend = { message -> handleSaraMessage(message) },
             onSendAttachment = { uri, prompt ->
                 selectedConnectorIds = emptySet()
                 viewModel.sendAiAttachment(uri, prompt)
@@ -627,6 +650,7 @@ private fun SaraChatView(
     connectorSelectionLabel: String,
     pendingWorkspaceAction: GoogleWorkspaceActionRequest?,
     isWorkspaceActionRunning: Boolean,
+    isWorkspaceCommandTranslationLoading: Boolean,
     onConfirmWorkspaceAction: (GoogleWorkspaceActionRequest) -> Unit,
     onCancelWorkspaceAction: () -> Unit,
     onSend: (String) -> Unit,
@@ -638,7 +662,7 @@ private fun SaraChatView(
     var attachmentUri by remember { mutableStateOf<Uri?>(null) }
     var attachmentName by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
-    val isInputBlocked = isLoading || pendingWorkspaceAction != null || isWorkspaceActionRunning
+    val isInputBlocked = isLoading || pendingWorkspaceAction != null || isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -693,9 +717,9 @@ private fun SaraChatView(
         }
     }
 
-    LaunchedEffect(history.size, isLoading, pendingWorkspaceAction, isWorkspaceActionRunning) {
+    LaunchedEffect(history.size, isLoading, pendingWorkspaceAction, isWorkspaceActionRunning, isWorkspaceCommandTranslationLoading) {
         val extraItems = (if (pendingWorkspaceAction != null) 1 else 0) +
-            (if (isWorkspaceActionRunning && pendingWorkspaceAction == null) 1 else 0)
+            (if ((isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading) && pendingWorkspaceAction == null) 1 else 0)
         val lastIndex = history.lastIndex + extraItems
         if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
     }
@@ -803,13 +827,16 @@ private fun SaraChatView(
                         )
                     }
                 }
-                if (isWorkspaceActionRunning && pendingWorkspaceAction == null) {
+                if ((isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading) && pendingWorkspaceAction == null) {
                     item(key = "workspace-read-status") {
                         Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(18.dp)) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
                                 Spacer(Modifier.width(9.dp))
-                                Text("Consultando Google Workspace…", color = Color(0xFFCBD5E1), fontSize = 13.sp)
+                                Text(
+                                    if (isWorkspaceCommandTranslationLoading) "Interpretando la solicitud en otro idioma…" else "Consultando Google Workspace…",
+                                    color = Color(0xFFCBD5E1), fontSize = 13.sp
+                                )
                             }
                         }
                     }
