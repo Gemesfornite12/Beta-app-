@@ -310,7 +310,7 @@ fun SocialScreen(
                                     repository.unfollow(target.uid)
                                     followedState = followedState + (target.uid to "")
                                 } else {
-                                    repository.follow(target)
+                                    repository.follow(target, myProfile ?: error("Tu perfil no está disponible."))
                                     followedState = followedState + (target.uid to if (target.isPrivate) "pending" else "accepted")
                                 }
                             } catch (error: Exception) {
@@ -420,7 +420,7 @@ fun SocialScreen(
                                                     repository.unfollow(target.uid)
                                                     followedState = followedState + (target.uid to "")
                                                 } else {
-                                                    repository.follow(target)
+                                                    repository.follow(target, myProfile ?: error("Tu perfil no está disponible."))
                                                     followedState = followedState + (target.uid to if (target.isPrivate) "pending" else "accepted")
                                                 }
                                             } catch (error: Exception) {

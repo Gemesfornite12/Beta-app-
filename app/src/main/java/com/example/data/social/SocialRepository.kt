@@ -352,15 +352,22 @@ class SocialRepository(context: Context) {
             .get().await().getValue(Boolean::class.java) == true
     }
 
-    suspend fun follow(target: SocialProfile) {
+    suspend fun follow(target: SocialProfile, requester: SocialProfile) {
         val uid = currentUid()
+        require(uid == requester.uid) { "El perfil solicitante no coincide con la sesión." }
         require(uid != target.uid) { "No puedes seguir tu propio perfil." }
         val status = if (target.isPrivate) "pending" else "accepted"
         val relation = mapOf("status" to status, "createdAt" to System.currentTimeMillis())
         root.child("following").child(uid).child(target.uid).setValue(relation).await()
         if (target.isPrivate) {
             root.child("followRequests").child(target.uid).child(uid).setValue(
-                mapOf("requesterUid" to uid, "status" to "pending", "createdAt" to System.currentTimeMillis())
+                mapOf(
+                    "requesterUid" to uid,
+                    "username" to requester.username,
+                    "displayName" to requester.displayName,
+                    "status" to "pending",
+                    "createdAt" to System.currentTimeMillis()
+                )
             ).await()
         } else {
             root.child("followers").child(target.uid).child(uid).setValue(relation).await()
@@ -380,11 +387,10 @@ class SocialRepository(context: Context) {
         return snapshot.children.mapNotNull { request ->
             if (request.child("status").getValue(String::class.java) != "pending") return@mapNotNull null
             val requesterUid = request.key ?: return@mapNotNull null
-            val profile = root.child("profiles").child(requesterUid).get().await().toSocialProfile()
             SocialFollowRequest(
                 uid = requesterUid,
-                username = profile?.username.orEmpty(),
-                displayName = profile?.displayName ?: "Usuario"
+                username = request.child("username").getValue(String::class.java).orEmpty(),
+                displayName = request.child("displayName").getValue(String::class.java) ?: "Usuario"
             )
         }
     }
