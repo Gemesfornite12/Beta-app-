@@ -123,6 +123,10 @@ fun AiAssistantScreen(
     val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
     val context = LocalContext.current
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    var workspaceChatMessages by remember(firebaseUid) { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    val displayedAiChatHistory = remember(aiChatHistory, workspaceChatMessages) {
+        (aiChatHistory + workspaceChatMessages).sortedBy { it.timestamp }
+    }
     val connectorPreferences = remember(context, firebaseUid) {
         context.getSharedPreferences("groq_workspace_connectors", Context.MODE_PRIVATE)
     }
@@ -134,6 +138,17 @@ fun AiAssistantScreen(
     }
     var selectedConnectorIds by remember(firebaseUid) { mutableStateOf(emptySet<String>()) }
     var pendingWorkspaceAuthorization by remember { mutableStateOf<PendingWorkspaceAuthorization?>(null) }
+
+    fun addWorkspaceChatMessage(isUser: Boolean, text: String) {
+        if (text.isBlank()) return
+        workspaceChatMessages = workspaceChatMessages + ChatMessage(
+            channelId = "ai_assistant",
+            senderEmail = if (isUser) "workspace-user" else "sara",
+            senderName = if (isUser) "Tú" else "Sara",
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+    }
 
     fun finishWorkspaceAuthorization(action: PendingWorkspaceAuthorization, accessToken: String?) {
         if (accessToken.isNullOrBlank()) {
@@ -154,12 +169,16 @@ fun AiAssistantScreen(
             is PendingWorkspaceAuthorization.Action -> {
                 workspaceActionLoading = true
                 workspaceActionScope.launch {
-                    workspaceActionResult = runCatching {
+                    val resultText = runCatching {
                         executeGoogleWorkspaceAction(context, action.request, accessToken)
                     }.fold(
                         onSuccess = { it },
                         onFailure = { "No se completó la acción: ${it.message ?: "error de Google"}" }
                     )
+                    workspaceActionResult = resultText
+                    val chatResult = if (resultText.startsWith("No se completó la acción")) resultText
+                        else "${action.request.type.title} completado.\n\n$resultText"
+                    addWorkspaceChatMessage(isUser = false, text = chatResult)
                     workspaceActionLoading = false
                 }
             }
@@ -291,8 +310,8 @@ fun AiAssistantScreen(
                     IconButton(onClick = { showGroqConnectors = true }) {
                         Icon(Icons.Default.Link, contentDescription = "Conectores de Google Workspace", tint = Color(0xFF94A3B8))
                     }
-                    if (aiChatHistory.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearAiChat() }) {
+                    if (aiChatHistory.isNotEmpty() || workspaceChatMessages.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearAiChat(); workspaceChatMessages = emptyList() }) {
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
                         }
                     }
@@ -313,17 +332,20 @@ fun AiAssistantScreen(
         containerColor = Color(0xFF0F172A)
     ) { padding ->
         SaraChatView(
-            history = aiChatHistory,
+            history = displayedAiChatHistory,
             isLoading = isAiLoading,
             modifier = Modifier.fillMaxSize().padding(padding),
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
             onSend = { message ->
                 if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
-                    workspaceActionResult = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
+                    val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
+                    workspaceActionResult = notice
+                    addWorkspaceChatMessage(isUser = false, text = notice)
                 } else {
                     val workspaceCommand = GoogleWorkspaceCommandParser.parse(message)
                     if (workspaceCommand != null) {
                         if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(workspaceCommand.request)) {
+                            addWorkspaceChatMessage(isUser = true, text = message)
                             requestGoogleWorkspaceAction(workspaceCommand.request)
                         } else {
                             workspaceActionInitialRequest = workspaceCommand.request
@@ -358,6 +380,7 @@ fun AiAssistantScreen(
                 workspaceActionPrompt = null
             },
             onRun = { request ->
+                workspaceActionPrompt?.let { addWorkspaceChatMessage(isUser = true, text = it) }
                 requestGoogleWorkspaceAction(request)
                 workspaceActionInitialRequest = null
                 workspaceActionPrompt = null
@@ -660,7 +683,10 @@ private fun SaraChatView(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(history) { message ->
-                    val isUser = message.senderName != "Sara"
+                    val isAssistant = message.senderEmail.equals("sara", ignoreCase = true) ||
+                        message.senderEmail.equals("asistente", ignoreCase = true) ||
+                        message.senderName.equals("asistente", ignoreCase = true)
+                    val isUser = !isAssistant
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
@@ -701,7 +727,17 @@ private fun SaraChatView(
                                         }
                                     }
                                 )
-                                if (isUser && message.text.isNotBlank()) {
+                                if (isAssistant && message.text.isNotBlank()) {
+                                    TextButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Respuesta de Sara", message.text))
+                                            Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                    ) { Text("Copiar", fontSize = 11.sp) }
+                                }
+                                if (isUser && message.text.isNotBlank() && message.senderEmail != "workspace-user") {
                                     TextButton(
                                         onClick = { onRequestSave(message.text) },
                                         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
