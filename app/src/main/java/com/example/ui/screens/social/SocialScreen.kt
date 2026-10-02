@@ -118,6 +118,7 @@ fun SocialScreen(
     var isSavingProfile by remember { mutableStateOf(false) }
     var isUploadingMedia by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val likedPosts = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -240,13 +241,32 @@ fun SocialScreen(
                 }
             }
             Row {
-                IconButton(onClick = {
-                    scope.launch {
-                        runCatching { refreshFeed() }
-                            .onFailure { errorMessage = "No se pudo actualizar el feed." }
+                IconButton(
+                    enabled = !isRefreshing,
+                    onClick = {
+                        scope.launch {
+                            isRefreshing = true
+                            try {
+                                refreshFeed()
+                                stories = repository.loadStories()
+                                errorMessage = null
+                            } catch (error: Exception) {
+                                errorMessage = "No se pudo actualizar: ${error.message ?: "error desconocido"}"
+                            } finally {
+                                isRefreshing = false
+                            }
+                        }
                     }
-                }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Actualizar", tint = Color(0xFFCBD5E1))
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFFCBD5E1)
+                        )
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = "Actualizar feed e historias", tint = Color(0xFFCBD5E1))
+                    }
                 }
                 IconButton(
                     onClick = { showCreatePost = true },
