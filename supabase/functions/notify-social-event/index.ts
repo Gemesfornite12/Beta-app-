@@ -24,6 +24,7 @@ type ServiceAccount = { client_email: string; private_key: string; project_id: s
 type DeviceToken = { token: string; tokenId: string };
 
 type SocialEvent = {
+  eventType?: unknown;
   socialType?: unknown;
   targetUid?: unknown;
   postId?: unknown;
