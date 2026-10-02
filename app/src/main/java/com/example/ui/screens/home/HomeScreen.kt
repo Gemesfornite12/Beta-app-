@@ -63,6 +63,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.model.AudioProject
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
@@ -117,6 +119,11 @@ fun HomeScreen(
     var showCreateSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val context = LocalContext.current
+    LaunchedEffect(showCreateSheet) {
+        if (showCreateSheet) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "home_quick_create")
+        }
+    }
 
     // Permission launcher for storage (legacy devices)
     var pendingDownloadAction by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -640,6 +647,12 @@ private fun DocumentItemCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val analyticsContext = LocalContext.current
+    LaunchedEffect(showMenu) {
+        if (showMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "home_document_actions")
+        }
+    }
 
     val dateFormatted = remember(doc.lastModified) {
         val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
@@ -777,6 +790,12 @@ private fun AudioProjectCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val analyticsContext = LocalContext.current
+    LaunchedEffect(showMenu) {
+        if (showMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "home_music_actions")
+        }
+    }
 
     Card(
         modifier = Modifier

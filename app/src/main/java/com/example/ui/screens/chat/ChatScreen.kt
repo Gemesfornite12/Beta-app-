@@ -218,6 +218,11 @@ fun ChatScreen(
     var currentMatchPointer by remember { mutableStateOf(0) }
     var showArchivedFilter by remember { mutableStateOf(false) }
     var showTopOverflowMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showTopOverflowMenu) {
+        if (showTopOverflowMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_overflow")
+        }
+    }
 
     // Diálogos de grupos y chats privados
     var showMyChatsSheet by remember { mutableStateOf(false) }
@@ -231,12 +236,45 @@ fun ChatScreen(
     var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
 
+    LaunchedEffect(showMyChatsSheet) {
+        if (showMyChatsSheet) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_my_chats")
+    }
+    LaunchedEffect(showCreateGroupDialog) {
+        if (showCreateGroupDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_create_group")
+    }
+    LaunchedEffect(showStartDirectChatDialog) {
+        if (showStartDirectChatDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_start_direct")
+    }
+    LaunchedEffect(showGroupManageDialog) {
+        if (showGroupManageDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_group_manage")
+    }
+    LaunchedEffect(showUserInfoDialog) {
+        if (showUserInfoDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_user_info")
+    }
+    LaunchedEffect(showChatNotificationPrefsDialog) {
+        if (showChatNotificationPrefsDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_notification_settings")
+    }
+    LaunchedEffect(showAttachDialog) {
+        if (showAttachDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_attachment_picker")
+    }
+    LaunchedEffect(messageForReactionMenu != null) {
+        if (messageForReactionMenu != null) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_reaction_picker")
+    }
+
     // Estado del Sistema Multilingüe de Traducción Automática On-Device
     val translationStates by viewModel.translationStates.collectAsState()
     val translationSettings by viewModel.translationSettings.collectAsState()
     val supportedLanguages = viewModel.supportedLanguages
     var showLanguagePickerDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(showLanguagePickerDialog) {
+        if (showLanguagePickerDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_language_picker")
+    }
     var showOutgoingLangMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showOutgoingLangMenu) {
+        if (showOutgoingLangMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_language")
+        }
+    }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
@@ -2349,6 +2387,11 @@ private fun MessageBubble(
     }
 
     var showUserMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showUserMenu) {
+        if (showUserMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_user_actions")
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),

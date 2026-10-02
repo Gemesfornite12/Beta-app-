@@ -132,6 +132,18 @@ fun AiAssistantScreen(
     val translationSettings by viewModel.translationSettings.collectAsState()
     val supportedLanguages = viewModel.supportedLanguages
     val context = LocalContext.current
+    LaunchedEffect(showSaraAdvanced) {
+        if (showSaraAdvanced) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_advanced_tools")
+    }
+    LaunchedEffect(showSaraLibrary) {
+        if (showSaraLibrary) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_library")
+    }
+    LaunchedEffect(showGroqConnectors) {
+        if (showGroqConnectors) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_connectors")
+    }
+    LaunchedEffect(showGoogleWorkspaceActions) {
+        if (showGoogleWorkspaceActions) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_workspace_actions")
+    }
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
     var pendingChatWorkspaceAction by remember(firebaseUid) { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
     var chatWorkspaceActionRunning by remember(firebaseUid) { mutableStateOf(false) }
@@ -1116,8 +1128,14 @@ private fun SaraAdvancedDialog(
     onAppendEvent: (JsonObject) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val analyticsContext = LocalContext.current
     var selectedEvent by remember { mutableStateOf("user") }
     var eventMenuExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(eventMenuExpanded) {
+        if (eventMenuExpanded) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "sara_event_type")
+        }
+    }
     var eventText by remember { mutableStateOf("") }
     var eventInputChannel by remember { mutableStateOf("rest") }
     var eventMessageId by remember { mutableStateOf("") }

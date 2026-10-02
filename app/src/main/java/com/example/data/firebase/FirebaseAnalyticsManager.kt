@@ -22,6 +22,34 @@ object FirebaseAnalyticsManager {
         "home", "documents", "music_studio", "chat", "profile", "sara", "social", "maps"
     )
 
+    private val allowedPopupMenus = setOf(
+        "sara_event_type",
+        "sara_advanced_tools",
+        "sara_library",
+        "sara_connectors",
+        "sara_workspace_actions",
+        "chat_overflow",
+        "chat_language",
+        "chat_user_actions",
+        "chat_my_chats",
+        "chat_create_group",
+        "chat_start_direct",
+        "chat_group_manage",
+        "chat_user_info",
+        "chat_language_picker",
+        "chat_notification_settings",
+        "chat_attachment_picker",
+        "chat_reaction_picker",
+        "home_quick_create",
+        "home_document_actions",
+        "home_music_actions",
+        "maps_battery",
+        "maps_hud_language",
+        "maps_route_profile",
+        "maps_route_language",
+        "maps_route_battery"
+    )
+
     private val allowedSocialEvents = setOf(
         "social_post_created",
         "social_story_created",
@@ -64,6 +92,12 @@ object FirebaseAnalyticsManager {
         if (!BuildConfig.APPLICATION_ID.endsWith(".test") || menuName !in allowedMenus) return
         runCatching { instance(context).logEvent("menu_${menuName}_opened", null) }
             .onFailure { Log.w(TAG, "Could not record menu analytics event: ${it.message}") }
+    }
+
+    fun logMenuPopupOpened(context: Context, menuName: String) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test") || menuName !in allowedPopupMenus) return
+        runCatching { instance(context).logEvent("popup_${menuName}_opened", null) }
+            .onFailure { Log.w(TAG, "Could not record popup menu analytics event: ${it.message}") }
     }
 
     fun logUsageEvent(context: Context, eventName: String) {
