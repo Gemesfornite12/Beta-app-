@@ -1,14 +1,11 @@
 package com.example.ui.screens.chat
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,7 +44,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,10 +54,24 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.viewinterop.AndroidView
+import org.webrtc.EglBase
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.data.model.CallSession
 import com.example.data.model.CallStatus
 
@@ -71,8 +84,39 @@ fun CallSessionScreen(
     onToggleCamera: () -> Unit = {},
     onToggleSpeaker: () -> Unit = {},
     onSwitchCamera: () -> Unit = {},
-    onEndCall: () -> Unit = {}
+    onEndCall: () -> Unit = {},
+    localVideoTrack: VideoTrack? = null,
+    remoteVideoTrack: VideoTrack? = null,
+    eglContext: EglBase.Context? = null,
+    mediaConnectionState: String = ""
 ) {
+    val context = LocalContext.current
+    val answerPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val cameraGranted = !callSession.isVideo || permissions[Manifest.permission.CAMERA] == true ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (micGranted && cameraGranted) onAnswerCall()
+        else Toast.makeText(context, "Se necesitan permisos de micrófono${if (callSession.isVideo) " y cámara" else ""} para responder.", Toast.LENGTH_LONG).show()
+    }
+    val displayPhotoUrl = remember(callSession) {
+        if (callSession.isIncoming) callSession.callerAvatarUrl else callSession.peerAvatarUrl
+    }
+    val answerWithPermissions = {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) {
+            onAnswerCall()
+        } else {
+            val micGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            val cameraGranted = !callSession.isVideo || ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            if (micGranted && cameraGranted) onAnswerCall()
+            else answerPermissionLauncher.launch(
+                if (callSession.isVideo) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+                else arrayOf(Manifest.permission.RECORD_AUDIO)
+            )
+        }
+    }
     val durationFormatted = remember(callSession.durationSeconds) {
         val mins = callSession.durationSeconds / 60
         val secs = callSession.durationSeconds % 60
@@ -135,109 +179,52 @@ fun CallSessionScreen(
             .navigationBarsPadding()
             .testTag("screen_call_session")
     ) {
-        // En modo videollamada activa y conectada: Mostrar vista simulada de video del compañero
+        // Video remoto real. Si todavía no llegó el stream, mostrar la foto de perfil.
         if (callSession.isVideo && callSession.status == CallStatus.CONNECTED && !callSession.isTimedOut) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 120.dp),
+                modifier = Modifier.fillMaxSize().padding(bottom = 120.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Video Surface
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFF1E293B),
-                                    Color(0xFF312E81),
-                                    Color(0xFF0F172A)
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
+                if (remoteVideoTrack != null && eglContext != null) {
+                    WebRtcVideoSurface(
+                        track = remoteVideoTrack,
+                        eglContext = eglContext,
+                        mirror = false,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF6366F1),
-                            modifier = Modifier.size(96.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = initials,
-                                    fontSize = 32.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = displayName,
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF10B981).copy(alpha = 0.2f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.FiberManualRecord,
-                                    contentDescription = null,
-                                    tint = Color(0xFF34D399),
-                                    modifier = Modifier.size(8.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Transmisión HD 1080p • Firestore WebRTC", color = Color(0xFF34D399), fontSize = 11.sp)
-                            }
-                        }
+                        ProfilePhoto(url = displayPhotoUrl, initials = initials, size = 116.dp)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(mediaConnectionState.ifBlank { "Esperando video…" }, color = Color.White, fontSize = 13.sp)
                     }
                 }
 
-                // PiP (Picture-in-Picture) de la cámara local del usuario
-                AnimatedVisibility(
-                    visible = callSession.isCameraOn,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 16.dp, end = 16.dp)
-                ) {
+                if (callSession.isCameraOn && localVideoTrack != null && eglContext != null) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = Color(0xFF1E1E2E),
                         border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF818CF8)),
                         modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 16.dp, end = 16.dp)
                             .size(width = 110.dp, height = 150.dp)
                             .testTag("pip_user_camera")
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color(0xFF3730A3), Color(0xFF1E1B4B))
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = if (callSession.isFrontCamera) "Cámara Frontal" else "Cámara Trasera",
-                                    color = Color(0xFFCBD5E1),
-                                    fontSize = 10.sp
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Tú", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WebRtcVideoSurface(
+                                track = localVideoTrack,
+                                eglContext = eglContext,
+                                mirror = callSession.isFrontCamera,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Text(
+                                text = "Tú",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp)
+                            )
                         }
                     }
                 }
@@ -356,6 +343,9 @@ fun CallSessionScreen(
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold
                     )
+                    if (mediaConnectionState.isNotBlank()) {
+                        Text(mediaConnectionState, color = Color(0xFFCBD5E1), fontSize = 12.sp, textAlign = TextAlign.Center)
+                    }
                 }
                 callSession.status == CallStatus.RINGING -> {
                     // Badge con temporizador de respuesta regresivo
@@ -424,31 +414,14 @@ fun CallSessionScreen(
                 }
 
                 // Avatar central
-                Surface(
-                    shape = CircleShape,
-                    color = if (callSession.isTimedOut) Color(0xFF991B1B)
-                    else if (callSession.isIncoming) Color(0xFF059669)
-                    else if (callSession.isVideo) Color(0xFF2563EB)
-                    else Color(0xFF4F46E5),
-                    modifier = Modifier.size(110.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        if (callSession.isTimedOut) {
-                            Icon(
-                                imageVector = Icons.Default.PhoneMissed,
-                                contentDescription = "Llamada perdida",
-                                tint = Color.White,
-                                modifier = Modifier.size(48.dp)
-                            )
-                        } else {
-                            Text(
-                                text = initials,
-                                fontSize = 38.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                if (callSession.isTimedOut) {
+                    Surface(shape = CircleShape, color = Color(0xFF991B1B), modifier = Modifier.size(110.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.PhoneMissed, contentDescription = "Llamada perdida", tint = Color.White, modifier = Modifier.size(48.dp))
                         }
                     }
+                } else {
+                    ProfilePhoto(url = displayPhotoUrl, initials = initials, size = 110.dp)
                 }
             }
         }
@@ -505,7 +478,7 @@ fun CallSessionScreen(
                     // Botón Verde: Responder
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onAnswerCall() }
+                        modifier = Modifier.clickable { answerWithPermissions() }
                     ) {
                         Surface(
                             shape = CircleShape,
@@ -700,4 +673,59 @@ fun CallSessionScreen(
             }
         }
     }
+}
+
+
+@Composable
+private fun ProfilePhoto(url: String, initials: String, size: androidx.compose.ui.unit.Dp) {
+    var imageFailed by remember(url) { mutableStateOf(false) }
+    Surface(shape = CircleShape, color = Color(0xFF4F46E5), modifier = Modifier.size(size)) {
+        Box(contentAlignment = Alignment.Center) {
+            if (url.isNotBlank() && !imageFailed) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = "Foto de perfil",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                    onError = { imageFailed = true }
+                )
+            } else {
+                Text(text = initials, fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebRtcVideoSurface(
+    track: VideoTrack,
+    eglContext: EglBase.Context,
+    mirror: Boolean,
+    modifier: Modifier = Modifier
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            SurfaceViewRenderer(context).apply {
+                init(eglContext, null)
+                setEnableHardwareScaler(true)
+                setMirror(mirror)
+                tag = track
+                track.addSink(this)
+            }
+        },
+        update = { renderer ->
+            val current = renderer.tag as? VideoTrack
+            if (current !== track) {
+                current?.removeSink(renderer)
+                renderer.setMirror(mirror)
+                renderer.tag = track
+                track.addSink(renderer)
+            }
+        },
+        onRelease = { renderer ->
+            (renderer.tag as? VideoTrack)?.removeSink(renderer)
+            renderer.release()
+        }
+    )
 }

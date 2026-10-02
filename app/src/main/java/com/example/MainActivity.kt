@@ -204,6 +204,9 @@ fun OmniStudioApp(
 ) {
   val authState by viewModel.authUiState.collectAsState()
   val activeCall by viewModel.activeCall.collectAsState()
+  val callLocalVideoTrack by viewModel.callLocalVideoTrack.collectAsState()
+  val callRemoteVideoTrack by viewModel.callRemoteVideoTrack.collectAsState()
+  val callConnectionState by viewModel.callConnectionState.collectAsState()
   val appContext = LocalContext.current.applicationContext
   LaunchedEffect(authState.isLoggedIn, authState.currentUser?.email) {
     val signedInEmail = authState.currentUser?.email
@@ -436,7 +439,11 @@ fun OmniStudioApp(
           onToggleCamera = { viewModel.toggleCallCamera() },
           onToggleSpeaker = { viewModel.toggleCallSpeaker() },
           onSwitchCamera = { viewModel.switchCallCamera() },
-          onEndCall = { viewModel.endActiveCall() }
+          onEndCall = { viewModel.endActiveCall() },
+          localVideoTrack = callLocalVideoTrack,
+          remoteVideoTrack = callRemoteVideoTrack,
+          eglContext = if (callLocalVideoTrack != null || callRemoteVideoTrack != null) viewModel.callEglContext else null,
+          mediaConnectionState = callConnectionState
         )
       }
     }

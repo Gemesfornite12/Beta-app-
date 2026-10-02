@@ -8,6 +8,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.audio.AudioSynthEngine
 import com.example.audio.WavAudioHelper
 import com.example.data.firebase.ChannelInfo
@@ -15,6 +16,7 @@ import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.CallSoundVibrationManager
 import com.example.data.firebase.FcmTokenManager
 import com.example.data.firebase.FirestoreChatService
+import com.example.data.webrtc.WebRtcCallClient
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
 import com.example.data.firebase.PresenceUser
@@ -47,6 +49,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -115,6 +121,7 @@ data class SequencerTrack(
     }
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val repo: OmniRepository
 
@@ -278,6 +285,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     val firestoreChatService = FirestoreChatService(application)
+    private val webRtcCallClient = WebRtcCallClient(application)
+    val callLocalVideoTrack = webRtcCallClient.localVideoTrack
+    val callRemoteVideoTrack = webRtcCallClient.remoteVideoTrack
+    val callConnectionState = webRtcCallClient.connectionState
+    val callEglContext get() = webRtcCallClient.eglContext
     val rtdbService = RealtimeDatabaseService()
     val firestoreStatus: StateFlow<FirestoreConnectionStatus> = firestoreChatService.connectionStatus
     private val _availableChannels = MutableStateFlow<List<ChannelInfo>>(firestoreChatService.availableChannels)
@@ -1358,47 +1370,43 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // --- LISTENER GLOBAL DE LLAMADAS ENTRANTE ---
+        // Listener de llamadas dirigido al UID actual; .test usa consultas protegidas.
         viewModelScope.launch {
-            firestoreChatService.listenToAllCalls().collect { allCalls ->
-                val myEmail = _authUiState.value.currentUser?.email
-                if (myEmail != null) {
-                    // Filtrar llamadas dirigidas a mí (directas) o a mis grupos
-                    val myChannels = _availableChannels.value.map { it.id }.toSet()
-                    
-                    val incoming = allCalls.firstOrNull { call ->
-                        call.status == com.example.data.model.CallStatus.RINGING &&
-                        call.callerEmail != myEmail && // No soy yo quien llama
-                        (call.peerEmail == myEmail || myChannels.contains(call.channelId))
-                    }
-                    
-                    if (incoming != null && _activeCall.value == null) {
-                        // Recibir la llamada
-                        receiveIncomingCall(incoming)
-                    }
-                    
-                    // Si ya tengo una llamada activa, observar si cambia de estado (fue respondida o terminada por el otro)
-                    val current = _activeCall.value
-                    if (current != null) {
-                        val remoteState = allCalls.firstOrNull { it.callId == current.callId }
-                        if (remoteState != null) {
-                            if (remoteState.status == com.example.data.model.CallStatus.CONNECTED && current.status == com.example.data.model.CallStatus.RINGING) {
-                                // El otro respondió
-                                if (!current.isIncoming) {
-                                    // Yo era el llamante, ahora estamos conectados
-                                    handleCallConnectedByPeer(remoteState)
+            _authUiState
+                .map { FirebaseAuth.getInstance().currentUser?.uid ?: it.currentUser?.uid }
+                .distinctUntilChanged()
+                .flatMapLatest { uid ->
+                    if (uid.isNullOrBlank()) emptyFlow<List<CallSession>>() else firestoreChatService.listenToAllCalls(uid)
+                }
+                .collect { allCalls ->
+                    val authUser = _authUiState.value.currentUser
+                    val myEmail = authUser?.email
+                    val myUid = FirebaseAuth.getInstance().currentUser?.uid ?: authUser?.uid
+                    if (myEmail != null) {
+                        val myChannels = _availableChannels.value.map { it.id }.toSet()
+                        val incoming = allCalls.firstOrNull { call ->
+                            call.status == CallStatus.RINGING &&
+                                if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
+                                    call.peerUid == myUid && call.callerUid != myUid
+                                } else {
+                                    call.callerEmail != myEmail && (call.peerEmail == myEmail || myChannels.contains(call.channelId))
                                 }
-                            } else if (remoteState.status == com.example.data.model.CallStatus.ENDED) {
-                                // El otro terminó o rechazó
+                        }
+                        if (incoming != null && _activeCall.value == null) receiveIncomingCall(incoming)
+
+                        val current = _activeCall.value
+                        if (current != null) {
+                            val remoteState = allCalls.firstOrNull { it.callId == current.callId }
+                            if (remoteState?.status == CallStatus.CONNECTED && current.status == CallStatus.RINGING && !current.isIncoming) {
+                                handleCallConnectedByPeer(remoteState)
+                            } else if (remoteState?.status == CallStatus.ENDED && !current.isTimedOut) {
+                                endActiveCall(sendSignal = false)
+                            } else if (remoteState == null && current.status == CallStatus.CONNECTED) {
                                 endActiveCall(sendSignal = false)
                             }
-                        } else if (current.status != com.example.data.model.CallStatus.ENDED) {
-                            // La señal desapareció, terminar llamada localmente
-                            endActiveCall(sendSignal = false)
                         }
                     }
                 }
-            }
         }
     }
 
@@ -1413,6 +1421,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             status = CallStatus.CONNECTED,
             durationSeconds = 0
         )
+        if (BuildConfig.APPLICATION_ID.endsWith(".test")) webRtcCallClient.startOutgoingCall(current)
         startCallTimer()
     }
 
@@ -3933,80 +3942,106 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         updateChannelNotificationPref(channelId, current.notifyMessages, current.notifyVoiceCalls, !current.notifyVideoCalls)
     }
 
-    fun startVoiceCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
+    fun startVoiceCall(
+        peerName: String = "Sofia Martínez",
+        peerEmail: String = "sofia.m@cloud.io",
+        peerAvatarUrl: String = "",
+        channelId: String? = null
+    ) {
         val chId = channelId ?: _currentChannel.value
-        val callId = "call_${System.currentTimeMillis()}"
-        val timeoutSec = _callTimeoutMinutes.value * 60
         val isGroup = chId != "general" && !chId.startsWith("direct")
         val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
-        val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
-
         val session = CallSession(
-            callId = callId,
+            callId = "call_${System.currentTimeMillis()}",
             channelId = chId,
             peerName = peerName,
             peerEmail = peerEmail,
+            peerAvatarUrl = peerAvatarUrl,
+            callerName = _authUiState.value.currentUser?.displayName ?: "",
+            callerEmail = _authUiState.value.currentUser?.email ?: "",
+            callerAvatarUrl = _authUiState.value.currentUser?.avatarUrl ?: "",
             isVideo = false,
-            status = CallStatus.RINGING,
             isIncoming = false,
-            callerName = _authUiState.value.currentUser?.displayName ?: "Alex González",
-            callerEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com",
-            groupName = grpName,
-            ringSecondsLeft = timeoutSec,
-            maxRingSeconds = timeoutSec
+            groupName = if (isGroup) currentChan?.name ?: "Grupo" else null,
+            ringSecondsLeft = _callTimeoutMinutes.value * 60,
+            maxRingSeconds = _callTimeoutMinutes.value * 60
         )
-        _activeCall.value = session
-
-        // Iniciar tono de marcación / llamada saliente
-        CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
-
-        viewModelScope.launch {
-            val signalSaved = firestoreChatService.startCallSignal(session)
-            startRingingCountdown(callId, timeoutSec, isIncoming = false)
-            if (signalSaved) {
-                viewModelScope.launch(Dispatchers.IO) {
-                    runCatching { SupabaseChatPushService.requestCallNotification(chId, callId) }
-                        .onFailure { Log.w("OmniViewModel", "No se pudo solicitar el push de llamada", it) }
-                }
-            }
-        }
+        startOutgoingCall(session)
     }
 
-    fun startVideoCall(peerName: String = "Sofia Martínez", peerEmail: String = "sofia.m@cloud.io", channelId: String? = null) {
+    fun startVideoCall(
+        peerName: String = "Sofia Martínez",
+        peerEmail: String = "sofia.m@cloud.io",
+        peerAvatarUrl: String = "",
+        channelId: String? = null
+    ) {
         val chId = channelId ?: _currentChannel.value
-        val callId = "call_${System.currentTimeMillis()}"
-        val timeoutSec = _callTimeoutMinutes.value * 60
         val isGroup = chId != "general" && !chId.startsWith("direct")
         val currentChan = _availableChannels.value.firstOrNull { it.id == chId }
-        val grpName = if (isGroup) currentChan?.name ?: "Grupo" else null
-
         val session = CallSession(
-            callId = callId,
+            callId = "call_${System.currentTimeMillis()}",
             channelId = chId,
             peerName = peerName,
             peerEmail = peerEmail,
+            peerAvatarUrl = peerAvatarUrl,
+            callerName = _authUiState.value.currentUser?.displayName ?: "",
+            callerEmail = _authUiState.value.currentUser?.email ?: "",
+            callerAvatarUrl = _authUiState.value.currentUser?.avatarUrl ?: "",
             isVideo = true,
-            status = CallStatus.RINGING,
             isIncoming = false,
-            callerName = _authUiState.value.currentUser?.displayName ?: "Alex González",
-            callerEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com",
-            groupName = grpName,
-            ringSecondsLeft = timeoutSec,
-            maxRingSeconds = timeoutSec
+            groupName = if (isGroup) currentChan?.name ?: "Grupo" else null,
+            ringSecondsLeft = _callTimeoutMinutes.value * 60,
+            maxRingSeconds = _callTimeoutMinutes.value * 60
         )
-        _activeCall.value = session
+        startOutgoingCall(session)
+    }
 
-        // Iniciar tono de marcación / llamada saliente
-        CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
-
+    private fun startOutgoingCall(session: CallSession) {
         viewModelScope.launch {
-            val signalSaved = firestoreChatService.startCallSignal(session)
-            startRingingCountdown(callId, timeoutSec, isIncoming = false)
-            if (signalSaved) {
-                viewModelScope.launch(Dispatchers.IO) {
-                    runCatching { SupabaseChatPushService.requestCallNotification(chId, callId) }
-                        .onFailure { Log.w("OmniViewModel", "No se pudo solicitar el push de videollamada", it) }
+            if (BuildConfig.APPLICATION_ID.endsWith(".test") &&
+                (session.groupName != null || !session.channelId.startsWith("direct"))) {
+                Toast.makeText(getApplication(), "En esta prueba, abre un chat directo para llamar; las llamadas grupales vienen después.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
+                val app = getApplication<Application>()
+                val micGranted = app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                val cameraGranted = !session.isVideo || app.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (!micGranted || !cameraGranted) {
+                    Toast.makeText(app, "Inicia la llamada desde los botones del chat para conceder micrófono y cámara.", Toast.LENGTH_LONG).show()
+                    return@launch
                 }
+            }
+            val currentAuthUser = FirebaseAuth.getInstance().currentUser
+            val callerUid = currentAuthUser?.uid.orEmpty()
+            val peerProfile = if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
+                firestoreChatService.getUserProfileFromCloud(session.peerEmail)
+            } else null
+            val peerUid = (peerProfile?.get("uid") as? String)?.takeIf { it.isNotBlank() }
+                ?: allUsers.value.firstOrNull { it.email.equals(session.peerEmail, ignoreCase = true) }?.uid?.takeIf { it.isNotBlank() }.orEmpty()
+            if (BuildConfig.APPLICATION_ID.endsWith(".test") && (callerUid.isBlank() || peerUid.isBlank() || callerUid == peerUid)) {
+                Toast.makeText(getApplication(), "No pude verificar la cuenta de la otra persona para iniciar la llamada de prueba.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val prepared = session.copy(
+                callerUid = callerUid,
+                peerUid = peerUid,
+                peerAvatarUrl = session.peerAvatarUrl.ifBlank { peerProfile?.get("avatarUrl") as? String ?: "" },
+                callerAvatarUrl = session.callerAvatarUrl.ifBlank { _authUiState.value.currentUser?.avatarUrl ?: "" }
+            )
+            _activeCall.value = prepared
+            CallSoundVibrationManager.startOutgoingDialTone(getApplication(), _callSoundEnabled.value)
+            val signalSaved = firestoreChatService.startCallSignal(prepared)
+            if (!signalSaved) {
+                CallSoundVibrationManager.stopOutgoingDialTone()
+                _activeCall.value = null
+                Toast.makeText(getApplication(), "No se pudo enviar la invitación de llamada. Revisa la conexión y permisos.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            startRingingCountdown(prepared.callId, prepared.maxRingSeconds, isIncoming = false)
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { SupabaseChatPushService.requestCallNotification(prepared.channelId, prepared.callId) }
+                    .onFailure { Log.w("OmniViewModel", "No se pudo solicitar el push de llamada", it) }
             }
         }
     }
@@ -4074,7 +4109,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch {
                     val incoming = firestoreChatService.getCallSignal(channelId, callId)
                         ?.takeIf { it.status == CallStatus.RINGING } ?: return@launch
-                    _activeCall.value = incoming.copy(isIncoming = true)
+                    val pendingAnswer = incoming.copy(isIncoming = true)
+                    _activeCall.value = pendingAnswer
+                    val app = getApplication<Application>()
+                    val needsMic = BuildConfig.APPLICATION_ID.endsWith(".test") &&
+                        app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                    val needsCamera = BuildConfig.APPLICATION_ID.endsWith(".test") && pendingAnswer.isVideo &&
+                        app.checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (needsMic || needsCamera) {
+                        startRingingCountdown(pendingAnswer.callId, pendingAnswer.maxRingSeconds, isIncoming = true)
+                        return@launch
+                    }
                     answerIncomingCall()
                 }
             }
@@ -4091,11 +4136,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             durationSeconds = 0,
             isTimedOut = false
         )
-        
+
+        if (BuildConfig.APPLICATION_ID.endsWith(".test")) webRtcCallClient.answerIncomingCall(call)
         viewModelScope.launch {
             firestoreChatService.updateCallStatus(call.channelId, call.callId, CallStatus.CONNECTED)
         }
-        
+
         startCallTimer()
     }
 
@@ -4126,10 +4172,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         val callId = call.callId
         val peer = call.callerName.ifBlank { call.peerName }
         val isVideo = call.isVideo
+        webRtcCallClient.endCall()
         _activeCall.value = null
 
+        finishCallSignal(chId, callId)
         viewModelScope.launch {
-            firestoreChatService.endCallSignal(chId, callId)
             val summaryText = if (isVideo) {
                 "📵 Videollamada rechazada de $peer"
             } else {
@@ -4147,6 +4194,16 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             )
             val localId = repo.insertChatMessage(msg)
             firestoreChatService.sendMessage(msg.copy(id = localId))
+        }
+    }
+
+    private fun finishCallSignal(channelId: String, callId: String) {
+        viewModelScope.launch {
+            if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
+                firestoreChatService.updateCallStatus(channelId, callId, CallStatus.ENDED)
+                delay(30_000)
+            }
+            firestoreChatService.endCallSignal(channelId, callId)
         }
     }
 
@@ -4177,6 +4234,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob = null
 
         // Congelar y marcar llamada como expirada / sin respuesta
+        webRtcCallClient.endCall()
         _activeCall.value = call.copy(
             status = CallStatus.ENDED,
             isTimedOut = true,
@@ -4200,9 +4258,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             timeoutMinutes = timeoutMins
         )
 
+        finishCallSignal(chId, callId)
         viewModelScope.launch {
-            firestoreChatService.endCallSignal(chId, callId)
-
             val callerDisplay = if (!group.isNullOrBlank()) "$caller en \"$group\"" else caller
             val summaryText = if (isVideo) {
                 "📵 Videollamada perdida de $callerDisplay • Nadie respondió tras $timeoutMins min"
@@ -4242,18 +4299,31 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleCallMute() {
-        _activeCall.value = _activeCall.value?.let { it.copy(isMuted = !it.isMuted) }
+        _activeCall.value = _activeCall.value?.let {
+            val updated = it.copy(isMuted = !it.isMuted)
+            webRtcCallClient.setMuted(updated.isMuted)
+            updated
+        }
     }
 
     fun toggleCallCamera() {
-        _activeCall.value = _activeCall.value?.let { it.copy(isCameraOn = !it.isCameraOn) }
+        _activeCall.value = _activeCall.value?.let {
+            val updated = it.copy(isCameraOn = !it.isCameraOn)
+            webRtcCallClient.setCameraEnabled(updated.isCameraOn)
+            updated
+        }
     }
 
     fun toggleCallSpeaker() {
-        _activeCall.value = _activeCall.value?.let { it.copy(isSpeakerOn = !it.isSpeakerOn) }
+        _activeCall.value = _activeCall.value?.let {
+            val updated = it.copy(isSpeakerOn = !it.isSpeakerOn)
+            webRtcCallClient.setSpeakerphone(updated.isSpeakerOn)
+            updated
+        }
     }
 
     fun switchCallCamera() {
+        webRtcCallClient.switchCamera()
         _activeCall.value = _activeCall.value?.let { it.copy(isFrontCamera = !it.isFrontCamera) }
     }
 
@@ -4265,6 +4335,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         ringCountdownJob = null
         
         ChatNotificationManager.cancelCallNotification(getApplication(), call.callId)
+        webRtcCallClient.endCall()
         CallSoundVibrationManager.stopOutgoingDialTone()
         CallSoundVibrationManager.stopIncomingCallAlert()
         CallSoundVibrationManager.playCallEnded(getApplication())
@@ -4277,9 +4348,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _activeCall.value = null
 
         viewModelScope.launch {
-            if (sendSignal) {
-                firestoreChatService.endCallSignal(chId, callId)
-            }
+            if (sendSignal) finishCallSignal(chId, callId)
             val minutes = duration / 60
             val seconds = duration % 60
             val durationFormatted = String.format("%02d:%02d", minutes, seconds)
@@ -4338,5 +4407,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         presenceJob?.cancel()
         chatAudioJob?.cancel()
         typingDebounceJob?.cancel()
+        webRtcCallClient.release()
     }
 }
