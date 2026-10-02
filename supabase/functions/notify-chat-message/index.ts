@@ -275,7 +275,7 @@ Deno.serve(async (request) => {
     const channelId = payload.channelId;
     const accessToken = await getGoogleAccessToken(serviceAccount);
     const eventPath = eventType === "call"
-      ? `calls/${channelId}/${payload.callId as string}`
+      ? `calls_test/${payload.callId as string}`
       : `chats/${channelId}/messages/${payload.messageId as string}`;
     const [channelValue, eventValue] = await Promise.all([
       firebaseGet(`chats/${channelId}`, accessToken),
