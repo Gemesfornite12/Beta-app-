@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.R
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,7 @@ object ChatNotificationManager {
     const val ACTION_OPEN_CHAT = "com.example.action.OPEN_CHAT"
     const val ACTION_ANSWER_CALL = "com.example.action.ANSWER_CALL"
     const val ACTION_REJECT_CALL = "com.example.action.REJECT_CALL"
+    const val ACTION_OPEN_INCOMING_CALL = "com.example.action.OPEN_INCOMING_CALL"
 
     private const val PREFS_NAME = "fcm_push_prefs"
     private const val KEY_FCM_TOKEN = "cached_fcm_token"
@@ -362,6 +364,7 @@ object ChatNotificationManager {
         isVideo: Boolean,
         timeoutMinutes: Int = 5
     ) {
+        val isTestCallBuild = BuildConfig.APPLICATION_ID.endsWith(".test")
         val allowed = if (isVideo) isVideoCallNotificationEnabled(context, channelId) else isVoiceCallNotificationEnabled(context, channelId)
         if (!allowed) {
             Log.d(TAG, "Notificación de ${if (isVideo) "videollamada" else "llamada de voz"} desactivada para el canal $channelId")
@@ -390,6 +393,21 @@ object ChatNotificationManager {
             context,
             (callId.hashCode() and 0x3FFF) + 1,
             answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Abrir la interfaz entrante no debe contestar automáticamente.
+        val openCallIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_INCOMING_CALL
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra(EXTRA_CALL_ID, callId)
+            putExtra(EXTRA_CHANNEL_ID, channelId)
+            putExtra(EXTRA_ROUTE, "chat")
+        }
+        val openCallPendingIntent = PendingIntent.getActivity(
+            context,
+            (callId.hashCode() and 0x3FFF) + 3,
+            openCallIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -431,11 +449,11 @@ object ChatNotificationManager {
             )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(true)
+            .setAutoCancel(!isTestCallBuild)
             .setOngoing(true)
             .setSound(defaultRingtone)
             .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
-            .setContentIntent(answerPendingIntent)
+            .setContentIntent(if (isTestCallBuild) openCallPendingIntent else answerPendingIntent)
             .addAction(
                 R.drawable.ic_stat_chat,
                 "✓ Responder",
@@ -446,6 +464,14 @@ object ChatNotificationManager {
                 "✕ Rechazar",
                 rejectPendingIntent
             )
+
+        if (isTestCallBuild) {
+            if (canUseFullScreenIntent(context)) {
+                builder.setFullScreenIntent(openCallPendingIntent, true)
+            } else {
+                Log.i(TAG, "Full-screen call intent unavailable; showing high-priority notification instead.")
+            }
+        }
 
         val notificationId = (callId.hashCode() and 0x7FFFFFFF)
         try {
@@ -470,6 +496,12 @@ object ChatNotificationManager {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start call sound & vibration: ${e.message}")
         }
+    }
+
+    private fun canUseFullScreenIntent(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        return notificationManager?.canUseFullScreenIntent() == true
     }
 
     /**
