@@ -8,7 +8,7 @@
     },
     "ultimate": {
       "$uid": {
-        ".read": "auth != null && (auth.uid == $uid || root.child('social_test').child('profiles').child($uid).child('visibility').val() == 'public')",
+        ".read": "auth != null && auth.uid == $uid",
         ".write": "auth != null && auth.uid == $uid"
       }
     },
