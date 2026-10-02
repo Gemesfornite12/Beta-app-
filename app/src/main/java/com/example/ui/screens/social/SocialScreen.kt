@@ -465,7 +465,7 @@ fun SocialScreen(
                                                 )
                                                 followRequests = repository.pendingFollowRequests()
                                             } catch (error: Exception) {
-                                                errorMessage = "No se pudo guardar la privacidad del perfil."
+                                                errorMessage = "No se pudo cambiar la privacidad: ${error.message ?: "error desconocido"}"
                                             }
                                         }
                                     }
@@ -875,7 +875,12 @@ private fun MyProfileCard(profile: SocialProfile?, onEdit: () -> Unit, onVisibil
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
                 Icon(if (profile.isPrivate) Icons.Default.Lock else Icons.Default.Public, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
                 Text(if (profile.isPrivate) "Perfil privado" else "Perfil público", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                Switch(checked = !profile.isPrivate, onCheckedChange = onVisibilityChanged, modifier = Modifier.testTag("social_profile_visibility"))
+                TextButton(
+                    onClick = { onVisibilityChanged(profile.isPrivate) },
+                    modifier = Modifier.testTag("social_profile_visibility")
+                ) {
+                    Text(if (profile.isPrivate) "Hacer público" else "Hacer privado", color = Color(0xFFF472B6))
+                }
             }
         }
     }

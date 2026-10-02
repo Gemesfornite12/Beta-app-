@@ -200,17 +200,30 @@ class SocialRepository(context: Context) {
         val preferenceWeights = readTopicWeights(uid)
         val followed = readAcceptedFollowing(uid)
 
-        if (!followingOnly) {
-            val publicPosts = root.child("publicFeed")
-                .orderByChild("createdAt")
-                .limitToLast(maxPosts)
-                .get()
-                .await()
-            publicPosts.children.mapNotNull { it.toSocialPost() }
-                .forEach { postsByKey["${it.ownerUid}:${it.id}"] = it }
+        val publicAuthorUids = if (followingOnly) {
+            emptyList()
+        } else {
+            runCatching {
+                root.child("publicFeed")
+                    .orderByChild("createdAt")
+                    .limitToLast(maxPosts)
+                    .get()
+                    .await()
+            }.getOrNull()?.children
+                ?.mapNotNull { it.toSocialPost() }
+                ?.also { posts -> posts.forEach { postsByKey["${it.ownerUid}:${it.id}"] = it } }
+
+            val directory = root.child("directory").get().await()
+            directory.children.flatMap { handleNode ->
+                handleNode.children.mapNotNull { userNode ->
+                    val isPublic = userNode.child("visibility").getValue(String::class.java) == "public"
+                    val authorUid = userNode.child("uid").getValue(String::class.java) ?: userNode.key
+                    if (isPublic) authorUid?.takeIf { it.isNotBlank() } else null
+                }
+            }.distinct()
         }
 
-        val authorsToRead = if (followingOnly) followed else followed + uid
+        val authorsToRead = if (followingOnly) followed else followed + uid + publicAuthorUids
         authorsToRead.distinct().forEach { authorUid ->
             val snapshot = root.child("postsByUser").child(authorUid)
                 .orderByChild("createdAt")
