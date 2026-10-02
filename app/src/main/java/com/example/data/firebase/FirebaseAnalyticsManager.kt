@@ -38,6 +38,17 @@ object FirebaseAnalyticsManager {
         }
     }
 
+    fun logScreenView(context: Context, screenName: String, screenClass: String) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
+        runCatching {
+            val params = Bundle().apply {
+                putString(FirebaseAnalytics.Param.SCREEN_NAME, screenName.take(100))
+                putString(FirebaseAnalytics.Param.SCREEN_CLASS, screenClass.take(100))
+            }
+            instance(context).logEvent(FirebaseAnalytics.Event.SCREEN_VIEW, params)
+        }.onFailure { Log.w(TAG, "Could not record screen view: ${it.message}") }
+    }
+
     fun logSocialEvent(context: Context, eventName: String) {
         if (!BuildConfig.APPLICATION_ID.endsWith(".test") || eventName !in allowedSocialEvents) return
         runCatching { instance(context).logEvent(eventName, null) }

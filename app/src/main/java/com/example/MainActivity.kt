@@ -37,6 +37,7 @@ import androidx.core.content.ContextCompat
 import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.FcmTokenManager
 import com.example.data.firebase.FirebaseAnalyticsManager
+import com.example.data.firebase.FirebaseCrashlyticsManager
 import com.example.data.maps.MapTileCacheManager
 import com.example.ui.navigation.HashRoute
 import com.example.ui.navigation.HashRouter
@@ -74,6 +75,7 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     FirebaseAnalyticsManager.initialize(applicationContext)
+    FirebaseCrashlyticsManager.initialize(applicationContext)
     
     // Configurar Coil globalmente para soporte nativo de GIFs y Stickers animados
     try {
@@ -212,6 +214,20 @@ fun OmniStudioApp(
   val initialRoute = if (authState.isLoggedIn) HashRoute.HOME else HashRoute.AUTH
   val hashRouter = rememberHashRouter(initialRoute = initialRoute)
   val currentRoute by hashRouter.currentRoute.collectAsState()
+  val analyticsScreen = when (currentRoute) {
+    HashRoute.AUTH -> "Acceso" to "AuthScreen"
+    HashRoute.HOME -> "Inicio" to "HomeScreen"
+    HashRoute.DOC_EDITOR -> "Documentos" to "DocEditorScreen"
+    HashRoute.MUSIC_STUDIO -> "Estudio musical" to "MusicStudioScreen"
+    HashRoute.CHAT -> "Chat" to "ChatScreen"
+    HashRoute.PROFILE -> "Perfil" to "ProfileScreen"
+    HashRoute.AI_ASSISTANT -> "Asistente" to "AiAssistantScreen"
+    HashRoute.SOCIAL -> "Social" to "SocialScreen"
+    HashRoute.MAPS -> "Mapas" to "MapsScreen"
+  }
+  LaunchedEffect(currentRoute) {
+    FirebaseAnalyticsManager.logScreenView(appContext, analyticsScreen.first, analyticsScreen.second)
+  }
 
   // Sincronizar estado de sesión con HashRouter
   LaunchedEffect(authState.isLoggedIn) {

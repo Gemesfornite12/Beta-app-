@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+  alias(libs.plugins.firebase.crashlytics)
   kotlin("plugin.serialization") version "2.1.0"
 }
 
@@ -108,6 +109,7 @@ dependencies {
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   implementation(libs.firebase.analytics)
+  implementation(libs.firebase.crashlytics)
   // Google ML Kit on-device Language Identification & Translation
   implementation("com.google.mlkit:language-id:17.0.6")
   implementation("com.google.mlkit:translate:17.0.3")
