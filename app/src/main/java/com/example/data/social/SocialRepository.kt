@@ -1,12 +1,18 @@
 package com.example.data.social
 
 import android.content.Context
+import android.util.Log
 import com.example.data.firebase.FirebaseAppProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
+import com.example.data.supabase.SupabaseSocialPushService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
 
@@ -62,6 +68,18 @@ class SocialRepository(context: Context) {
     private val auth = FirebaseAuth.getInstance(app)
     private val root = FirebaseDatabase.getInstance(app).reference.child("social_test")
     private val mediaService = SupabaseSocialMediaService(appContext)
+    private val tag = "SocialRepository"
+    private val pushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun requestSocialPush(action: suspend () -> Unit) {
+        pushScope.launch {
+            try {
+                action()
+            } catch (error: Exception) {
+                Log.w(tag, "Social push request failed: ${error.message}")
+            }
+        }
+    }
 
     private fun currentUid(): String = auth.currentUser?.uid
         ?: error("Inicia sesión para usar Social.")
@@ -267,6 +285,7 @@ class SocialRepository(context: Context) {
         if (!profile.isPrivate) {
             root.child("publicFeed").child(publicFeedKey(uid, postId)).setValue(post.toMap()).await()
         }
+        requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
         return post
     }
 
@@ -304,6 +323,7 @@ class SocialRepository(context: Context) {
             runCatching { mediaService.delete(mediaPath) }
             throw error
         }
+        requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
         return post
     }
 
@@ -335,6 +355,7 @@ class SocialRepository(context: Context) {
             runCatching { mediaService.delete(mediaPath) }
             throw error
         }
+        requestSocialPush { SupabaseSocialPushService.publishedStory(storyId) }
         return story
     }
 
@@ -367,6 +388,7 @@ class SocialRepository(context: Context) {
                 .setValue(mapOf("topics" to post.topics.associateWith { true }))
                 .await()
             post.topics.forEach { topic -> adjustTopicWeight(uid, topic, 1) }
+            requestSocialPush { SupabaseSocialPushService.likedPost(post.ownerUid, post.id) }
         } else {
             likeRef.removeValue().await()
             root.child("preferences").child(uid).child("likedPosts")
@@ -403,6 +425,7 @@ class SocialRepository(context: Context) {
         } else {
             root.child("followers").child(target.uid).child(uid).setValue(relation).await()
         }
+        requestSocialPush { SupabaseSocialPushService.followedUser(target.uid) }
     }
 
     suspend fun unfollow(targetUid: String) {
@@ -431,6 +454,7 @@ class SocialRepository(context: Context) {
         val relation = mapOf("status" to "accepted", "createdAt" to System.currentTimeMillis())
         root.child("followers").child(uid).child(requesterUid).setValue(relation).await()
         root.child("followRequests").child(uid).child(requesterUid).child("status").setValue("accepted").await()
+        requestSocialPush { SupabaseSocialPushService.acceptedFollow(requesterUid) }
     }
 
     private suspend fun readAcceptedFollowing(uid: String): List<String> {

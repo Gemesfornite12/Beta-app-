@@ -1,0 +1,30 @@
+name: Verify OmniStudio Social FCM push
+
+on:
+  push:
+    branches:
+      - zapia/test-newrepo-real-oauth-20260930
+    paths:
+      - "supabase/functions/notify-social-event/**"
+      - "supabase/config.toml"
+      - "app/src/main/java/com/example/data/supabase/SupabaseSocialPushService.kt"
+      - "app/src/main/java/com/example/data/social/SocialRepository.kt"
+      - "app/src/main/java/com/example/data/firebase/FcmPushService.kt"
+      - "app/src/main/java/com/example/data/firebase/ChatNotificationManager.kt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-social-push-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated test branch
+        uses: actions/checkout@v4
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check Social FCM function
+        run: deno check supabase/functions/notify-social-event/index.ts

@@ -27,6 +27,7 @@ object ChatNotificationManager {
     const val CHANNEL_ID_GROUPS = "group_messages_channel"
     const val CHANNEL_ID_CALLS = "calls_channel"
     const val CHANNEL_ID_MISSED_CALLS = "missed_calls_channel"
+    const val CHANNEL_ID_SOCIAL = "social_activity_channel"
 
     const val EXTRA_CHANNEL_ID = "extra_target_channel_id"
     const val EXTRA_ROUTE = "extra_target_route"
@@ -127,11 +128,21 @@ object ChatNotificationManager {
                 setShowBadge(true)
                 lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
             }
+            val socialChannel = NotificationChannel(
+                CHANNEL_ID_SOCIAL,
+                "Actividad de Social",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Likes, seguidores, publicaciones e historias de OmniStudio Social"
+                setShowBadge(true)
+                lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
+            }
 
             notificationManager.createNotificationChannel(chatChannel)
             notificationManager.createNotificationChannel(groupsChannel)
             notificationManager.createNotificationChannel(callsChannel)
             notificationManager.createNotificationChannel(missedCallsChannel)
+            notificationManager.createNotificationChannel(socialChannel)
             Log.d(TAG, "Notification channels initialized successfully")
         }
 
@@ -267,6 +278,63 @@ object ChatNotificationManager {
             Log.e(TAG, "SecurityException while posting notification: ${e.message}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to post notification: ${e.message}", e)
+        }
+    }
+
+    fun showSocialNotification(
+        context: Context,
+        socialType: String,
+        actorName: String,
+        actorUsername: String,
+        eventId: String,
+        objectId: String
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        if (CallSoundVibrationManager.isDndActive(context)) return
+
+        createNotificationChannels(context)
+        val safeName = actorName.ifBlank { "Alguien" }
+        val message = when (socialType) {
+            "like" -> "Le gustó tu publicación"
+            "follow_request" -> "Quiere seguirte"
+            "new_follower" -> "Empezó a seguirte"
+            "follow_accepted" -> "Aceptó tu solicitud para seguirle"
+            "new_post" -> "Publicó algo nuevo"
+            "new_story" -> "Compartió una historia"
+            else -> "Tienes una nueva notificación de Social"
+        }
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = "com.example.action.OPEN_SOCIAL"
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_ROUTE, "social")
+            putExtra("extra_social_type", socialType)
+            putExtra("extra_social_object_id", objectId)
+        }
+        val notificationId = ((eventId.ifBlank { "$socialType:$actorUsername:$objectId" }.hashCode()) and 0x7FFFFFFF)
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val title = if (actorUsername.isBlank()) safeName else "$safeName · @$actorUsername"
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_SOCIAL)
+            .setSmallIcon(R.drawable.ic_stat_chat)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+
+        try {
+            NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+            _lastNotificationReceived.value = "$title: $message"
+        } catch (error: Exception) {
+            Log.w(TAG, "Failed to display Social notification: ${error.message}")
         }
     }
 

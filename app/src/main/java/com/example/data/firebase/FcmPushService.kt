@@ -65,6 +65,22 @@ class FcmPushService : FirebaseMessagingService() {
             return
         }
 
+        if (data["eventType"] == "social") {
+            if (!BuildConfig.APPLICATION_ID.endsWith(".test") || data["pushEnvironment"] != "test") {
+                Log.w(TAG, "Ignoring Social push outside the isolated test environment.")
+                return
+            }
+            ChatNotificationManager.showSocialNotification(
+                context = applicationContext,
+                socialType = data["socialType"].orEmpty(),
+                actorName = data["actorName"] ?: "Alguien",
+                actorUsername = data["actorUsername"].orEmpty(),
+                eventId = data["eventId"].orEmpty(),
+                objectId = data["postId"] ?: data["storyId"].orEmpty()
+            )
+            return
+        }
+
         // Extraer datos del payload 'data' o 'notification'
         val channelId = data["channelId"] ?: data["channel_id"] ?: "general"
         val channelName = data["channelName"] ?: data["channel_name"] ?: "Chat"
