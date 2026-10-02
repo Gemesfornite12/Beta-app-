@@ -225,8 +225,20 @@ fun OmniStudioApp(
     HashRoute.SOCIAL -> "Social" to "SocialScreen"
     HashRoute.MAPS -> "Mapas" to "MapsScreen"
   }
+  val analyticsMenuName = when (currentRoute) {
+    HashRoute.AUTH -> null
+    HashRoute.HOME -> "home"
+    HashRoute.DOC_EDITOR -> "documents"
+    HashRoute.MUSIC_STUDIO -> "music_studio"
+    HashRoute.CHAT -> "chat"
+    HashRoute.PROFILE -> "profile"
+    HashRoute.AI_ASSISTANT -> "sara"
+    HashRoute.SOCIAL -> "social"
+    HashRoute.MAPS -> "maps"
+  }
   LaunchedEffect(currentRoute) {
     FirebaseAnalyticsManager.logScreenView(appContext, analyticsScreen.first, analyticsScreen.second)
+    analyticsMenuName?.let { FirebaseAnalyticsManager.logMenuOpened(appContext, it) }
   }
 
   // Sincronizar estado de sesión con HashRouter

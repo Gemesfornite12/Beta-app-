@@ -135,6 +135,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.firebase.ChannelInfo
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
 import com.example.data.model.ChannelNotificationPreference
@@ -240,6 +241,12 @@ fun ChatScreen(
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
     val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
+
+    LaunchedEffect(currentChannel) {
+        if (currentChannel.startsWith("direct")) {
+            FirebaseAnalyticsManager.logUsageEvent(context, "private_chat_opened")
+        }
+    }
 
     // Launchers para solicitar permisos en tiempo de ejecución para Llamadas
     val voiceCallPermissionLauncher = rememberLauncherForActivityResult(
@@ -1573,6 +1580,9 @@ fun ChatScreen(
                                     }
                                     // Do not discard a selected attachment if its URI is missing.
                                     if (submitted) {
+                                        if (currentChannel.startsWith("direct")) {
+                                            FirebaseAnalyticsManager.logUsageEvent(context, "private_chat_message_sent")
+                                        }
                                         pendingMediaType = null
                                         pendingMediaUrl = null
                                         pendingMediaTitle = null

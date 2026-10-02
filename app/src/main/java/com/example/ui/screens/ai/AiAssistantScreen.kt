@@ -51,6 +51,7 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import com.google.firebase.auth.FirebaseAuth
 import com.example.data.api.GroqWorkspaceConnectors
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.model.ChatMessage
 import com.example.data.translation.MessageTranslationState
 import com.example.data.translation.SupportedLanguage
@@ -354,6 +355,9 @@ fun AiAssistantScreen(
     }
 
     fun handleSaraMessage(message: String) {
+        if (message.isNotBlank()) {
+            FirebaseAnalyticsManager.logUsageEvent(context, "sara_message_sent")
+        }
         if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
             val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
             workspaceActionResult = null
@@ -449,6 +453,7 @@ fun AiAssistantScreen(
             onSend = { message -> handleSaraMessage(message) },
             onSendAttachment = { uri, prompt ->
                 selectedConnectorIds = emptySet()
+                FirebaseAnalyticsManager.logUsageEvent(context, "sara_attachment_sent")
                 viewModel.sendAiAttachment(uri, prompt)
             },
             onRequestSave = { pendingKnowledge = it }

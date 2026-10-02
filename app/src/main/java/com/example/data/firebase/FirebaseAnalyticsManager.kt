@@ -11,6 +11,17 @@ object FirebaseAnalyticsManager {
     private const val TAG = "FirebaseAnalytics"
     private const val EVENT_SOCIAL_NOTIFICATION_RECEIVED = "social_notification_received"
 
+    private val allowedUsageEvents = setOf(
+        "sara_message_sent",
+        "sara_attachment_sent",
+        "private_chat_opened",
+        "private_chat_message_sent"
+    )
+
+    private val allowedMenus = setOf(
+        "home", "documents", "music_studio", "chat", "profile", "sara", "social", "maps"
+    )
+
     private val allowedSocialEvents = setOf(
         "social_post_created",
         "social_story_created",
@@ -47,6 +58,18 @@ object FirebaseAnalyticsManager {
             }
             instance(context).logEvent(FirebaseAnalytics.Event.SCREEN_VIEW, params)
         }.onFailure { Log.w(TAG, "Could not record screen view: ${it.message}") }
+    }
+
+    fun logMenuOpened(context: Context, menuName: String) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test") || menuName !in allowedMenus) return
+        runCatching { instance(context).logEvent("menu_${menuName}_opened", null) }
+            .onFailure { Log.w(TAG, "Could not record menu analytics event: ${it.message}") }
+    }
+
+    fun logUsageEvent(context: Context, eventName: String) {
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test") || eventName !in allowedUsageEvents) return
+        runCatching { instance(context).logEvent(eventName, null) }
+            .onFailure { Log.w(TAG, "Could not record app usage analytics event: ${it.message}") }
     }
 
     fun logSocialEvent(context: Context, eventName: String) {
