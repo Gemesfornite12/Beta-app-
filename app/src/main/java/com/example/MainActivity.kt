@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.example.data.firebase.ChatNotificationManager
 import com.example.data.firebase.FcmTokenManager
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.maps.MapTileCacheManager
 import com.example.ui.navigation.HashRoute
 import com.example.ui.navigation.HashRouter
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    FirebaseAnalyticsManager.initialize(applicationContext)
     
     // Configurar Coil globalmente para soporte nativo de GIFs y Stickers animados
     try {

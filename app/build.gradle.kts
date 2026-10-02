@@ -107,6 +107,7 @@ dependencies {
   implementation(libs.coil.gif)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
+  implementation(libs.firebase.analytics)
   // Google ML Kit on-device Language Identification & Translation
   implementation("com.google.mlkit:language-id:17.0.6")
   implementation("com.google.mlkit:translate:17.0.3")

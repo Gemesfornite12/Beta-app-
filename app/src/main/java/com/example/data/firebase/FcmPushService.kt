@@ -70,6 +70,10 @@ class FcmPushService : FirebaseMessagingService() {
                 Log.w(TAG, "Ignoring Social push outside the isolated test environment.")
                 return
             }
+            FirebaseAnalyticsManager.logSocialNotificationReceived(
+                applicationContext,
+                data["socialType"].orEmpty()
+            )
             ChatNotificationManager.showSocialNotification(
                 context = applicationContext,
                 socialType = data["socialType"].orEmpty(),

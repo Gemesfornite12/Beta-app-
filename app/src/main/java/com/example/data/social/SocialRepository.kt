@@ -9,6 +9,7 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.example.data.supabase.SupabaseSocialPushService
+import com.example.data.firebase.FirebaseAnalyticsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -285,6 +286,7 @@ class SocialRepository(context: Context) {
         if (!profile.isPrivate) {
             root.child("publicFeed").child(publicFeedKey(uid, postId)).setValue(post.toMap()).await()
         }
+        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_post_created")
         requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
         return post
     }
@@ -323,6 +325,7 @@ class SocialRepository(context: Context) {
             runCatching { mediaService.delete(mediaPath) }
             throw error
         }
+        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_post_created")
         requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
         return post
     }
@@ -355,6 +358,7 @@ class SocialRepository(context: Context) {
             runCatching { mediaService.delete(mediaPath) }
             throw error
         }
+        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_story_created")
         requestSocialPush { SupabaseSocialPushService.publishedStory(storyId) }
         return story
     }
@@ -388,6 +392,7 @@ class SocialRepository(context: Context) {
                 .setValue(mapOf("topics" to post.topics.associateWith { true }))
                 .await()
             post.topics.forEach { topic -> adjustTopicWeight(uid, topic, 1) }
+            FirebaseAnalyticsManager.logSocialEvent(appContext, "social_like")
             requestSocialPush { SupabaseSocialPushService.likedPost(post.ownerUid, post.id) }
         } else {
             likeRef.removeValue().await()
@@ -396,6 +401,7 @@ class SocialRepository(context: Context) {
                 .removeValue()
                 .await()
             post.topics.forEach { topic -> adjustTopicWeight(uid, topic, -1) }
+            FirebaseAnalyticsManager.logSocialEvent(appContext, "social_unlike")
         }
     }
 
@@ -425,6 +431,10 @@ class SocialRepository(context: Context) {
         } else {
             root.child("followers").child(target.uid).child(uid).setValue(relation).await()
         }
+        FirebaseAnalyticsManager.logSocialEvent(
+            appContext,
+            if (target.isPrivate) "social_follow_request" else "social_follow"
+        )
         requestSocialPush { SupabaseSocialPushService.followedUser(target.uid) }
     }
 
@@ -433,6 +443,7 @@ class SocialRepository(context: Context) {
         root.child("following").child(uid).child(targetUid).removeValue().await()
         root.child("followers").child(targetUid).child(uid).removeValue().await()
         root.child("followRequests").child(targetUid).child(uid).removeValue().await()
+        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_unfollow")
     }
 
     suspend fun pendingFollowRequests(): List<SocialFollowRequest> {
@@ -454,6 +465,7 @@ class SocialRepository(context: Context) {
         val relation = mapOf("status" to "accepted", "createdAt" to System.currentTimeMillis())
         root.child("followers").child(uid).child(requesterUid).setValue(relation).await()
         root.child("followRequests").child(uid).child(requesterUid).child("status").setValue("accepted").await()
+        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_follow_accepted")
         requestSocialPush { SupabaseSocialPushService.acceptedFollow(requesterUid) }
     }
 
