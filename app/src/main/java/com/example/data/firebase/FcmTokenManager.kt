@@ -63,6 +63,9 @@ object FcmTokenManager {
                 val app = FirebaseAppProvider.get(context)
                 Log.d(TAG, "Using FirebaseApp: ${app.name} (${app.options.projectId})")
 
+                // Enable token auto-initialization before requesting the current registration token.
+                FirebaseMessaging.getInstance().isAutoInitEnabled = true
+
                 FirebaseMessaging.getInstance().token
                     .addOnCompleteListener { task ->
                         if (!task.isSuccessful) {
@@ -76,11 +79,6 @@ object FcmTokenManager {
                         val token = task.result
                         Log.d(TAG, "FCM Registration Token received: ${token.take(20)}...")
                         
-                        // Habilitar auto-init ahora que sabemos que el registro funciona
-                        try {
-                            FirebaseMessaging.getInstance().isAutoInitEnabled = true
-                        } catch (_: Exception) {}
-
                         _currentToken.value = token
                         ChatNotificationManager.saveFcmToken(context, token)
 
