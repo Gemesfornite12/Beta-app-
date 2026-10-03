@@ -6,9 +6,10 @@ import android.util.Log
 import com.example.BuildConfig
 import com.google.firebase.analytics.FirebaseAnalytics
 
-/** Analytics is enabled only in the isolated test application and records non-identifying events. */
+/** Principal records only screen/menu events, never chat content or account/message IDs. */
 object FirebaseAnalyticsManager {
     private const val TAG = "FirebaseAnalytics"
+    private const val PRINCIPAL_APPLICATION_ID = "com.aistudio.omnistudio.wkspea"
     private const val EVENT_SOCIAL_NOTIFICATION_RECEIVED = "social_notification_received"
 
     private val allowedUsageEvents = setOf(
@@ -65,20 +66,21 @@ object FirebaseAnalyticsManager {
     private var analytics: FirebaseAnalytics? = null
 
     fun initialize(context: Context) {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
+        if (!isAnalyticsEnabledVariant()) return
         try {
             instance(context).apply {
                 setAnalyticsCollectionEnabled(true)
-                logEvent("analytics_test_active", null)
+                if (isTestVariant()) logEvent("analytics_test_active", null)
             }
-            Log.i(TAG, "Firebase Analytics enabled for the isolated test app.")
+            val variant = if (isTestVariant()) "the isolated test app" else "Principal"
+            Log.i(TAG, "Firebase Analytics enabled for $variant.")
         } catch (error: Exception) {
             Log.w(TAG, "Could not enable Firebase Analytics: ${error.message}")
         }
     }
 
     fun logScreenView(context: Context, screenName: String, screenClass: String) {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
+        if (!isAnalyticsEnabledVariant()) return
         runCatching {
             val params = Bundle().apply {
                 putString(FirebaseAnalytics.Param.SCREEN_NAME, screenName.take(100))
@@ -89,7 +91,7 @@ object FirebaseAnalyticsManager {
     }
 
     fun logMenuOpened(context: Context, menuName: String) {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test") || menuName !in allowedMenus) return
+        if (!isAnalyticsEnabledVariant() || menuName !in allowedMenus) return
         runCatching { instance(context).logEvent("menu_${menuName}_opened", null) }
             .onFailure { Log.w(TAG, "Could not record menu analytics event: ${it.message}") }
     }
@@ -121,6 +123,11 @@ object FirebaseAnalyticsManager {
             instance(context).logEvent(EVENT_SOCIAL_NOTIFICATION_RECEIVED, params)
         }.onFailure { Log.w(TAG, "Could not record notification analytics event: ${it.message}") }
     }
+
+    private fun isTestVariant(): Boolean = BuildConfig.APPLICATION_ID.endsWith(".test")
+
+    private fun isAnalyticsEnabledVariant(): Boolean =
+        BuildConfig.APPLICATION_ID == PRINCIPAL_APPLICATION_ID || isTestVariant()
 
     private fun instance(context: Context): FirebaseAnalytics {
         return analytics ?: synchronized(this) {
