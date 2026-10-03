@@ -44,26 +44,22 @@ jobs:
           test -s staging/production/app-release.apk
           test -s staging/test/app-debug.apk
           mkdir -p dist
-          cp staging/production/app-release.apk dist/OmniStudio-main.apk
-          cp staging/production/app-release.apk dist/OmniStudio-main-v2.apk
-          cp staging/test/app-debug.apk dist/OmniStudio-test.apk
+          cp staging/production/app-release.apk dist/OmniStudio-Principal.apk
           cp staging/test/app-debug.apk dist/OmniStudio-Beta.apk
 
       - name: Publish review prerelease with direct APK assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: omnistudio-fcm-review-20261002
-          name: OmniStudio FCM — APKs de revisión
+          tag_name: omnistudio-fcm-review-20261003
+          name: OmniStudio FCM — Principal y Beta (2026-10-03)
           body: |-
-            APKs de revisión para probar notificaciones FCM en los entornos principal y .test.
-            No es una publicación de Google Play. La entrega real de llamadas y mensajes debe probarse en los dispositivos.
+            APKs de revisión de OmniStudio principal y OmniStudio Beta (.test).
+            La beta es una app separada de la principal. No es una publicación de Google Play.
           target_commitish: main
           prerelease: true
           draft: false
           files: |
-            dist/OmniStudio-main.apk
-            dist/OmniStudio-main-v2.apk
-            dist/OmniStudio-test.apk
+            dist/OmniStudio-Principal.apk
             dist/OmniStudio-Beta.apk
           fail_on_unmatched_files: true
           overwrite_files: true
