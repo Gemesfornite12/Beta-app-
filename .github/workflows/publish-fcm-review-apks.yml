@@ -50,11 +50,12 @@ jobs:
       - name: Publish review prerelease with direct APK assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: omnistudio-fcm-review-20261003
-          name: OmniStudio FCM — Principal y Beta (2026-10-03)
+          tag_name: omnistudio-communication-between-users-20261003
+          name: Communication between users — OmniStudio Beta + Principal
           body: |-
-            APKs de revisión de OmniStudio principal y OmniStudio Beta (.test).
-            La beta es una app separada de la principal. No es una publicación de Google Play.
+            Review builds for communication between OmniStudio Principal and Beta (.test).
+            Includes Principal 1.0.2 and Beta 1.0.2-test APKs.
+            Real-device interoperability testing is still pending. This is a prerelease, not a Google Play release.
           target_commitish: main
           prerelease: true
           draft: false
