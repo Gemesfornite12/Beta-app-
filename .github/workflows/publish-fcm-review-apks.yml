@@ -1,0 +1,58 @@
+name: Publish FCM review APKs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish-review-apks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed production APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: omnistudio-production-release-apk-review
+          path: staging/production
+          repository: Gemesfornite12/Beta-app-
+          run-id: 37095309832
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download .test APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: omnistudio-real-oauth-test-apk
+          path: staging/test
+          repository: Gemesfornite12/Beta-app-
+          run-id: 37093609653
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare direct APK assets
+        run: |
+          set -eu
+          test -s staging/production/app-release.apk
+          test -s staging/test/app-debug.apk
+          mkdir -p dist
+          cp staging/production/app-release.apk dist/OmniStudio-main.apk
+          cp staging/test/app-debug.apk dist/OmniStudio-test.apk
+
+      - name: Publish review prerelease with direct APK assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: omnistudio-fcm-review-20261002
+          name: OmniStudio FCM — APKs de revisión
+          body: |-
+            APKs de revisión para probar notificaciones FCM en los entornos principal y .test.
+            No es una publicación de Google Play. La entrega real de llamadas y mensajes debe probarse en los dispositivos.
+          target_commitish: main
+          prerelease: true
+          draft: false
+          files: |
+            dist/OmniStudio-main.apk
+            dist/OmniStudio-test.apk
+          fail_on_unmatched_files: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
