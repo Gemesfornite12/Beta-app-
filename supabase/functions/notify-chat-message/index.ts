@@ -1,3 +1,5 @@
+import { androidPackageFor, callSignalPath, resolvePushEnvironment } from "./push-routing.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
@@ -7,7 +9,6 @@ const corsHeaders = {
 
 const FIREBASE_PROJECT_ID = "omnistudio-caaf5";
 const FIREBASE_DATABASE_URL = "https://omnistudio-caaf5-default-rtdb.firebaseio.com";
-const TEST_ANDROID_PACKAGE = "com.aistudio.omnistudio.wkspea.test";
 const MAX_ID_TOKEN_LENGTH = 4096;
 const MAX_ID_LENGTH = 256;
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -149,7 +150,7 @@ async function firebaseGet(path: string, accessToken: string): Promise<unknown> 
   return await response.json();
 }
 
-async function findTestDeviceTokens(emails: string[], accessToken: string): Promise<Array<{ token: string; documentName: string }>> {
+async function findDeviceTokens(emails: string[], androidPackage: string, accessToken: string): Promise<Array<{ token: string; documentName: string }>> {
   const requestedEmails = new Set(emails.map(normalizeEmail));
   const usersValue = await firebaseGet("users", accessToken);
   if (!usersValue || typeof usersValue !== "object" || Array.isArray(usersValue)) return [];
@@ -167,7 +168,7 @@ async function findTestDeviceTokens(emails: string[], accessToken: string): Prom
       const device = deviceValue as DataMap;
       const deviceEmail = normalizeEmail(device.email) || userEmail;
       if (!requestedEmails.has(deviceEmail)) continue;
-      if (text(device.appId) !== TEST_ANDROID_PACKAGE || device.notificationsEnabled === false) continue;
+      if (text(device.appId) !== androidPackage || device.notificationsEnabled === false) continue;
 
       const token = text(device.fcmToken);
       if (token) unique.set(token, `users/${uid}/fcmTokens/${tokenId}`);
@@ -216,7 +217,7 @@ async function removeStaleToken(documentPath: string, accessToken: string): Prom
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!response.ok && response.status !== 404) {
-    console.warn("Could not remove a stale test-device token", { status: response.status });
+    console.warn("Could not remove a stale device token", { status: response.status });
   }
 }
 
@@ -233,7 +234,7 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Chat notifications are not configured" }, 503);
   }
 
-  let payload: { eventType?: unknown; channelId?: unknown; messageId?: unknown; callId?: unknown };
+  let payload: { eventType?: unknown; channelId?: unknown; messageId?: unknown; callId?: unknown; pushEnvironment?: unknown };
   try {
     payload = await request.json();
   } catch {
@@ -252,6 +253,9 @@ Deno.serve(async (request) => {
   if (eventType === "call" && !isValidDatabaseKey(payload.callId)) {
     return jsonResponse({ error: "Invalid call identifier" }, 400);
   }
+  const pushEnvironment = resolvePushEnvironment(payload.pushEnvironment);
+  if (!pushEnvironment) return jsonResponse({ error: "Invalid push environment" }, 400);
+  const targetAndroidPackage = androidPackageFor(pushEnvironment);
 
   let identity: FirebaseIdentity | null;
   try {
@@ -275,7 +279,7 @@ Deno.serve(async (request) => {
     const channelId = payload.channelId;
     const accessToken = await getGoogleAccessToken(serviceAccount);
     const eventPath = eventType === "call"
-      ? `calls_test/${payload.callId as string}`
+      ? callSignalPath(pushEnvironment, channelId as string, payload.callId as string)
       : `chats/${channelId}/messages/${payload.messageId as string}`;
     const [channelValue, eventValue] = await Promise.all([
       firebaseGet(`chats/${channelId}`, accessToken),
@@ -286,12 +290,12 @@ Deno.serve(async (request) => {
     if (!channel || !event) return jsonResponse({ error: "Chat event not found" }, 404);
 
     if (eventType === "message") {
-      if (event.pushEnvironment !== "test") return jsonResponse({ accepted: true, sent: 0 }, 200);
+      if (text(event.pushEnvironment) !== pushEnvironment) return jsonResponse({ accepted: true, sent: 0 }, 200);
       if (text(event.senderId) !== identity.uid || normalizeEmail(event.senderEmail) !== identity.email) {
         return jsonResponse({ error: "Message sender does not match the authenticated account" }, 403);
       }
     } else {
-      if (event.pushEnvironment !== "test") return jsonResponse({ error: "Call is not eligible for test push" }, 403);
+      if (text(event.pushEnvironment) !== pushEnvironment) return jsonResponse({ error: "Call is not eligible for this push environment" }, 403);
       if (text(event.callId) !== payload.callId || text(event.channelId) !== channelId) {
         return jsonResponse({ error: "Call identifiers do not match" }, 403);
       }
@@ -319,14 +323,14 @@ Deno.serve(async (request) => {
     }
 
     if (recipientEmails.length === 0) {
-      console.info("Test notification has no recipients", { eventType, isGroup, memberCount: members.length });
+      console.info("Push notification has no recipients", { eventType, pushEnvironment, isGroup, memberCount: members.length });
       return jsonResponse({ accepted: true, sent: 0, recipientCount: 0, deviceCount: 0 }, 200);
     }
 
-    const devices = await findTestDeviceTokens(recipientEmails, accessToken);
+    const devices = await findDeviceTokens(recipientEmails, targetAndroidPackage, accessToken);
     if (devices.length === 0) {
-      console.info("Test notification has no eligible test devices", {
-        eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+      console.info("Push notification has no eligible devices", {
+        eventType, pushEnvironment, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
       });
       return jsonResponse({ accepted: true, sent: 0, recipientCount: recipientEmails.length, deviceCount: 0 }, 200);
     }
@@ -343,7 +347,7 @@ Deno.serve(async (request) => {
         isVideo: String(event.isVideo === true),
         isGroup: String(isGroup),
         timeoutMinutes: "5",
-        pushEnvironment: "test",
+        pushEnvironment,
       }
       : {
         eventType: "message",
@@ -354,7 +358,7 @@ Deno.serve(async (request) => {
         text: messagePreview(event),
         isGroup: String(isGroup),
         messageId: text(event.messageId) || (payload.messageId as string),
-        pushEnvironment: "test",
+        pushEnvironment,
       };
 
     let sent = 0;
@@ -368,13 +372,13 @@ Deno.serve(async (request) => {
         if (response.status === 404 || errorCodes.includes("UNREGISTERED")) {
           await removeStaleToken(device.documentName, accessToken);
         } else {
-          console.warn("FCM rejected a test notification", { eventType, status: response.status });
+          console.warn("FCM rejected a notification", { eventType, pushEnvironment, status: response.status });
         }
       }
     }
 
-    console.info("Test notification delivery result", {
-      eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+    console.info("Push notification delivery result", {
+      eventType, pushEnvironment, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
       deviceCount: devices.length, sent,
     });
     return jsonResponse({
@@ -384,7 +388,7 @@ Deno.serve(async (request) => {
       deviceCount: devices.length,
     }, 200);
   } catch (error) {
-    console.error("Test notification request failed", {
+    console.error("Push notification request failed", {
       message: error instanceof Error ? error.message : "Unknown server error",
     });
     return jsonResponse({ error: "Chat notification delivery failed" }, 502);

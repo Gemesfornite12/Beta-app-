@@ -13,7 +13,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Requests server-verified FCM pushes for .test chat messages and call invitations. */
+/** Requests server-verified FCM pushes for chat messages and call invitations in either app build. */
 object SupabaseChatPushService {
     private const val TAG = "SupabaseChatPush"
     private const val FUNCTION_PATH = "/functions/v1/notify-chat-message"
@@ -24,23 +24,26 @@ object SupabaseChatPushService {
         .callTimeout(25, TimeUnit.SECONDS)
         .build()
 
+    private fun pushEnvironment(): String =
+        if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production"
+
     suspend fun requestNotification(channelId: String, messageId: String) {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
         postNotification(
             JSONObject()
                 .put("eventType", "message")
                 .put("channelId", channelId)
                 .put("messageId", messageId)
+                .put("pushEnvironment", pushEnvironment())
         )
     }
 
     suspend fun requestCallNotification(channelId: String, callId: String) {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) return
         postNotification(
             JSONObject()
                 .put("eventType", "call")
                 .put("channelId", channelId)
                 .put("callId", callId)
+                .put("pushEnvironment", pushEnvironment())
         )
     }
 
