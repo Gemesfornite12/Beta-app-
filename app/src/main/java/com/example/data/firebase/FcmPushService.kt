@@ -20,7 +20,12 @@ class FcmPushService : FirebaseMessagingService() {
         // Asociar el token al usuario autenticado, no a una cuenta fija.
         val userEmail = FirebaseAuth.getInstance().currentUser?.email
         if (!userEmail.isNullOrBlank()) {
-            FcmTokenManager.syncTokenToFirestore(applicationContext, userEmail, token)
+            FcmTokenManager.syncTokenToFirestore(
+                applicationContext,
+                userEmail,
+                token,
+                appIsActive = ChatNotificationManager.isAppInForeground
+            )
         }
         try {
             val tokenData = hashMapOf(
@@ -40,8 +45,16 @@ class FcmPushService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
         Log.d(TAG, "FCM Message received from: ${remoteMessage.from}")
 
-        // Las llamadas se enrutan solo en la app aislada de prueba.
+        // Chat and one-to-one call pushes carry the receiver package environment.
         val data = remoteMessage.data
+        if (data["eventType"] == "message" || data["eventType"] == "call") {
+            val targetUid = data["recipientUid"].orEmpty()
+            val currentUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+            if (targetUid.isBlank() || targetUid != currentUid) {
+                Log.w(TAG, "Ignoring a chat/call push not addressed to the signed-in Firebase UID.")
+                return
+            }
+        }
         val currentPushEnvironment = if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production"
         val payloadEnvironment = data["pushEnvironment"].orEmpty()
         if (payloadEnvironment.isNotBlank() && payloadEnvironment != currentPushEnvironment) {

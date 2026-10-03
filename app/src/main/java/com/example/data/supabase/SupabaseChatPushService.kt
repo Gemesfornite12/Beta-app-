@@ -24,16 +24,12 @@ object SupabaseChatPushService {
         .callTimeout(25, TimeUnit.SECONDS)
         .build()
 
-    private fun pushEnvironment(): String =
-        if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production"
-
     suspend fun requestNotification(channelId: String, messageId: String) {
         postNotification(
             JSONObject()
                 .put("eventType", "message")
                 .put("channelId", channelId)
                 .put("messageId", messageId)
-                .put("pushEnvironment", pushEnvironment())
         )
     }
 
@@ -43,7 +39,6 @@ object SupabaseChatPushService {
                 .put("eventType", "call")
                 .put("channelId", channelId)
                 .put("callId", callId)
-                .put("pushEnvironment", pushEnvironment())
         )
     }
 

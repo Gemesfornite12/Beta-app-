@@ -8,8 +8,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.example.BuildConfig
 import com.example.data.model.CallSession
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
@@ -38,7 +38,7 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Peer-to-peer media client for the isolated .test call namespace. */
+/** Peer-to-peer media client for participant-protected one-to-one calls in both app variants. */
 class WebRtcCallClient(context: Context) {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -78,15 +78,15 @@ class WebRtcCallClient(context: Context) {
 
     @Synchronized
     fun startOutgoingCall(call: CallSession) {
-        if (!isTestBuild()) return fail("Las llamadas reales están habilitadas solo en la versión de prueba.")
         if (!hasPermission(Manifest.permission.RECORD_AUDIO)) return fail("Falta permiso para usar el micrófono.")
         if (call.isVideo && !hasPermission(Manifest.permission.CAMERA)) return fail("Falta permiso para usar la cámara.")
-        if (call.groupName != null || !call.channelId.startsWith("direct")) return fail("Esta prueba admite llamadas individuales; las grupales vienen después.")
+        if (call.groupName != null || !call.channelId.startsWith("direct")) return fail("Las llamadas disponibles son individuales y privadas.")
+        if (FirebaseAuth.getInstance().currentUser?.uid != call.callerUid) return fail("La cuenta no coincide con quien inició la llamada.")
         try {
             resetConnection()
             currentCall = call
             currentRole = "caller"
-            callReference = FirebaseDatabase.getInstance(DATABASE_URL).reference.child("calls_test").child(call.callId)
+            callReference = FirebaseDatabase.getInstance(DATABASE_URL).reference.child("calls").child(call.callId)
             prepareMedia(call.isVideo)
             createPeerConnection(call)
             listenForRemoteCandidates("callee")
@@ -101,15 +101,15 @@ class WebRtcCallClient(context: Context) {
 
     @Synchronized
     fun answerIncomingCall(call: CallSession) {
-        if (!isTestBuild()) return fail("Las llamadas reales están habilitadas solo en la versión de prueba.")
         if (!hasPermission(Manifest.permission.RECORD_AUDIO)) return fail("Falta permiso para usar el micrófono.")
         if (call.isVideo && !hasPermission(Manifest.permission.CAMERA)) return fail("Falta permiso para usar la cámara.")
-        if (call.groupName != null || !call.channelId.startsWith("direct")) return fail("Esta prueba admite llamadas individuales; las grupales vienen después.")
+        if (call.groupName != null || !call.channelId.startsWith("direct")) return fail("Las llamadas disponibles son individuales y privadas.")
+        if (FirebaseAuth.getInstance().currentUser?.uid != call.peerUid) return fail("La cuenta no coincide con quien recibió la llamada.")
         try {
             resetConnection()
             currentCall = call
             currentRole = "callee"
-            callReference = FirebaseDatabase.getInstance(DATABASE_URL).reference.child("calls_test").child(call.callId)
+            callReference = FirebaseDatabase.getInstance(DATABASE_URL).reference.child("calls").child(call.callId)
             prepareMedia(call.isVideo)
             createPeerConnection(call)
             listenForRemoteCandidates("caller")
@@ -158,8 +158,6 @@ class WebRtcCallClient(context: Context) {
         eglBase?.release()
         eglBase = null
     }
-
-    private fun isTestBuild() = BuildConfig.APPLICATION_ID.endsWith(".test")
 
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED

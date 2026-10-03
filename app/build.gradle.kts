@@ -118,7 +118,7 @@ dependencies {
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.database)
   implementation(libs.firebase.messaging)
-  // Real one-to-one peer-to-peer audio/video for the .test call flow
+  // Real one-to-one peer-to-peer audio/video for both app variants
   implementation("io.github.webrtc-sdk:android:150.7871.01")
 
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
