@@ -20,11 +20,15 @@
       }
     },
     "calls": {
-      ".read": "auth != null",
-      "$channelId": {
-        "$callId": {
-          ".write": "auth != null && ((newData.exists() && newData.child('pushEnvironment').val() == 'test') || (!newData.exists() && data.child('pushEnvironment').val() == 'test'))"
-        }
+      ".indexOn": [
+        "callerUid",
+        "peerUid"
+      ],
+      ".read": "auth != null && ((query.orderByChild == 'callerUid' && query.equalTo == auth.uid) || (query.orderByChild == 'peerUid' && query.equalTo == auth.uid))",
+      "$callId": {
+        ".read": "auth != null && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())",
+        ".write": "auth != null && ((!data.exists() && newData.exists() && auth.uid == newData.child('callerUid').val() && newData.child('peerUid').isString() && newData.child('peerUid').val() != auth.uid) || (data.exists() && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val()) && newData.exists() && newData.child('callerUid').val() == data.child('callerUid').val() && newData.child('peerUid').val() == data.child('peerUid').val()) || (data.exists() && !newData.exists() && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['callId', 'channelId', 'status', 'callerUid', 'peerUid', 'isVideo', 'startTimeMs']) && newData.child('callId').val() == $callId && newData.child('channelId').isString() && newData.child('channelId').val().beginsWith('direct') && newData.child('callerUid').isString() && newData.child('peerUid').isString() && newData.child('callerUid').val() != newData.child('peerUid').val() && newData.child('isVideo').isBoolean() && newData.child('startTimeMs').isNumber() && (newData.child('status').val() == 'RINGING' || newData.child('status').val() == 'CONNECTED' || newData.child('status').val() == 'ENDED') && (!newData.child('groupName').exists() || newData.child('groupName').val() == ''))"
       }
     },
     "presence": {

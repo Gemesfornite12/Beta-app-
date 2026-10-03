@@ -71,7 +71,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.BuildConfig
 import com.example.data.model.CallSession
 import com.example.data.model.CallStatus
 
@@ -105,17 +104,13 @@ fun CallSessionScreen(
         if (callSession.isIncoming) callSession.callerAvatarUrl else callSession.peerAvatarUrl
     }
     val answerWithPermissions = {
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) {
-            onAnswerCall()
-        } else {
-            val micGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-            val cameraGranted = !callSession.isVideo || ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-            if (micGranted && cameraGranted) onAnswerCall()
-            else answerPermissionLauncher.launch(
-                if (callSession.isVideo) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
-                else arrayOf(Manifest.permission.RECORD_AUDIO)
-            )
-        }
+        val micGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val cameraGranted = !callSession.isVideo || ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (micGranted && cameraGranted) onAnswerCall()
+        else answerPermissionLauncher.launch(
+            if (callSession.isVideo) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            else arrayOf(Manifest.permission.RECORD_AUDIO)
+        )
     }
     val durationFormatted = remember(callSession.durationSeconds) {
         val mins = callSession.durationSeconds / 60

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Full-screen call alerts are enabled only in the .test debug APK. -->
+    <!-- The shared main manifest declares call-screen permission for both app IDs. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 </manifest>

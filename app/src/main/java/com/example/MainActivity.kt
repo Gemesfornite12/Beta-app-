@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity() {
       pendingPushChannelId = chId
     }
 
-    // Manejar respuesta/rechazo desde la notificación; en .test pedir permisos antes de contestar.
+    // Manejar respuesta/rechazo desde la notificación y solicitar permisos de llamada si hace falta.
     handleCallNotificationAction(intent)
 
     // Solicitar permiso POST_NOTIFICATIONS en Android 13+ (API 33+)
@@ -180,10 +180,6 @@ class MainActivity : ComponentActivity() {
           Log.w("MainActivity", "La acción Responder no tiene callId o channelId")
           return
         }
-        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) {
-          viewModel.answerIncomingCall(callId, channelId)
-          return
-        }
         val isVideo = intent.getBooleanExtra(ChatNotificationManager.EXTRA_IS_VIDEO, false)
         val missingPermissions = buildList {
           if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -217,6 +213,7 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     ChatNotificationManager.isAppInForeground = true
+    FcmTokenManager.markAppActive(applicationContext)
   }
 
   override fun onPause() {
