@@ -7,6 +7,10 @@ on:
         description: GitHub Actions run ID that produced the verified production APK
         required: true
         type: string
+      test_run_id:
+        description: GitHub Actions run ID that produced the refreshed .test APK
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -31,7 +35,7 @@ jobs:
           name: omnistudio-real-oauth-test-apk
           path: staging/test
           repository: Gemesfornite12/Beta-app-
-          run-id: 37093609653
+          run-id: ${{ inputs.test_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare direct APK assets
@@ -43,6 +47,7 @@ jobs:
           cp staging/production/app-release.apk dist/OmniStudio-main.apk
           cp staging/production/app-release.apk dist/OmniStudio-main-v2.apk
           cp staging/test/app-debug.apk dist/OmniStudio-test.apk
+          cp staging/test/app-debug.apk dist/OmniStudio-Beta.apk
 
       - name: Publish review prerelease with direct APK assets
         uses: softprops/action-gh-release@v2
@@ -59,6 +64,7 @@ jobs:
             dist/OmniStudio-main.apk
             dist/OmniStudio-main-v2.apk
             dist/OmniStudio-test.apk
+            dist/OmniStudio-Beta.apk
           fail_on_unmatched_files: true
           overwrite_files: true
         env:
