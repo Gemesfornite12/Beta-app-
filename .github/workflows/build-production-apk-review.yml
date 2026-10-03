@@ -35,7 +35,7 @@ jobs:
 
       - name: Restore production Firebase config and upload key
         env:
-          PRODUCTION_GOOGLE_SERVICES_JSON_B64: ${{ secrets.PRODUCTION_GOOGLE_SERVICES_JSON_B64 }}
+          PRODUCTION_GOOGLE_SERVICES_JSON_B64: ${{ secrets.PRODUCTION_GOOGLE_SERVICES_JSON_B64 || secrets.TEST_GOOGLE_SERVICES_JSON_B64 }}
           PRODUCTION_KEYSTORE_B64: ${{ secrets.PRODUCTION_KEYSTORE_B64 }}
           STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.PRODUCTION_KEY_PASSWORD }}
@@ -49,6 +49,18 @@ jobs:
           printf '%s' "$PRODUCTION_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
           test -s app/google-services.json
           test -s "$KEYSTORE_PATH"
+          python3 - <<'PY'
+          import json
+          with open("app/google-services.json", encoding="utf-8") as f:
+              config = json.load(f)
+          packages = {
+              client.get("client_info", {}).get("android_client_info", {}).get("package_name")
+              for client in config.get("client", [])
+          }
+          if "com.aistudio.omnistudio.wkspea" not in packages:
+              raise SystemExit("Firebase config does not contain the production Android package")
+          print("Production Firebase package configuration verified")
+          PY
 
       - name: Build signed production APK
         env:
