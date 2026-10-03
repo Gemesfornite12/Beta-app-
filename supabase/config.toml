@@ -1,0 +1,4 @@
+# The function validates Firebase ID tokens itself. Supabase's gateway must not
+# try to validate the Firebase token as a Supabase JWT.
+[functions.delete-chat-media]
+verify_jwt = false
