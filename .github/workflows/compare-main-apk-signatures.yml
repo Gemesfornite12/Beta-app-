@@ -38,5 +38,5 @@ jobs:
           for file in apks/current/OmniStudio-main.apk apks/prior-20261001/omnistudio.apk apks/prior-20260930/omnistudio.apk apks/prior-20261001-early/omnistudio.apk; do
             echo "FILE: $file"
             "$AAPT" dump badging "$file" | head -n 1
-            "$APKSIGNER" verify --print-certs "$file" | grep -E 'Signer #1 certificate SHA-256 digest:'
+            "$APKSIGNER" verify --verbose --print-certs "$file" 2>&1 || true
           done
