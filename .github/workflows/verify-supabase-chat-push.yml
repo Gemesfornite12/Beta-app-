@@ -1,0 +1,28 @@
+name: Verify isolated Supabase chat push
+
+on:
+  push:
+    branches:
+      - zapia/test-newrepo-real-oauth-20260930
+    paths:
+      - "supabase/functions/notify-chat-message/**"
+      - "supabase/config.toml"
+      - "app/src/main/java/com/example/data/supabase/SupabaseChatPushService.kt"
+      - "app/src/main/java/com/example/data/firebase/RealtimeDatabaseService.kt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-edge-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout isolated test branch
+        uses: actions/checkout@v4
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check chat push function
+        run: deno check supabase/functions/notify-chat-message/index.ts

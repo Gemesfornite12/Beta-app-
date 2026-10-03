@@ -1,47 +1,488 @@
 package com.example
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.example.data.firebase.ChatNotificationManager
+import com.example.data.firebase.FcmTokenManager
+import com.example.data.firebase.FirebaseAnalyticsManager
+import com.example.data.firebase.FirebaseCrashlyticsManager
+import com.example.data.maps.MapTileCacheManager
+import com.example.ui.navigation.HashRoute
+import com.example.ui.navigation.HashRouter
+import com.example.ui.navigation.HashRouterDock
+import com.example.ui.navigation.LocalHashRouter
+import com.example.ui.navigation.rememberHashRouter
+import com.example.ui.screens.auth.AuthScreen
+import com.example.ui.screens.chat.CallSessionScreen
+import com.example.ui.screens.chat.ChatScreen
+import com.example.ui.screens.docs.DocEditorScreen
+import com.example.ui.screens.home.HomeScreen
+import com.example.ui.screens.music.MusicStudioScreen
+import com.example.ui.screens.profile.ProfileScreen
+import com.example.ui.screens.ai.AiAssistantScreen
+import com.example.ui.screens.maps.MapsScreen
+import com.example.ui.screens.social.SocialScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.viewmodel.OmniViewModel
+import coil.Coil
+import coil.ImageLoader
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            MyApplicationTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
-            }
+  private val viewModel: OmniViewModel by viewModels()
+  private var currentIntentUri by mutableStateOf<Uri?>(null)
+  private var pendingPushChannelId by mutableStateOf<String?>(null)
+  private data class PendingCallAnswer(val callId: String, val channelId: String, val isVideo: Boolean)
+  private var pendingCallAnswer: PendingCallAnswer? = null
+
+  private val callPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestMultiplePermissions()
+  ) { permissions ->
+    val pending = pendingCallAnswer ?: return@registerForActivityResult
+    pendingCallAnswer = null
+    val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val cameraGranted = !pending.isVideo || permissions[Manifest.permission.CAMERA] == true ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    if (micGranted && cameraGranted) {
+      viewModel.answerIncomingCall(pending.callId, pending.channelId)
+    } else {
+      Toast.makeText(
+        this,
+        "Se necesita permiso de micrófono${if (pending.isVideo) " y cámara" else ""} para responder.",
+        Toast.LENGTH_LONG
+      ).show()
+    }
+  }
+
+  private val notificationPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    Log.d("MainActivity", "POST_NOTIFICATIONS permission result: $isGranted")
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    FirebaseAnalyticsManager.initialize(applicationContext)
+    FirebaseCrashlyticsManager.initialize(applicationContext)
+    
+    // Configurar Coil globalmente para soporte nativo de GIFs y Stickers animados
+    try {
+      val imageLoader = ImageLoader.Builder(applicationContext)
+        .components {
+          if (Build.VERSION.SDK_INT >= 28) {
+            add(ImageDecoderDecoder.Factory())
+          } else {
+            add(GifDecoder.Factory())
+          }
         }
+        .crossfade(true)
+        .build()
+      Coil.setImageLoader(imageLoader)
+    } catch (e: Exception) {
+      Log.e("MainActivity", "Error inicializando Coil: ${e.message}", e)
     }
+
+    enableEdgeToEdge()
+    currentIntentUri = intent?.data
+
+    // Inicializar canales de notificación y registrar ciclo de vida
+    ChatNotificationManager.createNotificationChannels(applicationContext)
+    ChatNotificationManager.isAppInForeground = true
+
+    // Inicializar MapLibre y motor de caché de mapas de forma segura
+    try {
+      MapTileCacheManager.initialize(applicationContext)
+    } catch (e: Throwable) {
+      Log.e("MainActivity", "Error inicializando MapTileCacheManager: ${e.message}", e)
+    }
+
+    // Extraer canal si la actividad se lanzó desde un toque en notificación push
+    intent?.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
+      pendingPushChannelId = chId
+    }
+
+    // Manejar respuesta/rechazo desde la notificación; en .test pedir permisos antes de contestar.
+    handleCallNotificationAction(intent)
+
+    // Solicitar permiso POST_NOTIFICATIONS en Android 13+ (API 33+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      }
+    }
+
+    setContent {
+      val isDarkTheme by viewModel.isDarkTheme.collectAsState()
+      MyApplicationTheme(darkTheme = isDarkTheme) {
+        OmniStudioApp(
+          viewModel = viewModel,
+          initialUri = currentIntentUri,
+          pendingPushChannelId = pendingPushChannelId,
+          onClearPendingPushChannel = { pendingPushChannelId = null }
+        )
+      }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    currentIntentUri = intent.data
+
+    intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)?.let { chId ->
+      pendingPushChannelId = chId
+    }
+
+    handleCallNotificationAction(intent)
+  }
+
+  private fun handleCallNotificationAction(intent: Intent?) {
+    when (intent?.action) {
+      ChatNotificationManager.ACTION_ANSWER_CALL -> {
+        val callId = intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID).orEmpty()
+        val channelId = intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID).orEmpty()
+        if (callId.isBlank() || channelId.isBlank()) {
+          Log.w("MainActivity", "La acción Responder no tiene callId o channelId")
+          return
+        }
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) {
+          viewModel.answerIncomingCall(callId, channelId)
+          return
+        }
+        val isVideo = intent.getBooleanExtra(ChatNotificationManager.EXTRA_IS_VIDEO, false)
+        val missingPermissions = buildList {
+          if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.RECORD_AUDIO)
+          }
+          if (isVideo && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.CAMERA)
+          }
+        }
+        if (missingPermissions.isEmpty()) {
+          viewModel.answerIncomingCall(callId, channelId)
+        } else {
+          pendingCallAnswer = PendingCallAnswer(callId, channelId, isVideo)
+          callPermissionLauncher.launch(missingPermissions.toTypedArray())
+        }
+      }
+      ChatNotificationManager.ACTION_REJECT_CALL -> {
+        viewModel.rejectIncomingCall(
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
+          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
+        )
+      }
+    }
+  }
+
+  override fun onStart() {
+    super.onStart()
+    ChatNotificationManager.isAppInForeground = true
+  }
+
+  override fun onResume() {
+    super.onResume()
+    ChatNotificationManager.isAppInForeground = true
+  }
+
+  override fun onPause() {
+    super.onPause()
+    ChatNotificationManager.isAppInForeground = false
+  }
+
+  override fun onStop() {
+    super.onStop()
+    ChatNotificationManager.isAppInForeground = false
+  }
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
+fun OmniStudioApp(
+  viewModel: OmniViewModel,
+  initialUri: Uri? = null,
+  pendingPushChannelId: String? = null,
+  onClearPendingPushChannel: () -> Unit = {}
+) {
+  val authState by viewModel.authUiState.collectAsState()
+  val activeCall by viewModel.activeCall.collectAsState()
+  val callLocalVideoTrack by viewModel.callLocalVideoTrack.collectAsState()
+  val callRemoteVideoTrack by viewModel.callRemoteVideoTrack.collectAsState()
+  val callConnectionState by viewModel.callConnectionState.collectAsState()
+  val appContext = LocalContext.current.applicationContext
+  LaunchedEffect(authState.isLoggedIn, authState.currentUser?.email) {
+    val signedInEmail = authState.currentUser?.email
+    if (authState.isLoggedIn && !signedInEmail.isNullOrBlank()) {
+      FcmTokenManager.initialize(appContext, signedInEmail)
+    }
+  }
+  val initialRoute = if (authState.isLoggedIn) HashRoute.HOME else HashRoute.AUTH
+  val hashRouter = rememberHashRouter(initialRoute = initialRoute)
+  val currentRoute by hashRouter.currentRoute.collectAsState()
+  val analyticsScreen = when (currentRoute) {
+    HashRoute.AUTH -> "Acceso" to "AuthScreen"
+    HashRoute.HOME -> "Inicio" to "HomeScreen"
+    HashRoute.DOC_EDITOR -> "Documentos" to "DocEditorScreen"
+    HashRoute.MUSIC_STUDIO -> "Estudio musical" to "MusicStudioScreen"
+    HashRoute.CHAT -> "Chat" to "ChatScreen"
+    HashRoute.PROFILE -> "Perfil" to "ProfileScreen"
+    HashRoute.AI_ASSISTANT -> "Asistente" to "AiAssistantScreen"
+    HashRoute.SOCIAL -> "Social" to "SocialScreen"
+    HashRoute.MAPS -> "Mapas" to "MapsScreen"
+  }
+  val analyticsMenuName = when (currentRoute) {
+    HashRoute.AUTH -> null
+    HashRoute.HOME -> "home"
+    HashRoute.DOC_EDITOR -> "documents"
+    HashRoute.MUSIC_STUDIO -> "music_studio"
+    HashRoute.CHAT -> "chat"
+    HashRoute.PROFILE -> "profile"
+    HashRoute.AI_ASSISTANT -> "sara"
+    HashRoute.SOCIAL -> "social"
+    HashRoute.MAPS -> "maps"
+  }
+  LaunchedEffect(currentRoute) {
+    FirebaseAnalyticsManager.logScreenView(appContext, analyticsScreen.first, analyticsScreen.second)
+    analyticsMenuName?.let { FirebaseAnalyticsManager.logMenuOpened(appContext, it) }
+  }
+
+  // Sincronizar estado de sesión con HashRouter
+  LaunchedEffect(authState.isLoggedIn) {
+    if (!authState.isLoggedIn && currentRoute != HashRoute.AUTH) {
+      hashRouter.replace(HashRoute.AUTH)
+    } else if (authState.isLoggedIn && currentRoute == HashRoute.AUTH) {
+      hashRouter.replace(HashRoute.HOME)
+    }
+  }
+
+  // Manejar Deep Links y fragmentos Hash (#/editor, #/music, #/chat)
+  LaunchedEffect(initialUri) {
+    if (initialUri != null) {
+      hashRouter.handleDeepLink(initialUri)
+    }
+  }
+
+  // Manejar navegación directa a canal de chat al tocar una notificación push
+  LaunchedEffect(pendingPushChannelId) {
+    if (!pendingPushChannelId.isNullOrBlank()) {
+      viewModel.loadChannelMessages(pendingPushChannelId)
+      hashRouter.push(HashRoute.CHAT)
+      onClearPendingPushChannel()
+    }
+  }
+
+  // Manejar botón Atrás del sistema mediante la pila del HashRouter
+  BackHandler(enabled = hashRouter.canPop()) {
+    hashRouter.pop()
+  }
+
+  CompositionLocalProvider(LocalHashRouter provides hashRouter) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = Color(0xFF0F172A),
+        bottomBar = {
+          if (authState.isLoggedIn && currentRoute != HashRoute.AUTH) {
+            HashRouterDock(
+              hashRouter = hashRouter,
+              viewModel = viewModel
+            )
+          }
+        }
+      ) { innerPadding ->
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(bottom = innerPadding.calculateBottomPadding())
+      ) {
+        AnimatedContent(
+          targetState = currentRoute,
+          transitionSpec = {
+            (fadeIn(animationSpec = tween(220, delayMillis = 40)) +
+              scaleIn(initialScale = 0.97f, animationSpec = tween(220)))
+              .togetherWith(fadeOut(animationSpec = tween(150)))
+          },
+          label = "hash_router_transition"
+        ) { route ->
+          when (route) {
+            HashRoute.AUTH -> {
+              AuthScreen(
+                viewModel = viewModel,
+                onAuthSuccess = {
+                  hashRouter.replace(HashRoute.HOME)
+                }
+              )
+            }
+
+            HashRoute.HOME -> {
+              HomeScreen(
+                viewModel = viewModel,
+                onOpenDocEditor = {
+                  viewModel.ensureDocumentForEditor()
+                  hashRouter.push(HashRoute.DOC_EDITOR)
+                },
+                onOpenMusicStudio = {
+                  viewModel.ensureAudioProjectForStudio()
+                  hashRouter.push(HashRoute.MUSIC_STUDIO)
+                },
+                onOpenChat = {
+                  hashRouter.push(HashRoute.CHAT)
+                },
+                onOpenProfile = {
+                  hashRouter.push(HashRoute.PROFILE)
+                },
+                onOpenAiAssistant = {
+                  hashRouter.push(HashRoute.AI_ASSISTANT)
+                },
+                onOpenMaps = {
+                  hashRouter.push(HashRoute.MAPS)
+                },
+                onOpenSocial = {
+                  hashRouter.push(HashRoute.SOCIAL)
+                }
+              )
+            }
+
+            HashRoute.DOC_EDITOR -> {
+              DocEditorScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                },
+                onShareToChat = {
+                  hashRouter.push(HashRoute.CHAT)
+                }
+              )
+            }
+
+            HashRoute.MUSIC_STUDIO -> {
+              MusicStudioScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                },
+                onShareToChat = {
+                  hashRouter.push(HashRoute.CHAT)
+                }
+              )
+            }
+
+            HashRoute.CHAT -> {
+              ChatScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                },
+                onOpenDoc = { doc ->
+                  viewModel.openDocument(doc)
+                  hashRouter.push(HashRoute.DOC_EDITOR)
+                },
+                onOpenAudio = { audio ->
+                  viewModel.openAudioProject(audio)
+                  hashRouter.push(HashRoute.MUSIC_STUDIO)
+                }
+              )
+            }
+
+            HashRoute.PROFILE -> {
+              ProfileScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                },
+                onLogout = {
+                  viewModel.logout()
+                  hashRouter.replace(HashRoute.AUTH)
+                },
+                onOpenChat = { channelId ->
+                  viewModel.loadChannelMessages(channelId)
+                  hashRouter.push(HashRoute.CHAT)
+                }
+              )
+            }
+
+            HashRoute.AI_ASSISTANT -> {
+              AiAssistantScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                }
+              )
+            }
+
+            HashRoute.SOCIAL -> {
+              SocialScreen(
+                viewModel = viewModel,
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                }
+              )
+            }
+
+            HashRoute.MAPS -> {
+              MapsScreen(
+                onBack = {
+                  if (!hashRouter.pop()) hashRouter.push(HashRoute.HOME)
+                }
+              )
+            }
+          }
+        }
+      }
+      }
+
+      // Superposición de llamada entrante o activa sobre cualquier pantalla
+      if (activeCall != null) {
+        CallSessionScreen(
+          callSession = activeCall!!,
+          onAnswerCall = { viewModel.answerIncomingCall() },
+          onRejectCall = { viewModel.rejectIncomingCall() },
+          onToggleMute = { viewModel.toggleCallMute() },
+          onToggleCamera = { viewModel.toggleCallCamera() },
+          onToggleSpeaker = { viewModel.toggleCallSpeaker() },
+          onSwitchCamera = { viewModel.switchCallCamera() },
+          onEndCall = { viewModel.endActiveCall() },
+          localVideoTrack = callLocalVideoTrack,
+          remoteVideoTrack = callRemoteVideoTrack,
+          eglContext = if (callLocalVideoTrack != null || callRemoteVideoTrack != null) viewModel.callEglContext else null,
+          mediaConnectionState = callConnectionState
+        )
+      }
+    }
+  }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    MyApplicationTheme {
-        Greeting("Android")
-    }
-}
+

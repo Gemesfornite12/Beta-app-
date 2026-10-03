@@ -1,24 +1,17 @@
-name: android-groq-workspace-connectors
+name: omnistudio-test-only-apk
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'app/**'
-      - 'docs/groq-workspace-connectors.md'
-      - '.github/workflows/android-groq-workspace-connectors.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  build-test-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout main
+      - name: Checkout selected test branch
         uses: actions/checkout@v4
 
       - name: Set up Java
@@ -38,37 +31,42 @@ jobs:
       - name: Install Android 36 SDK packages
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Generate temporary debug signing key
-        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-
-      - name: Create temporary Firebase config for build only
+      - name: Restore Firebase client config from Actions secret
+        env:
+          TEST_GOOGLE_SERVICES_JSON_B64: ${{ secrets.TEST_GOOGLE_SERVICES_JSON_B64 }}
         run: |
-          cat > app/google-services.json <<'JSON'
-          {
-            "project_info": {
-              "project_number": "000000000000",
-              "project_id": "omnistudio-ci-placeholder",
-              "storage_bucket": "omnistudio-ci-placeholder.appspot.com"
-            },
-            "client": [
-              {
-                "client_info": {
-                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
-                  "android_client_info": {
-                    "package_name": "com.aistudio.omnistudio.wkspea"
-                  }
-                },
-                "api_key": [
-                  { "current_key": "not-a-real-api-key" }
-                ]
-              }
-            ],
-            "configuration_version": "1"
-          }
-          JSON
+          test -n "$TEST_GOOGLE_SERVICES_JSON_B64"
+          printf '%s' "$TEST_GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json
 
-      - name: Build debug APK
+      - name: Restore isolated test signing key
+        env:
+          TEST_OAUTH_KEYSTORE_B64: ${{ secrets.TEST_OAUTH_KEYSTORE_B64 }}
+          TEST_OAUTH_KEYSTORE_PASSWORD: ${{ secrets.TEST_OAUTH_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$TEST_OAUTH_KEYSTORE_B64"
+          test -n "$TEST_OAUTH_KEYSTORE_PASSWORD"
+          printf '%s' "$TEST_OAUTH_KEYSTORE_B64" | base64 --decode > test-signing.p12
+          keytool -importkeystore -noprompt \
+            -srckeystore test-signing.p12 -srcstoretype PKCS12 \
+            -srcstorepass "$TEST_OAUTH_KEYSTORE_PASSWORD" -srcalias androiddebugkey \
+            -destkeystore debug.keystore -deststoretype JKS \
+            -deststorepass android -destkeypass android -destalias androiddebugkey
+          keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -A1 'SHA1:'
+
+      - name: Build test-only debug APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Run Groq workspace connector tests
+      - name: Run connector routing tests
         run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --stacktrace
+
+      - name: Upload test-only APK (one-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnistudio-test-only-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove Firebase config and signing material from runner workspace
+        if: always()
+        run: rm -f app/google-services.json test-signing.p12 debug.keystore

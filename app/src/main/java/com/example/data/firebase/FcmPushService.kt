@@ -1,6 +1,8 @@
 package com.example.data.firebase
 
 import android.util.Log
+import com.example.BuildConfig
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -15,17 +17,22 @@ class FcmPushService : FirebaseMessagingService() {
         Log.d(TAG, "FCM onNewToken received: ${token.take(20)}...")
         ChatNotificationManager.saveFcmToken(applicationContext, token)
 
-        // Sincronizar token con Firestore para el usuario activo
+        // Asociar el token al usuario autenticado, no a una cuenta fija.
+        val userEmail = FirebaseAuth.getInstance().currentUser?.email
+        if (!userEmail.isNullOrBlank()) {
+            FcmTokenManager.syncTokenToFirestore(applicationContext, userEmail, token)
+        }
         try {
-            val db = FirebaseFirestore.getInstance()
             val tokenData = hashMapOf(
                 "fcmToken" to token,
+                "email" to userEmail.orEmpty(),
                 "updatedAt" to System.currentTimeMillis()
             )
-            db.collection("fcm_device_tokens").document(token.hashCode().toString())
+            FirebaseFirestore.getInstance().collection("fcm_device_tokens")
+                .document(token.hashCode().toString())
                 .set(tokenData, SetOptions.merge())
         } catch (e: Exception) {
-            Log.w(TAG, "Error saving token in Firestore: ${e.message}")
+            Log.w(TAG, "Error saving FCM device token: ${e.message}")
         }
     }
 
@@ -33,8 +40,52 @@ class FcmPushService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
         Log.d(TAG, "FCM Message received from: ${remoteMessage.from}")
 
-        // Extraer datos del payload 'data' o 'notification'
+        // Las llamadas se enrutan solo en la app aislada de prueba.
         val data = remoteMessage.data
+        if (data["eventType"] == "call") {
+            if (!BuildConfig.APPLICATION_ID.endsWith(".test") || data["pushEnvironment"] != "test") {
+                Log.w(TAG, "Ignoring call push outside the isolated test environment.")
+                return
+            }
+            val callId = data["callId"].orEmpty()
+            val channelId = data["channelId"].orEmpty()
+            if (callId.isBlank() || channelId.isBlank()) {
+                Log.w(TAG, "Ignoring call push without call and channel identifiers.")
+                return
+            }
+            ChatNotificationManager.showIncomingCallNotification(
+                context = applicationContext,
+                callId = callId,
+                channelId = channelId,
+                callerName = data["callerName"] ?: "Compañero",
+                groupName = data["groupName"]?.takeIf { it.isNotBlank() },
+                isVideo = data["isVideo"]?.toBoolean() ?: false,
+                timeoutMinutes = data["timeoutMinutes"]?.toIntOrNull() ?: 5
+            )
+            return
+        }
+
+        if (data["eventType"] == "social") {
+            if (!BuildConfig.APPLICATION_ID.endsWith(".test") || data["pushEnvironment"] != "test") {
+                Log.w(TAG, "Ignoring Social push outside the isolated test environment.")
+                return
+            }
+            FirebaseAnalyticsManager.logSocialNotificationReceived(
+                applicationContext,
+                data["socialType"].orEmpty()
+            )
+            ChatNotificationManager.showSocialNotification(
+                context = applicationContext,
+                socialType = data["socialType"].orEmpty(),
+                actorName = data["actorName"] ?: "Alguien",
+                actorUsername = data["actorUsername"].orEmpty(),
+                eventId = data["eventId"].orEmpty(),
+                objectId = data["postId"] ?: data["storyId"].orEmpty()
+            )
+            return
+        }
+
+        // Extraer datos del payload 'data' o 'notification'
         val channelId = data["channelId"] ?: data["channel_id"] ?: "general"
         val channelName = data["channelName"] ?: data["channel_name"] ?: "Chat"
         val senderName = data["senderName"] ?: data["sender_name"]
