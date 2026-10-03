@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -65,6 +66,28 @@ class MainActivity : ComponentActivity() {
   private val viewModel: OmniViewModel by viewModels()
   private var currentIntentUri by mutableStateOf<Uri?>(null)
   private var pendingPushChannelId by mutableStateOf<String?>(null)
+  private data class PendingCallAnswer(val callId: String, val channelId: String, val isVideo: Boolean)
+  private var pendingCallAnswer: PendingCallAnswer? = null
+
+  private val callPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestMultiplePermissions()
+  ) { permissions ->
+    val pending = pendingCallAnswer ?: return@registerForActivityResult
+    pendingCallAnswer = null
+    val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val cameraGranted = !pending.isVideo || permissions[Manifest.permission.CAMERA] == true ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    if (micGranted && cameraGranted) {
+      viewModel.answerIncomingCall(pending.callId, pending.channelId)
+    } else {
+      Toast.makeText(
+        this,
+        "Se necesita permiso de micrófono${if (pending.isVideo) " y cámara" else ""} para responder.",
+        Toast.LENGTH_LONG
+      ).show()
+    }
+  }
 
   private val notificationPermissionLauncher = registerForActivityResult(
     ActivityResultContracts.RequestPermission()
@@ -113,21 +136,8 @@ class MainActivity : ComponentActivity() {
       pendingPushChannelId = chId
     }
 
-    // Manejar acciones rápidas de respuesta / rechazo desde la notificación de llamada entrante
-    when (intent?.action) {
-      ChatNotificationManager.ACTION_ANSWER_CALL -> {
-        viewModel.answerIncomingCall(
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
-        )
-      }
-      ChatNotificationManager.ACTION_REJECT_CALL -> {
-        viewModel.rejectIncomingCall(
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
-        )
-      }
-    }
+    // Manejar respuesta/rechazo desde la notificación; en .test pedir permisos antes de contestar.
+    handleCallNotificationAction(intent)
 
     // Solicitar permiso POST_NOTIFICATIONS en Android 13+ (API 33+)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -158,12 +168,37 @@ class MainActivity : ComponentActivity() {
       pendingPushChannelId = chId
     }
 
-    when (intent.action) {
+    handleCallNotificationAction(intent)
+  }
+
+  private fun handleCallNotificationAction(intent: Intent?) {
+    when (intent?.action) {
       ChatNotificationManager.ACTION_ANSWER_CALL -> {
-        viewModel.answerIncomingCall(
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID),
-          intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID)
-        )
+        val callId = intent.getStringExtra(ChatNotificationManager.EXTRA_CALL_ID).orEmpty()
+        val channelId = intent.getStringExtra(ChatNotificationManager.EXTRA_CHANNEL_ID).orEmpty()
+        if (callId.isBlank() || channelId.isBlank()) {
+          Log.w("MainActivity", "La acción Responder no tiene callId o channelId")
+          return
+        }
+        if (!BuildConfig.APPLICATION_ID.endsWith(".test")) {
+          viewModel.answerIncomingCall(callId, channelId)
+          return
+        }
+        val isVideo = intent.getBooleanExtra(ChatNotificationManager.EXTRA_IS_VIDEO, false)
+        val missingPermissions = buildList {
+          if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.RECORD_AUDIO)
+          }
+          if (isVideo && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.CAMERA)
+          }
+        }
+        if (missingPermissions.isEmpty()) {
+          viewModel.answerIncomingCall(callId, channelId)
+        } else {
+          pendingCallAnswer = PendingCallAnswer(callId, channelId, isVideo)
+          callPermissionLauncher.launch(missingPermissions.toTypedArray())
+        }
       }
       ChatNotificationManager.ACTION_REJECT_CALL -> {
         viewModel.rejectIncomingCall(
