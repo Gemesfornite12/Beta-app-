@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -29,6 +31,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.util.UUID
+import kotlin.math.roundToInt
 
 /**
  * Foreground Service that handles media uploads in the background (Supabase + Firebase)
@@ -247,6 +253,41 @@ class BackgroundUploadService : Service() {
                     }
                 )
 
+                var videoThumbnailUrl: String? = null
+                if (detectedType == "video") {
+                    _uploadStateFlow.value = UploadState(
+                        isUploading = true,
+                        mediaType = detectedType,
+                        progress = 92,
+                        message = "Creando vista previa del video...",
+                        channelId = channelId
+                    )
+                    updateNotification(
+                        title = "Creando vista previa del video...",
+                        content = "Preparando miniatura del clip",
+                        progress = 92
+                    )
+                    try {
+                        videoThumbnailUrl = withTimeoutOrNull(20_000L) {
+                            val previewFile = createVideoPreviewThumbnail(context, uri)
+                                ?: return@withTimeoutOrNull null
+                            try {
+                                mediaStorageService.uploadMedia(
+                                    ownerUid = ownerUid,
+                                    localUri = Uri.fromFile(previewFile),
+                                    mediaType = "image",
+                                    mimeType = "image/jpeg",
+                                    originalName = "video-preview-${UUID.randomUUID()}.jpg"
+                                ).downloadUrl
+                            } finally {
+                                previewFile.delete()
+                            }
+                        }
+                    } catch (thumbnailError: Exception) {
+                        Log.w(TAG, "No se pudo crear la miniatura del video; se enviará el video sin ella", thumbnailError)
+                    }
+                }
+
                 // Subida completada en Supabase Storage -> Crear mensaje en Realtime Database
                 _uploadStateFlow.value = UploadState(
                     isUploading = true,
@@ -280,7 +321,11 @@ class BackgroundUploadService : Service() {
                     timestamp = now,
                     mediaUrl = uploaded.downloadUrl,
                     mediaType = detectedType,
-                    mediaThumbnail = if (detectedType == "image") uploaded.downloadUrl else null,
+                    mediaThumbnail = when (detectedType) {
+                        "image" -> uploaded.downloadUrl
+                        "video" -> videoThumbnailUrl
+                        else -> null
+                    },
                     isSyncedFirestore = false,
                     deliveryStatus = "enviando",
                     sentTimestamp = now
@@ -323,6 +368,53 @@ class BackgroundUploadService : Service() {
             } finally {
                 stopForegroundService()
             }
+        }
+    }
+
+    private fun createVideoPreviewThumbnail(context: Context, uri: Uri): File? {
+        val retriever = MediaMetadataRetriever()
+        var frame: Bitmap? = null
+        var scaledFrame: Bitmap? = null
+        var outputFile: File? = null
+        return try {
+            retriever.setDataSource(context, uri)
+            val extractedFrame = retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: return null
+            frame = extractedFrame
+
+            val maxDimension = 640
+            val scale = minOf(1f, maxDimension.toFloat() / maxOf(extractedFrame.width, extractedFrame.height))
+            val previewBitmap = if (scale < 1f) {
+                scaledFrame = Bitmap.createScaledBitmap(
+                    extractedFrame,
+                    (extractedFrame.width * scale).roundToInt().coerceAtLeast(1),
+                    (extractedFrame.height * scale).roundToInt().coerceAtLeast(1),
+                    true
+                )
+                scaledFrame!!
+            } else {
+                extractedFrame
+            }
+
+            val previewDirectory = File(context.cacheDir, "video_previews").apply { mkdirs() }
+            val previewFile = File(previewDirectory, "preview-${UUID.randomUUID()}.jpg")
+            outputFile = previewFile
+            val compressed = previewFile.outputStream().use { stream ->
+                previewBitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+            }
+            if (compressed && previewFile.length() > 0L) previewFile else {
+                previewFile.delete()
+                null
+            }
+        } catch (error: Exception) {
+            outputFile?.delete()
+            Log.w(TAG, "No se pudo extraer una miniatura del video", error)
+            null
+        } finally {
+            if (scaledFrame != null && scaledFrame !== frame) scaledFrame?.recycle()
+            frame?.recycle()
+            runCatching { retriever.release() }
         }
     }
 
@@ -489,6 +581,16 @@ class BackgroundUploadService : Service() {
     }
 
     override fun onDestroy() {
+        val activeUpload = _uploadStateFlow.value
+        if (activeUpload.isUploading) {
+            _uploadStateFlow.value = UploadState(
+                isUploading = false,
+                mediaType = activeUpload.mediaType,
+                isError = true,
+                message = "La subida se interrumpió. Vuelve a intentarlo.",
+                channelId = activeUpload.channelId
+            )
+        }
         serviceScope.cancel()
         releaseWakeLock()
         super.onDestroy()

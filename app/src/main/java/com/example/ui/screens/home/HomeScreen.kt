@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.TextFields
@@ -62,6 +63,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +85,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.model.AudioProject
 import com.example.data.model.DocumentFormat
 import com.example.data.model.DocumentItem
@@ -103,7 +106,8 @@ fun HomeScreen(
     onOpenChat: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenAiAssistant: () -> Unit,
-    onOpenMaps: () -> Unit
+    onOpenMaps: () -> Unit,
+    onOpenSocial: () -> Unit
 ) {
     val authState by viewModel.authUiState.collectAsState()
     val documents by viewModel.documents.collectAsState()
@@ -115,6 +119,11 @@ fun HomeScreen(
     var showCreateSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val context = LocalContext.current
+    LaunchedEffect(showCreateSheet) {
+        if (showCreateSheet) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "home_quick_create")
+        }
+    }
 
     // Permission launcher for storage (legacy devices)
     var pendingDownloadAction by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -396,7 +405,13 @@ fun HomeScreen(
                         modifier = Modifier.weight(1f),
                         onClick = onOpenMaps
                     )
-                    Spacer(modifier = Modifier.weight(1f))
+                    QuickToolItem(
+                        icon = Icons.Default.Share,
+                        label = "Social",
+                        bgColor = Color(0xFFE1306C),
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenSocial
+                    )
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -632,6 +647,12 @@ private fun DocumentItemCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val analyticsContext = LocalContext.current
+    LaunchedEffect(showMenu) {
+        if (showMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "home_document_actions")
+        }
+    }
 
     val dateFormatted = remember(doc.lastModified) {
         val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
@@ -769,6 +790,12 @@ private fun AudioProjectCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val analyticsContext = LocalContext.current
+    LaunchedEffect(showMenu) {
+        if (showMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "home_music_actions")
+        }
+    }
 
     Card(
         modifier = Modifier

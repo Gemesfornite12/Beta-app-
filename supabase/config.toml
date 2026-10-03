@@ -2,3 +2,15 @@
 # try to validate the Firebase token as a Supabase JWT.
 [functions.delete-chat-media]
 verify_jwt = false
+
+# This endpoint validates the Firebase ID token itself.
+[functions.notify-chat-message]
+verify_jwt = false
+
+# Social pushes also validate the Firebase ID token themselves.
+[functions.notify-social-event]
+verify_jwt = false
+
+# Private Social media endpoints verify Firebase ID tokens themselves.
+[functions.social-media-access]
+verify_jwt = false

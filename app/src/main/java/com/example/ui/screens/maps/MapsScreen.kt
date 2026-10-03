@@ -122,6 +122,7 @@ import com.example.data.api.OpenRouteServiceClient
 import com.example.data.api.OrsProfiles
 import com.example.data.api.OrsRouteSummary
 import com.example.data.api.OrsStep
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.maps.MapTileCacheManager
 import com.example.data.maps.PreCacheProgress
 import kotlinx.coroutines.Dispatchers
@@ -550,6 +551,22 @@ fun MapsScreen(onBack: () -> Unit) {
     var batterySaverMode by remember { mutableStateOf(BatterySaverMode.AUTO) }
     var batteryMenuOpen by remember { mutableStateOf(false) }
     var prepBatteryMenuOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(batteryMenuOpen) {
+        if (batteryMenuOpen) FirebaseAnalyticsManager.logMenuPopupOpened(context, "maps_battery")
+    }
+    LaunchedEffect(hudLanguageMenuOpen) {
+        if (hudLanguageMenuOpen) FirebaseAnalyticsManager.logMenuPopupOpened(context, "maps_hud_language")
+    }
+    LaunchedEffect(menu) {
+        if (menu) FirebaseAnalyticsManager.logMenuPopupOpened(context, "maps_route_profile")
+    }
+    LaunchedEffect(prepLanguageMenuOpen) {
+        if (prepLanguageMenuOpen) FirebaseAnalyticsManager.logMenuPopupOpened(context, "maps_route_language")
+    }
+    LaunchedEffect(prepBatteryMenuOpen) {
+        if (prepBatteryMenuOpen) FirebaseAnalyticsManager.logMenuPopupOpened(context, "maps_route_battery")
+    }
 
     var lastTtsSpokenTime by remember { mutableLongStateOf(0L) }
     var lastTtsSpokenInstruction by remember { mutableStateOf("") }
