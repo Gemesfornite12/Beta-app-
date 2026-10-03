@@ -62,11 +62,46 @@ jobs:
           print("Production Firebase package configuration verified")
           PY
 
+      - name: Detect original production signing alias
+        id: signing_key
+        env:
+          STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          EXPECTED_CERT_SHA256: ab501020da1132f58002396a1631189ee46ef29ea534e324ee032407ef9d37c5
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          expected = os.environ["EXPECTED_CERT_SHA256"].lower().replace(":", "")
+          result = subprocess.run(
+              ["keytool", "-list", "-v", "-keystore", os.environ["KEYSTORE_PATH"], "-storepass", os.environ["STORE_PASSWORD"]],
+              check=True, capture_output=True, text=True,
+          )
+          alias = None
+          found = None
+          for line in (result.stdout + "\n" + result.stderr).splitlines():
+              stripped = line.strip()
+              if stripped.lower().startswith("alias name:"):
+                  alias = stripped.split(":", 1)[1].strip()
+              elif alias and stripped.lower().startswith("sha256:"):
+                  digest = stripped.split(":", 1)[1].replace(":", "").strip().lower()
+                  if digest == expected:
+                      found = alias
+                      break
+                  alias = None
+          if not found:
+              raise SystemExit("Original production signing certificate was not found in the uploaded keystore")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"key_alias={found}\n")
+          print("Original production signing certificate and alias verified")
+          PY
+
       - name: Build signed production APK
         env:
           STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.PRODUCTION_KEY_PASSWORD }}
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          KEY_ALIAS: ${{ steps.signing_key.outputs.key_alias }}
         run: gradle assembleRelease --stacktrace
 
       - name: Verify original production signing certificate
