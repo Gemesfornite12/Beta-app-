@@ -69,6 +69,18 @@ jobs:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
         run: gradle assembleRelease --stacktrace
 
+      - name: Verify original production signing certificate
+        env:
+          EXPECTED_CERT_SHA256: ab501020da1132f58002396a1631189ee46ef29ea534e324ee032407ef9d37c5
+        run: |
+          set -eu
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -s "$APK"
+          DIGEST="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1 | awk -F': ' '/certificate SHA-256 digest:/ {print tolower($NF); exit}')"
+          test "$DIGEST" = "$EXPECTED_CERT_SHA256"
+          echo "Original production signing certificate verified"
+
       - name: Upload private review artifact (24h)
         uses: actions/upload-artifact@v4
         with:

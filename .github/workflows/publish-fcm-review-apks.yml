@@ -2,6 +2,11 @@ name: Publish FCM review APKs
 
 on:
   workflow_dispatch:
+    inputs:
+      production_run_id:
+        description: GitHub Actions run ID that produced the verified production APK
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -17,7 +22,7 @@ jobs:
           name: omnistudio-production-release-apk-review
           path: staging/production
           repository: Gemesfornite12/Beta-app-
-          run-id: 37095309832
+          run-id: ${{ inputs.production_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download .test APK artifact
