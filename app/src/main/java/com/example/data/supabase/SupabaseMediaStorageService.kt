@@ -156,7 +156,13 @@ class SupabaseMediaStorageService(context: Context) {
                 "createdAt" to FieldValue.serverTimestamp()
             )
             try {
-                firestore.collection("media").document(mediaId).set(mediaData).await()
+                val indexed = withTimeoutOrNull(8_000L) {
+                    firestore.collection("media").document(mediaId).set(mediaData).await()
+                    true
+                } ?: false
+                if (!indexed) {
+                    Log.w(TAG, "La indexación auxiliar en Firestore agotó 8 segundos; la subida continúa")
+                }
             } catch (metadataError: Exception) {
                 Log.w(TAG, "La subida a Supabase fue exitosa, pero no se pudo indexar el archivo en Firestore", metadataError)
             }

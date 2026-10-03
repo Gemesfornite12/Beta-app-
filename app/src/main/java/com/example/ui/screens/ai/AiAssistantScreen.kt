@@ -2,6 +2,7 @@ package com.example.ui.screens.ai
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -46,16 +48,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.Scope
 import com.google.firebase.auth.FirebaseAuth
 import com.example.data.api.GroqWorkspaceConnectors
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.model.ChatMessage
+import com.example.data.translation.MessageTranslationState
+import com.example.data.translation.SupportedLanguage
+import com.example.data.translation.TranslationSettings
 import com.example.ui.viewmodel.OmniViewModel
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import java.util.Locale
 
 private sealed interface PendingWorkspaceAuthorization {
     data class Connect(val connectorId: String) : PendingWorkspaceAuthorization
     data class Query(val text: String, val connectorIds: Set<String>) : PendingWorkspaceAuthorization
+    data class Action(val request: GoogleWorkspaceActionRequest, val fromChat: Boolean = false) : PendingWorkspaceAuthorization
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -63,6 +72,9 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+
+private fun saraTranslationKey(message: ChatMessage): String =
+    "sara:${message.channelId}:${message.senderEmail}:${message.timestamp}"
 
 private data class SaraEventOption(val value: String, val label: String)
 
@@ -104,14 +116,51 @@ fun AiAssistantScreen(
     val isSaraAdvancedLoading by viewModel.isSaraAdvancedLoading.collectAsState()
     var showSaraAdvanced by remember { mutableStateOf(false) }
     var showGroqConnectors by remember { mutableStateOf(false) }
+    var showGoogleWorkspaceActions by remember { mutableStateOf(false) }
+    var workspaceActionInitialRequest by remember { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
+    var workspaceActionPrompt by remember { mutableStateOf<String?>(null) }
+    var workspaceActionLoading by remember { mutableStateOf(false) }
+    var workspaceActionResult by remember { mutableStateOf<String?>(null) }
+    val workspaceActionScope = rememberCoroutineScope()
     var saraAdvancedInput by remember { mutableStateOf("") }
     var showSaraLibrary by remember { mutableStateOf(false) }
     var pendingKnowledge by remember { mutableStateOf<String?>(null) }
     val saraKnowledgeEntries by viewModel.saraKnowledgeEntries.collectAsState()
     val isSaraKnowledgeLoading by viewModel.isSaraKnowledgeLoading.collectAsState()
     val saraKnowledgeFeedback by viewModel.saraKnowledgeFeedback.collectAsState()
+    val translationStates by viewModel.translationStates.collectAsState()
+    val translationSettings by viewModel.translationSettings.collectAsState()
+    val supportedLanguages = viewModel.supportedLanguages
     val context = LocalContext.current
+    LaunchedEffect(showSaraAdvanced) {
+        if (showSaraAdvanced) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_advanced_tools")
+    }
+    LaunchedEffect(showSaraLibrary) {
+        if (showSaraLibrary) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_library")
+    }
+    LaunchedEffect(showGroqConnectors) {
+        if (showGroqConnectors) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_connectors")
+    }
+    LaunchedEffect(showGoogleWorkspaceActions) {
+        if (showGoogleWorkspaceActions) FirebaseAnalyticsManager.logMenuPopupOpened(context, "sara_workspace_actions")
+    }
     val firebaseUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+    var pendingChatWorkspaceAction by remember(firebaseUid) { mutableStateOf<GoogleWorkspaceActionRequest?>(null) }
+    var chatWorkspaceActionRunning by remember(firebaseUid) { mutableStateOf(false) }
+    var workspaceCommandTranslationLoading by remember(firebaseUid) { mutableStateOf(false) }
+    var workspaceChatMessages by remember(firebaseUid) { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    val displayedAiChatHistory = remember(aiChatHistory, workspaceChatMessages) {
+        (aiChatHistory + workspaceChatMessages).sortedBy { it.timestamp }
+    }
+    LaunchedEffect(displayedAiChatHistory, translationSettings.isAutoTranslateEnabled, translationSettings.targetLanguageCode) {
+        if (translationSettings.isAutoTranslateEnabled) {
+            displayedAiChatHistory.filter { it.channelId != "workspace_action" }.forEach { message ->
+                if (message.text.isNotBlank()) {
+                    viewModel.retryOrTranslateMessage(saraTranslationKey(message), message.text, force = false)
+                }
+            }
+        }
+    }
     val connectorPreferences = remember(context, firebaseUid) {
         context.getSharedPreferences("groq_workspace_connectors", Context.MODE_PRIVATE)
     }
@@ -124,9 +173,30 @@ fun AiAssistantScreen(
     var selectedConnectorIds by remember(firebaseUid) { mutableStateOf(emptySet<String>()) }
     var pendingWorkspaceAuthorization by remember { mutableStateOf<PendingWorkspaceAuthorization?>(null) }
 
+    fun addWorkspaceChatMessage(isUser: Boolean, text: String, channelId: String = "ai_assistant") {
+        if (text.isBlank()) return
+        workspaceChatMessages = workspaceChatMessages + ChatMessage(
+            channelId = channelId,
+            senderEmail = if (isUser) "workspace-user" else "sara",
+            senderName = if (isUser) "Tú" else "Sara",
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+    }
+
+    fun failChatWorkspaceAction(message: String) {
+        pendingChatWorkspaceAction = null
+        chatWorkspaceActionRunning = false
+        addWorkspaceChatMessage(isUser = false, text = message)
+    }
+
     fun finishWorkspaceAuthorization(action: PendingWorkspaceAuthorization, accessToken: String?) {
         if (accessToken.isNullOrBlank()) {
-            Toast.makeText(context, "Google no devolvió un permiso válido.", Toast.LENGTH_LONG).show()
+            if (action is PendingWorkspaceAuthorization.Action && action.fromChat) {
+                failChatWorkspaceAction("Google no devolvió el permiso; no se ejecutó la acción.")
+            } else {
+                Toast.makeText(context, "Google no devolvió un permiso válido.", Toast.LENGTH_LONG).show()
+            }
             return
         }
         when (action) {
@@ -139,6 +209,28 @@ fun AiAssistantScreen(
             is PendingWorkspaceAuthorization.Query -> {
                 val tokens = action.connectorIds.associateWith { accessToken }
                 viewModel.sendAiMessageWithGroqWorkspace(action.text, tokens)
+            }
+            is PendingWorkspaceAuthorization.Action -> {
+                if (action.fromChat) chatWorkspaceActionRunning = true else workspaceActionLoading = true
+                workspaceActionScope.launch {
+                    val resultText = runCatching {
+                        executeGoogleWorkspaceAction(context, action.request, accessToken)
+                    }.fold(
+                        onSuccess = { it },
+                        onFailure = { "No se completó la acción: ${it.message ?: "error de Google"}" }
+                    )
+                    val chatResult = if (resultText.startsWith("No se completó la acción")) resultText
+                        else "${action.request.type.title} completado.\n\n$resultText"
+                    if (action.fromChat) {
+                        workspaceActionResult = null
+                        addWorkspaceChatMessage(isUser = false, text = chatResult, channelId = "workspace_action")
+                        pendingChatWorkspaceAction = null
+                        chatWorkspaceActionRunning = false
+                    } else {
+                        workspaceActionResult = resultText
+                        workspaceActionLoading = false
+                    }
+                }
             }
         }
     }
@@ -153,9 +245,13 @@ fun AiAssistantScreen(
                 runCatching {
                     Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(result.data).accessToken
                 }.onSuccess { token -> finishWorkspaceAuthorization(pending, token) }
-                    .onFailure { Toast.makeText(context, "No se pudo completar la autorización de Google.", Toast.LENGTH_LONG).show() }
+                    .onFailure {
+                        if (pending is PendingWorkspaceAuthorization.Action && pending.fromChat) failChatWorkspaceAction("No se pudo completar el permiso de Google; no se ejecutó la acción.")
+                        else Toast.makeText(context, "No se pudo completar la autorización de Google.", Toast.LENGTH_LONG).show()
+                    }
             } else {
-                Toast.makeText(context, "No se concedieron los permisos seleccionados.", Toast.LENGTH_LONG).show()
+                if (pending is PendingWorkspaceAuthorization.Action && pending.fromChat) failChatWorkspaceAction("No concediste el permiso; no se ejecutó la acción.")
+                else Toast.makeText(context, "No se concedieron los permisos seleccionados.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -204,6 +300,101 @@ fun AiAssistantScreen(
             }
     }
 
+    fun requestGoogleWorkspaceAction(request: GoogleWorkspaceActionRequest, fromChat: Boolean = false) {
+        fun fail(message: String) {
+            if (fromChat) failChatWorkspaceAction(message)
+            else Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+        if (fromChat) {
+            chatWorkspaceActionRunning = true
+            workspaceActionResult = null
+        }
+        if (firebaseUid.isBlank()) {
+            fail("Inicia sesión en OmniStudio antes de usar Google Workspace.")
+            return
+        }
+        val activity = context.findActivity()
+        if (activity == null) {
+            fail("No se pudo abrir la autorización de Google.")
+            return
+        }
+        val pending = PendingWorkspaceAuthorization.Action(request, fromChat)
+        val authorizationRequest = AuthorizationRequest.builder()
+            .setRequestedScopes(listOf(Scope(request.type.scope)))
+            .build()
+        Identity.getAuthorizationClient(activity).authorize(authorizationRequest)
+            .addOnSuccessListener { authorizationResult ->
+                if (authorizationResult.hasResolution()) {
+                    val pendingIntent = authorizationResult.pendingIntent
+                    if (pendingIntent == null) {
+                        fail("Google no pudo iniciar la autorización.")
+                    } else {
+                        pendingWorkspaceAuthorization = pending
+                        runCatching {
+                            workspaceAuthorizationLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                        }.onFailure {
+                            pendingWorkspaceAuthorization = null
+                            fail("No se pudo abrir el permiso de Google.")
+                        }
+                    }
+                } else {
+                    finishWorkspaceAuthorization(pending, authorizationResult.accessToken)
+                }
+            }
+            .addOnFailureListener {
+                fail("No se pudo autorizar el permiso de Google.")
+            }
+    }
+
+    fun sendOrdinarySaraMessage(message: String) {
+        val saveCandidate = saraSaveCandidate(message)
+        if (selectedConnectorIds.isEmpty()) {
+            viewModel.sendAiMessage(message)
+        } else {
+            val ids = selectedConnectorIds.toSet()
+            requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
+        }
+        if (saveCandidate != null) pendingKnowledge = saveCandidate
+    }
+
+    fun dispatchWorkspaceChatCommand(originalText: String, command: ParsedWorkspaceCommand) {
+        addWorkspaceChatMessage(isUser = true, text = originalText)
+        if (GoogleWorkspaceCommandParser.canRunReadOnlyDirectly(command.request)) {
+            requestGoogleWorkspaceAction(command.request, fromChat = true)
+        } else {
+            pendingChatWorkspaceAction = command.request
+        }
+    }
+
+    fun handleSaraMessage(message: String) {
+        if (message.isNotBlank()) {
+            FirebaseAnalyticsManager.logUsageEvent(context, "sara_message_sent")
+        }
+        if (GoogleWorkspaceCommandParser.isReferenceOrBatch(message)) {
+            val notice = "No ejecuté nada. Esa lista es una guía, no una solicitud por lotes. Envía una sola acción por mensaje y reemplaza [ID], [consulta] o [nombre] por un dato real."
+            workspaceActionResult = null
+            addWorkspaceChatMessage(isUser = false, text = notice)
+            return
+        }
+        val directCommand = GoogleWorkspaceCommandParser.parse(message)
+        if (directCommand != null) {
+            dispatchWorkspaceChatCommand(message, directCommand)
+            return
+        }
+        if (GoogleWorkspaceCommandParser.shouldTranslatePotentialWorkspaceCommand(message)) {
+            workspaceCommandTranslationLoading = true
+            workspaceActionScope.launch {
+                val translated = runCatching { viewModel.translateWorkspaceCommandToSpanish(message) }.getOrNull()
+                workspaceCommandTranslationLoading = false
+                val translatedCommand = translated?.let { GoogleWorkspaceCommandParser.parse(it) }
+                if (translatedCommand != null) dispatchWorkspaceChatCommand(message, translatedCommand)
+                else sendOrdinarySaraMessage(message)
+            }
+            return
+        }
+        sendOrdinarySaraMessage(message)
+    }
+
     LaunchedEffect(Unit) { viewModel.refreshSaraKnowledge() }
     LaunchedEffect(saraKnowledgeFeedback) {
         saraKnowledgeFeedback?.let { message ->
@@ -230,8 +421,8 @@ fun AiAssistantScreen(
                     IconButton(onClick = { showGroqConnectors = true }) {
                         Icon(Icons.Default.Link, contentDescription = "Conectores de Google Workspace", tint = Color(0xFF94A3B8))
                     }
-                    if (aiChatHistory.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearAiChat() }) {
+                    if (aiChatHistory.isNotEmpty() || workspaceChatMessages.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearAiChat(); workspaceChatMessages = emptyList() }) {
                             Icon(Icons.Default.DeleteOutline, contentDescription = "Borrar conversación", tint = Color(0xFF94A3B8))
                         }
                     }
@@ -252,25 +443,81 @@ fun AiAssistantScreen(
         containerColor = Color(0xFF0F172A)
     ) { padding ->
         SaraChatView(
-            history = aiChatHistory,
+            history = displayedAiChatHistory,
             isLoading = isAiLoading,
             modifier = Modifier.fillMaxSize().padding(padding),
             connectorSelectionLabel = selectedConnectorIds.mapNotNull { GroqWorkspaceConnectors.find(it)?.label }.joinToString(", "),
-            onSend = { message ->
-                val saveCandidate = saraSaveCandidate(message)
-                if (selectedConnectorIds.isEmpty()) {
-                    viewModel.sendAiMessage(message)
-                } else {
-                    val ids = selectedConnectorIds.toSet()
-                    requestWorkspaceAuthorization(PendingWorkspaceAuthorization.Query(message, ids), ids)
-                }
-                if (saveCandidate != null) pendingKnowledge = saveCandidate
+            pendingWorkspaceAction = pendingChatWorkspaceAction,
+            isWorkspaceActionRunning = chatWorkspaceActionRunning,
+            isWorkspaceCommandTranslationLoading = workspaceCommandTranslationLoading,
+            translationStates = translationStates,
+            translationSettings = translationSettings,
+            supportedLanguages = supportedLanguages,
+            onSetAutoTranslate = { viewModel.setAutoTranslateEnabled(it) },
+            onSetTargetLanguage = { viewModel.setChatTargetLanguage(it) },
+            onToggleMessageTranslation = { viewModel.toggleShowOriginalMessage(it) },
+            onRetryMessageTranslation = { key, text -> viewModel.retryOrTranslateMessage(key, text, force = true) },
+            onConfirmWorkspaceAction = { request -> requestGoogleWorkspaceAction(request, fromChat = true) },
+            onCancelWorkspaceAction = {
+                pendingChatWorkspaceAction = null
+                addWorkspaceChatMessage(isUser = false, text = "Acción cancelada. No se realizó ningún cambio.")
             },
+            onSend = { message -> handleSaraMessage(message) },
             onSendAttachment = { uri, prompt ->
                 selectedConnectorIds = emptySet()
+                FirebaseAnalyticsManager.logUsageEvent(context, "sara_attachment_sent")
                 viewModel.sendAiAttachment(uri, prompt)
             },
             onRequestSave = { pendingKnowledge = it }
+        )
+    }
+
+    if (showGoogleWorkspaceActions) {
+        GoogleWorkspaceActionsDialog(
+            onDismiss = {
+                showGoogleWorkspaceActions = false
+                workspaceActionInitialRequest = null
+                workspaceActionPrompt = null
+            },
+            onRun = { request ->
+                workspaceActionPrompt?.let { addWorkspaceChatMessage(isUser = true, text = it) }
+                requestGoogleWorkspaceAction(request)
+                workspaceActionInitialRequest = null
+                workspaceActionPrompt = null
+            },
+            initialRequest = workspaceActionInitialRequest,
+            requestText = workspaceActionPrompt
+        )
+    }
+    if (workspaceActionLoading) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Google Workspace") },
+            text = { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Text("Ejecutando la acción confirmada…") } },
+            confirmButton = {}
+        )
+    }
+    workspaceActionResult?.let { resultText ->
+        AlertDialog(
+            onDismissRequest = { workspaceActionResult = null },
+            title = { Text("Google Workspace") },
+            text = {
+                Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(12.dp)) {
+                    SelectionContainer {
+                        Text(resultText, color = Color.White, modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(12.dp))
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Resultado de Google Workspace", resultText))
+                        Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
+                    }) { Text("Copiar") }
+                    TextButton(onClick = { workspaceActionResult = null }) { Text("Cerrar") }
+                }
+            }
         )
     }
 
@@ -283,6 +530,21 @@ fun AiAssistantScreen(
                     modifier = Modifier.heightIn(max = 430.dp).verticalScroll(rememberScrollState())
                 ) {
                     Text("Conecta solo los servicios que quieras. Marca los que Sara podrá consultar en tus próximos mensajes; todos son de solo lectura.")
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showGroqConnectors = false
+                            workspaceActionInitialRequest = null
+                            workspaceActionPrompt = null
+                            showGoogleWorkspaceActions = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Acciones avanzadas de Workspace")
+                    }
+                    Text("Gmail, Calendar y Drive: requieren permiso y confirmación para cada cambio.", fontSize = 11.sp, color = Color(0xFF64748B))
                     Spacer(Modifier.height(10.dp))
                     GroqWorkspaceConnectors.all.forEach { connector ->
                         val connected = connector.id in connectedConnectorIds
@@ -428,6 +690,18 @@ private fun SaraChatView(
     isLoading: Boolean,
     modifier: Modifier = Modifier,
     connectorSelectionLabel: String,
+    pendingWorkspaceAction: GoogleWorkspaceActionRequest?,
+    isWorkspaceActionRunning: Boolean,
+    isWorkspaceCommandTranslationLoading: Boolean,
+    translationStates: Map<String, MessageTranslationState>,
+    translationSettings: TranslationSettings,
+    supportedLanguages: List<SupportedLanguage>,
+    onSetAutoTranslate: (Boolean) -> Unit,
+    onSetTargetLanguage: (String) -> Unit,
+    onToggleMessageTranslation: (String) -> Unit,
+    onRetryMessageTranslation: (String, String) -> Unit,
+    onConfirmWorkspaceAction: (GoogleWorkspaceActionRequest) -> Unit,
+    onCancelWorkspaceAction: () -> Unit,
     onSend: (String) -> Unit,
     onSendAttachment: (Uri, String) -> Unit,
     onRequestSave: (String) -> Unit
@@ -436,7 +710,9 @@ private fun SaraChatView(
     var draft by remember { mutableStateOf("") }
     var attachmentUri by remember { mutableStateOf<Uri?>(null) }
     var attachmentName by remember { mutableStateOf<String?>(null) }
+    var showSaraLanguagePicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val isInputBlocked = isLoading || pendingWorkspaceAction != null || isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -491,8 +767,10 @@ private fun SaraChatView(
         }
     }
 
-    LaunchedEffect(history.size, isLoading) {
-        val lastIndex = history.lastIndex
+    LaunchedEffect(history.size, isLoading, pendingWorkspaceAction, isWorkspaceActionRunning, isWorkspaceCommandTranslationLoading) {
+        val extraItems = (if (pendingWorkspaceAction != null) 1 else 0) +
+            (if ((isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading) && pendingWorkspaceAction == null) 1 else 0)
+        val lastIndex = history.lastIndex + extraItems
         if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
     }
 
@@ -500,6 +778,41 @@ private fun SaraChatView(
         modifier = modifier.background(Color(0xFF0F172A)),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        val targetLanguage = supportedLanguages.firstOrNull { it.code == translationSettings.targetLanguageCode }
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            color = Color(0xFF1E293B),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🌐", fontSize = 16.sp, modifier = Modifier.padding(end = 7.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Auto-Traducción", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (translationSettings.isAutoTranslateEnabled) "Sara traduce al idioma elegido" else "Traducción pausada",
+                        color = Color(0xFF94A3B8), fontSize = 10.sp
+                    )
+                }
+                Surface(
+                    color = Color(0xFF334155),
+                    shape = RoundedCornerShape(7.dp),
+                    modifier = Modifier.clickable { showSaraLanguagePicker = true }
+                ) {
+                    Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${targetLanguage?.flagEmoji ?: "🌐"} ${targetLanguage?.code?.uppercase() ?: "ES"}", color = Color(0xFFE2E8F0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Cambiar idioma", tint = Color(0xFF94A3B8), modifier = Modifier.size(15.dp))
+                    }
+                }
+                Switch(
+                    checked = translationSettings.isAutoTranslateEnabled,
+                    onCheckedChange = onSetAutoTranslate,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+            }
+        }
         if (history.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
@@ -521,7 +834,10 @@ private fun SaraChatView(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(history) { message ->
-                    val isUser = message.senderName != "Sara"
+                    val isAssistant = message.senderEmail.equals("sara", ignoreCase = true) ||
+                        message.senderEmail.equals("asistente", ignoreCase = true) ||
+                        message.senderName.equals("asistente", ignoreCase = true)
+                    val isUser = !isAssistant
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
@@ -536,10 +852,16 @@ private fun SaraChatView(
                                     Text("Asistente", color = Color(0xFFA5B4FC), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.height(3.dp))
                                 }
-                                val linkedText = remember(message.text) {
+                                val translationKey = saraTranslationKey(message)
+                                val translationState = if (message.channelId == "workspace_action") null else translationStates[translationKey]
+                                val hasCurrentTranslation = !translationState?.translatedText.isNullOrBlank() &&
+                                    translationState?.targetLanguageCode.equals(translationSettings.targetLanguageCode, ignoreCase = true)
+                                val showingTranslation = hasCurrentTranslation && translationState?.showOriginal != true
+                                val displayText = if (showingTranslation) translationState?.translatedText.orEmpty() else message.text
+                                val linkedText = remember(displayText) {
                                     buildAnnotatedString {
-                                        append(message.text)
-                                        Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).findAll(message.text).forEach { match ->
+                                        append(displayText)
+                                        Regex("https?://[^\\s<>]+", RegexOption.IGNORE_CASE).findAll(displayText).forEach { match ->
                                             val rawUrl = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
                                             val end = match.range.first + rawUrl.length
                                             if (rawUrl.isNotBlank() && end > match.range.first) {
@@ -562,7 +884,35 @@ private fun SaraChatView(
                                         }
                                     }
                                 )
-                                if (isUser && message.text.isNotBlank()) {
+                                if (message.channelId != "workspace_action" && message.text.isNotBlank()) {
+                                    when {
+                                        translationState?.isDownloadingModel == true -> Text("Descargando idioma para traducir…", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                        translationState?.isTranslating == true -> Text("Traduciendo en este dispositivo…", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                        translationState?.errorMessage != null -> TextButton(
+                                            onClick = { onRetryMessageTranslation(translationKey, message.text) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text("No se pudo traducir · Reintentar", fontSize = 10.sp) }
+                                        hasCurrentTranslation -> TextButton(
+                                            onClick = { onToggleMessageTranslation(translationKey) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text(if (showingTranslation) "Ver original" else "Ver traducido", fontSize = 10.sp) }
+                                        translationState?.detectedLanguageCode?.equals(translationSettings.targetLanguageCode, ignoreCase = true) != true -> TextButton(
+                                            onClick = { onRetryMessageTranslation(translationKey, message.text) },
+                                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                        ) { Text("Traducir al ${translationSettings.targetLanguageCode.uppercase()}", fontSize = 10.sp) }
+                                    }
+                                }
+                                if (isAssistant && message.text.isNotBlank()) {
+                                    TextButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Respuesta de Sara", displayText))
+                                            Toast.makeText(context, "Texto copiado", Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                                    ) { Text("Copiar", fontSize = 11.sp) }
+                                }
+                                if (isUser && message.text.isNotBlank() && message.senderEmail != "workspace-user") {
                                     TextButton(
                                         onClick = { onRequestSave(message.text) },
                                         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
@@ -572,6 +922,30 @@ private fun SaraChatView(
                                         Text("Guardar para aprendizaje", fontSize = 11.sp)
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+                pendingWorkspaceAction?.let { request ->
+                    item(key = "workspace-action-card") {
+                        WorkspaceActionChatCard(
+                            request = request,
+                            isRunning = isWorkspaceActionRunning,
+                            onConfirm = onConfirmWorkspaceAction,
+                            onCancel = onCancelWorkspaceAction
+                        )
+                    }
+                }
+                if ((isWorkspaceActionRunning || isWorkspaceCommandTranslationLoading) && pendingWorkspaceAction == null) {
+                    item(key = "workspace-read-status") {
+                        Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(18.dp)) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFA5B4FC))
+                                Spacer(Modifier.width(9.dp))
+                                Text(
+                                    if (isWorkspaceCommandTranslationLoading) "Interpretando la solicitud en otro idioma…" else "Consultando Google Workspace…",
+                                    color = Color(0xFFCBD5E1), fontSize = 13.sp
+                                )
                             }
                         }
                     }
@@ -602,7 +976,7 @@ private fun SaraChatView(
                 ) {
                     Icon(Icons.Default.AttachFile, contentDescription = null, tint = Color(0xFFA5B4FC), modifier = Modifier.size(18.dp))
                     Text(attachmentName ?: "Archivo adjunto", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                    IconButton(onClick = { attachmentUri = null; attachmentName = null }, enabled = !isLoading) {
+                    IconButton(onClick = { attachmentUri = null; attachmentName = null }, enabled = !isInputBlocked) {
                         Icon(Icons.Default.Close, contentDescription = "Quitar adjunto", tint = Color(0xFFCBD5E1), modifier = Modifier.size(18.dp))
                     }
                 }
@@ -632,7 +1006,7 @@ private fun SaraChatView(
         ) {
             IconButton(
                 onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 modifier = Modifier.size(42.dp)
             ) {
                 Icon(Icons.Default.AttachFile, contentDescription = "Adjuntar documento, audio o video", tint = Color(0xFFA5B4FC))
@@ -643,7 +1017,7 @@ private fun SaraChatView(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Escribe o busca aquí…", color = Color(0xFF94A3B8)) },
                 maxLines = 4,
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
@@ -656,7 +1030,7 @@ private fun SaraChatView(
             )
             IconButton(
                 onClick = { micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO) },
-                enabled = !isLoading,
+                enabled = !isInputBlocked,
                 modifier = Modifier.size(42.dp)
             ) {
                 Icon(Icons.Default.Mic, contentDescription = "Dictar a Sara", tint = Color(0xFFA5B4FC))
@@ -665,22 +1039,44 @@ private fun SaraChatView(
                 onClick = {
                     val message = draft.trim()
                     val uri = attachmentUri
-                    if (uri != null && !isLoading) {
+                    if (uri != null && !isInputBlocked) {
                         onSendAttachment(uri, message)
                         attachmentUri = null
                         attachmentName = null
                         draft = ""
-                    } else if (message.isNotEmpty() && !isLoading) {
+                    } else if (message.isNotEmpty() && !isInputBlocked) {
                         onSend(message)
                         draft = ""
                     }
                 },
-                enabled = (draft.isNotBlank() || attachmentUri != null) && !isLoading,
+                enabled = (draft.isNotBlank() || attachmentUri != null) && !isInputBlocked,
                 modifier = Modifier.size(44.dp).background(Color(0xFF6366F1), CircleShape)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar a Sara", tint = Color.White)
             }
         }
+    }
+    if (showSaraLanguagePicker) {
+        AlertDialog(
+            onDismissRequest = { showSaraLanguagePicker = false },
+            title = { Text("Idioma de traducción") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    supportedLanguages.forEach { language ->
+                        TextButton(
+                            onClick = {
+                                onSetTargetLanguage(language.code)
+                                showSaraLanguagePicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("${language.flagEmoji}  ${language.nativeName} (${language.code.uppercase()})", modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showSaraLanguagePicker = false }) { Text("Cerrar") } }
+        )
     }
 }
 
@@ -732,8 +1128,14 @@ private fun SaraAdvancedDialog(
     onAppendEvent: (JsonObject) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val analyticsContext = LocalContext.current
     var selectedEvent by remember { mutableStateOf("user") }
     var eventMenuExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(eventMenuExpanded) {
+        if (eventMenuExpanded) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(analyticsContext, "sara_event_type")
+        }
+    }
     var eventText by remember { mutableStateOf("") }
     var eventInputChannel by remember { mutableStateOf("rest") }
     var eventMessageId by remember { mutableStateOf("") }

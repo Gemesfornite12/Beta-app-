@@ -135,6 +135,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.firebase.ChannelInfo
+import com.example.data.firebase.FirebaseAnalyticsManager
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
 import com.example.data.model.ChannelNotificationPreference
@@ -175,7 +176,6 @@ fun ChatScreen(
     val typingUsers by viewModel.typingUsers.collectAsState()
     val onlineUsers by viewModel.onlineUsers.collectAsState()
     val playingAudioId by viewModel.chatPlayingAudioId.collectAsState()
-    val activeCall by viewModel.activeCall.collectAsState()
     val channels by viewModel.availableChannels.collectAsState()
     val archivedChannelIds by viewModel.archivedChannelIds.collectAsState()
     val groupDeletionCountdowns by viewModel.groupDeletionCountdownSeconds.collectAsState()
@@ -205,7 +205,7 @@ fun ChatScreen(
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
     // Estados para adjuntos pendientes (pre-envío) que el usuario puede revisar o borrar
-    var pendingMediaType by remember { mutableStateOf<String?>(null) } // "image", "video", "gif"
+    var pendingMediaType by remember { mutableStateOf<String?>(null) } // "image", "video", "audio", "document", "gif"
     var pendingMediaUrl by remember { mutableStateOf<String?>(null) }
     var pendingMediaTitle by remember { mutableStateOf<String?>(null) }
     var pendingDocItem by remember { mutableStateOf<com.example.data.model.DocumentItem?>(null) }
@@ -217,6 +217,11 @@ fun ChatScreen(
     var currentMatchPointer by remember { mutableStateOf(0) }
     var showArchivedFilter by remember { mutableStateOf(false) }
     var showTopOverflowMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showTopOverflowMenu) {
+        if (showTopOverflowMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_overflow")
+        }
+    }
 
     // Diálogos de grupos y chats privados
     var showMyChatsSheet by remember { mutableStateOf(false) }
@@ -230,24 +235,71 @@ fun ChatScreen(
     var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
 
+    LaunchedEffect(showMyChatsSheet) {
+        if (showMyChatsSheet) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_my_chats")
+    }
+    LaunchedEffect(showCreateGroupDialog) {
+        if (showCreateGroupDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_create_group")
+    }
+    LaunchedEffect(showStartDirectChatDialog) {
+        if (showStartDirectChatDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_start_direct")
+    }
+    LaunchedEffect(showGroupManageDialog) {
+        if (showGroupManageDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_group_manage")
+    }
+    LaunchedEffect(showUserInfoDialog) {
+        if (showUserInfoDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_user_info")
+    }
+    LaunchedEffect(showChatNotificationPrefsDialog) {
+        if (showChatNotificationPrefsDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_notification_settings")
+    }
+    LaunchedEffect(showAttachDialog) {
+        if (showAttachDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_attachment_picker")
+    }
+    LaunchedEffect(messageForReactionMenu != null) {
+        if (messageForReactionMenu != null) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_reaction_picker")
+    }
+
     // Estado del Sistema Multilingüe de Traducción Automática On-Device
     val translationStates by viewModel.translationStates.collectAsState()
     val translationSettings by viewModel.translationSettings.collectAsState()
     val supportedLanguages = viewModel.supportedLanguages
     var showLanguagePickerDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(showLanguagePickerDialog) {
+        if (showLanguagePickerDialog) FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_language_picker")
+    }
     var showOutgoingLangMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showOutgoingLangMenu) {
+        if (showOutgoingLangMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_language")
+        }
+    }
 
     val activeChannelInfo = channels.firstOrNull { it.id == currentChannel }
     val isCurrentArchived = archivedChannelIds.contains(currentChannel)
     val currentUserEmail = authState.currentUser?.email ?: "gonzalez24029@gmail.com"
+    val callPeerMember = activeChannelInfo?.members?.firstOrNull { !it.email.equals(currentUserEmail, ignoreCase = true) }
+    val callPeerEmail = callPeerMember?.email ?: "sofia.m@cloud.io"
+    val callPeerName = activeChannelInfo?.name?.takeIf { currentChannel.startsWith("direct") } ?: "Compañero"
+    val callPeerAvatarUrl = callPeerMember?.avatarUrl.orEmpty()
+
+    LaunchedEffect(currentChannel) {
+        if (currentChannel.startsWith("direct")) {
+            FirebaseAnalyticsManager.logUsageEvent(context, "private_chat_opened")
+        }
+    }
 
     // Launchers para solicitar permisos en tiempo de ejecución para Llamadas
     val voiceCallPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            val peer = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVoiceCall(peerName = peer)
+            viewModel.startVoiceCall(
+                peerName = callPeerName,
+                peerEmail = callPeerEmail,
+                peerAvatarUrl = callPeerAvatarUrl,
+                channelId = currentChannel
+            )
         } else {
             showPermissionDeniedDialog = "Se requiere permiso de Micrófono para realizar llamadas de voz."
         }
@@ -259,8 +311,12 @@ fun ChatScreen(
         val micGranted = perms[Manifest.permission.RECORD_AUDIO] == true
         val camGranted = perms[Manifest.permission.CAMERA] == true
         if (micGranted && camGranted) {
-            val peer = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVideoCall(peerName = peer)
+            viewModel.startVideoCall(
+                peerName = callPeerName,
+                peerEmail = callPeerEmail,
+                peerAvatarUrl = callPeerAvatarUrl,
+                channelId = currentChannel
+            )
         } else {
             showPermissionDeniedDialog = "Se requieren permisos de Micrófono y Cámara para realizar videollamadas."
         }
@@ -269,10 +325,12 @@ fun ChatScreen(
     val launchVoiceCall = {
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (hasMic) {
-            val peerMember = activeChannelInfo?.members?.firstOrNull { it.email != currentUserEmail }
-            val pEmail = if (currentChannel.startsWith("direct")) peerMember?.email ?: "sofia.m@cloud.io" else "broadcast"
-            val pName = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVoiceCall(peerName = pName, peerEmail = pEmail)
+            viewModel.startVoiceCall(
+                peerName = callPeerName,
+                peerEmail = callPeerEmail,
+                peerAvatarUrl = callPeerAvatarUrl,
+                channelId = currentChannel
+            )
         } else {
             voiceCallPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -282,28 +340,15 @@ fun ChatScreen(
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val hasCam = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (hasMic && hasCam) {
-            val peerMember = activeChannelInfo?.members?.firstOrNull { it.email != currentUserEmail }
-            val pEmail = if (currentChannel.startsWith("direct")) peerMember?.email ?: "sofia.m@cloud.io" else "broadcast"
-            val pName = if (currentChannel.startsWith("direct")) activeChannelInfo?.name ?: "Compañero" else "Equipo ${activeChannelInfo?.name ?: "General"}"
-            viewModel.startVideoCall(peerName = pName, peerEmail = pEmail)
+            viewModel.startVideoCall(
+                peerName = callPeerName,
+                peerEmail = callPeerEmail,
+                peerAvatarUrl = callPeerAvatarUrl,
+                channelId = currentChannel
+            )
         } else {
             videoCallPermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
         }
-    }
-
-    // Si hay una llamada activa de voz o video, mostrar pantalla de llamada inmersiva
-    if (activeCall != null) {
-        CallSessionScreen(
-            callSession = activeCall!!,
-            onAnswerCall = { viewModel.answerIncomingCall() },
-            onRejectCall = { viewModel.rejectIncomingCall() },
-            onToggleMute = { viewModel.toggleCallMute() },
-            onToggleCamera = { viewModel.toggleCallCamera() },
-            onToggleSpeaker = { viewModel.toggleCallSpeaker() },
-            onSwitchCamera = { viewModel.switchCallCamera() },
-            onEndCall = { viewModel.endActiveCall() }
-        )
-        return
     }
 
     // Filtrar estrictamente los mensajes que pertenecen al canal actualmente activo
@@ -1321,6 +1366,22 @@ fun ChatScreen(
                                             )
                                         }
                                     }
+                                    pendingMediaType == "audio" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = "Audio seleccionado",
+                                            tint = Color(0xFFA855F7),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    pendingMediaType == "document" -> {
+                                        Icon(
+                                            imageVector = Icons.Default.AttachFile,
+                                            contentDescription = "Archivo seleccionado",
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                     pendingDocItem != null -> {
                                         Icon(
                                             imageVector = Icons.Default.Description,
@@ -1349,6 +1410,8 @@ fun ChatScreen(
                                     pendingMediaType == "video" -> "🎥 Video listo para enviar"
                                     pendingMediaType == "gif" -> "🎭 GIF listo para enviar"
                                     pendingMediaType == "youtube" -> "▶️ Video de YouTube listo para enviar"
+                                    pendingMediaType == "audio" -> "🎵 Música / audio listo para enviar"
+                                    pendingMediaType == "document" -> "📁 Archivo listo para enviar"
                                     pendingDocItem != null -> "📁 Documento listo para enviar"
                                     pendingAudioProject != null -> "🎵 Audio del estudio listo para enviar"
                                     else -> "Adjunto listo"
@@ -1534,7 +1597,7 @@ fun ChatScreen(
                                                 viewModel.sendMediaMessage(
                                                     mediaType = pendingMediaType!!,
                                                     mediaUrl = selectedMediaUrl,
-                                                    caption = chatInput
+                                                    caption = chatInput.ifBlank { pendingMediaTitle.orEmpty() }
                                                 )
                                                 viewModel.onChatInputChanged("")
                                                 submitted = true
@@ -1555,6 +1618,9 @@ fun ChatScreen(
                                     }
                                     // Do not discard a selected attachment if its URI is missing.
                                     if (submitted) {
+                                        if (currentChannel.startsWith("direct")) {
+                                            FirebaseAnalyticsManager.logUsageEvent(context, "private_chat_message_sent")
+                                        }
                                         pendingMediaType = null
                                         pendingMediaUrl = null
                                         pendingMediaTitle = null
@@ -1646,6 +1712,8 @@ fun ChatScreen(
 
                     MessageBubble(
                         message = msg,
+                        senderAvatarUrl = allUsers.firstOrNull { it.email.equals(msg.senderEmail, ignoreCase = true) }?.avatarUrl?.takeIf(String::isNotBlank)
+                            ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(msg.senderEmail, ignoreCase = true) }?.avatarUrl.orEmpty(),
                         isMe = isMe,
                         isPlayingAudio = playingAudioId != null && playingAudioId == msg.attachedAudioId,
                         isSearchMatch = isMatch,
@@ -1672,14 +1740,30 @@ fun ChatScreen(
                         },
                         onStartVoiceCall = { peerName ->
                             val pEmail = msg.senderEmail
-                            viewModel.startVoiceCall(peerName = peerName, peerEmail = pEmail)
+                            val avatar = allUsers.firstOrNull { it.email.equals(pEmail, ignoreCase = true) }?.avatarUrl
+                                ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(pEmail, ignoreCase = true) }?.avatarUrl.orEmpty()
+                            viewModel.startVoiceCall(peerName = peerName, peerEmail = pEmail, peerAvatarUrl = avatar)
                         },
                         onStartVideoCall = { peerName ->
                             val pEmail = msg.senderEmail
-                            viewModel.startVideoCall(peerName = peerName, peerEmail = pEmail)
+                            val avatar = allUsers.firstOrNull { it.email.equals(pEmail, ignoreCase = true) }?.avatarUrl
+                                ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(pEmail, ignoreCase = true) }?.avatarUrl.orEmpty()
+                            viewModel.startVideoCall(peerName = peerName, peerEmail = pEmail, peerAvatarUrl = avatar)
                         },
                         onStartDirectChat = { peerEmail, peerName ->
-                            viewModel.startDirectChat(peerEmail, peerName)
+                            val peerAvatar = allUsers.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }?.avatarUrl?.takeIf(String::isNotBlank)
+                                ?: activeChannelInfo?.members?.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }?.avatarUrl.orEmpty()
+                            viewModel.startDirectChat(peerEmail, peerName, peerAvatar)
+                        },
+                        onViewProfile = { peerEmail, peerName ->
+                            val registeredUser = allUsers.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }
+                            val channelMember = activeChannelInfo?.members?.firstOrNull { it.email.equals(peerEmail, ignoreCase = true) }
+                            selectedUserForInfo = GroupMember(
+                                email = peerEmail,
+                                name = registeredUser?.displayName?.takeIf(String::isNotBlank) ?: channelMember?.name?.takeIf(String::isNotBlank) ?: peerName,
+                                avatarUrl = registeredUser?.avatarUrl?.takeIf(String::isNotBlank) ?: channelMember?.avatarUrl.orEmpty()
+                            )
+                            showUserInfoDialog = true
                         },
                         onOpenYouTubeOverlay = { vId, vTitle ->
                             activeOverlayVideo = Pair(vId, vTitle)
@@ -1942,8 +2026,8 @@ fun ChatScreen(
             viewModel = viewModel,
             currentUserEmail = currentUserEmail,
             onDismiss = { showStartDirectChatDialog = false },
-            onSelectUser = { email, name ->
-                viewModel.startDirectChat(peerEmail = email, peerName = name)
+            onSelectUser = { email, name, avatar ->
+                viewModel.startDirectChat(peerEmail = email, peerName = name, peerAvatar = avatar)
                 showStartDirectChatDialog = false
             }
         )
@@ -1998,17 +2082,17 @@ fun ChatScreen(
                 selectedUserForInfo = null
             },
             onStartChat = {
-                viewModel.startDirectChat(it.email, it.name)
+                viewModel.startDirectChat(it.email, it.name, it.avatarUrl)
                 showUserInfoDialog = false
                 selectedUserForInfo = null
             },
             onVoiceCall = {
-                viewModel.startVoiceCall(peerName = it.name, peerEmail = it.email)
+                viewModel.startVoiceCall(peerName = it.name, peerEmail = it.email, peerAvatarUrl = it.avatarUrl)
                 showUserInfoDialog = false
                 selectedUserForInfo = null
             },
             onVideoCall = {
-                viewModel.startVideoCall(peerName = it.name, peerEmail = it.email)
+                viewModel.startVideoCall(peerName = it.name, peerEmail = it.email, peerAvatarUrl = it.avatarUrl)
                 showUserInfoDialog = false
                 selectedUserForInfo = null
             }
@@ -2249,6 +2333,7 @@ fun ChatScreen(
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
+    senderAvatarUrl: String = "",
     isMe: Boolean,
     isPlayingAudio: Boolean,
     isSearchMatch: Boolean = false,
@@ -2267,6 +2352,7 @@ private fun MessageBubble(
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit,
     onStartDirectChat: (peerEmail: String, peerName: String) -> Unit,
+    onViewProfile: (peerEmail: String, peerName: String) -> Unit,
     onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> },
     onOpenStandardVideo: (videoUrl: String, title: String) -> Unit = { _, _ -> }
 ) {
@@ -2305,6 +2391,11 @@ private fun MessageBubble(
     }
 
     var showUserMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(showUserMenu) {
+        if (showUserMenu) {
+            FirebaseAnalyticsManager.logMenuPopupOpened(context, "chat_user_actions")
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2329,6 +2420,14 @@ private fun MessageBubble(
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
+                        if (senderAvatarUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = senderAvatarUrl,
+                                contentDescription = "Foto de ${message.senderName}",
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
 
@@ -2342,7 +2441,7 @@ private fun MessageBubble(
                         leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp)) },
                         onClick = {
                             showUserMenu = false
-                            onStartDirectChat(message.senderEmail, message.senderName)
+                            onViewProfile(message.senderEmail, message.senderName)
                         }
                     )
                     DropdownMenuItem(
@@ -2722,6 +2821,50 @@ private fun MessageBubble(
                                 .clip(RoundedCornerShape(12.dp))
                                 .testTag("msg_video_${message.id}")
                         )
+                    }
+
+                    // Reproductor/abridor de archivos de música subidos al chat.
+                    if (message.mediaType == "audio" && !message.mediaUrl.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        setDataAndType(android.net.Uri.parse(message.mediaUrl.orEmpty()), "audio/*")
+                                    }
+                                    runCatching { context.startActivity(intent) }
+                                }
+                                .border(1.dp, Color(0xFFA855F7).copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .testTag("msg_audio_${message.id}")
+                        ) {
+                            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color(0xFF9333EA),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = message.text.takeIf { it.isNotBlank() } ?: "Audio adjunto",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text("Toca para reproducir o abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
+                                }
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir audio", tint = Color(0xFFA855F7))
+                            }
+                        }
                     }
 
                     // Renderizado de GIFs y Stickers animados

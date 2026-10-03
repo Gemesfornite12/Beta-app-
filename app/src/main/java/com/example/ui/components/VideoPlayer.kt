@@ -137,8 +137,7 @@ fun VideoPlayer(
         } else if (videoId != null) {
             "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
         } else {
-            // Elegant placeholder for normal video files
-            "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?w=800&q=80"
+            null
         }
     }
 
@@ -202,12 +201,34 @@ fun VideoPlayer(
                     .aspectRatio(16f / 9f)
                     .background(Color.Black)
             ) {
-                AsyncImage(
-                    model = resolvedThumbnail,
-                    contentDescription = title ?: "Miniatura de video",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (!resolvedThumbnail.isNullOrBlank()) {
+                    AsyncImage(
+                        model = resolvedThumbnail,
+                        contentDescription = title ?: "Miniatura de video",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0F172A)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(42.dp)
+                        )
+                        Text(
+                            text = "Miniatura no disponible",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
 
                 // Dark gradient overlay
                 Box(
