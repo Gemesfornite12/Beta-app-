@@ -1,0 +1,42 @@
+name: Compare OmniStudio APK installation metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Java and Android tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install APK inspection tools
+        run: sdkmanager --install 'build-tools;36.0.0'
+      - name: Download current and prior principal APKs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p apks/current apks/prior-20261001 apks/prior-20260930 apks/prior-20261001-early
+          gh release download omnistudio-fcm-review-20261002 --repo "$GITHUB_REPOSITORY" --pattern 'OmniStudio-main.apk' --dir apks/current
+          gh release download Omnistudiofixcallschatsmenus --repo "$GITHUB_REPOSITORY" --pattern 'omnistudio.apk' --dir apks/prior-20261001
+          gh release download zapia-workspace-chat-test-20260930 --repo "$GITHUB_REPOSITORY" --pattern 'omnistudio.apk' --dir apks/prior-20260930
+          gh release download Omnistudiobetafixchat --repo "$GITHUB_REPOSITORY" --pattern 'omnistudio.apk' --dir apks/prior-20261001-early
+      - name: Compare package, version and signing certificates
+        run: |
+          set -eu
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          test -x "$AAPT"
+          for file in apks/current/OmniStudio-main.apk apks/prior-20261001/omnistudio.apk apks/prior-20260930/omnistudio.apk apks/prior-20261001-early/omnistudio.apk; do
+            echo "FILE: $file"
+            "$AAPT" dump badging "$file" | head -n 1
+            "$APKSIGNER" verify --print-certs "$file" | grep -E 'Signer #1 certificate SHA-256 digest:'
+          done
