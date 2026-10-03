@@ -53,6 +53,7 @@ class SupabaseMediaStorageService(context: Context) {
         private const val SUPABASE_URL = BuildConfig.SUPABASE_PROJECT_URL
         private const val SUPABASE_PUBLISHABLE_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
         private const val DELETE_FUNCTION = "functions/v1/delete-chat-media"
+        private const val UPLOAD_ACCESS_FUNCTION = "functions/v1/chat-media-access"
 
         /**
          * Returns a raw object path only for this app's public chat-media URL.
@@ -99,7 +100,7 @@ class SupabaseMediaStorageService(context: Context) {
             "Tipo multimedia no válido"
         }
 
-        val normalizedMimeType = mimeType.trim().lowercase()
+        val normalizedMimeType = mimeType.substringBefore(";").trim().lowercase()
         require(normalizedMimeType.isNotBlank()) { "El archivo no tiene MIME type" }
         if (mediaType == "video") {
             require(normalizedMimeType.startsWith("video/")) {
@@ -117,8 +118,11 @@ class SupabaseMediaStorageService(context: Context) {
                 "El archivo supera el límite de 50 MB de Supabase Storage"
             }
 
+            // A fresh, short-lived signed upload permission is minted by the server for every
+            // original and thumbnail file. The client cannot select a UID or storage path.
+            val permission = requestUploadPermission(ownerUid, mediaType, normalizedMimeType, source.sizeBytes)
             val mediaId = UUID.randomUUID().toString()
-            val storagePath = "users/$ownerUid/media/$mediaId/${source.fileName}"
+            val storagePath = permission.storagePath
             uploadedPath = storagePath
             val encodedPath = encodeStoragePath(storagePath)
             val publicUrl = "$SUPABASE_URL/storage/v1/object/public/$BUCKET/$encodedPath"
@@ -128,10 +132,11 @@ class SupabaseMediaStorageService(context: Context) {
                 onProgress = onProgress
             )
             val request = Request.Builder()
-                .url("$SUPABASE_URL/storage/v1/object/$BUCKET/$encodedPath")
-                // Upload uses anon publishable-key access; deleteMediaObject uses Firebase bearer auth.
+                .url(permission.signedUrl)
+                // This stable public project key is an apikey, not an expiring user/session token.
+                // Firebase identity was validated by the Edge Function; the URL grants one upload.
                 .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-                .post(requestBody)
+                .put(requestBody)
                 .build()
 
             executeUpload(request, storagePath)
@@ -201,6 +206,46 @@ class SupabaseMediaStorageService(context: Context) {
         }
         deleteObject(ownerUid, storagePath)
         firestore.collection("media").document(mediaId).delete().await()
+    }
+
+    /** Requests one new upload URL after the current Firebase ID token is refreshed by Firebase Auth. */
+    private suspend fun requestUploadPermission(
+        ownerUid: String,
+        mediaType: String,
+        mimeType: String,
+        sizeBytes: Long
+    ): SupabaseUploadPermission = withContext(Dispatchers.IO) {
+        val user = auth.currentUser
+        require(user?.uid == ownerUid) { "La sesión de Firebase no coincide con el propietario del archivo" }
+        val firebaseToken = user.getIdToken(false).await().token
+            ?: throw IllegalStateException("No se pudo verificar la sesión de Firebase")
+        val body = JSONObject()
+            .put("mediaType", mediaType)
+            .put("mimeType", mimeType)
+            .put("sizeBytes", sizeBytes)
+            .toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+        val request = Request.Builder()
+            .url("${SUPABASE_URL.trimEnd('/')}/$UPLOAD_ACCESS_FUNCTION")
+            .header("apikey", SUPABASE_PUBLISHABLE_KEY)
+            .header("Authorization", "Bearer $firebaseToken")
+            .header("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val detail = runCatching { JSONObject(responseBody).optString("error") }.getOrNull().orEmpty()
+                val reason = when (response.code) {
+                    401 -> "La sesión de Firebase caducó o no se pudo validar. Vuelve a iniciar sesión."
+                    413 -> "El archivo supera el límite de 50 MiB."
+                    else -> detail.ifBlank { "No se pudo obtener el permiso seguro para subir el archivo." }
+                }
+                throw IOException("$reason (HTTP ${response.code})")
+            }
+            parseSupabaseUploadPermission(responseBody, ownerUid, mimeType, SUPABASE_URL)
+        }
     }
 
     /**

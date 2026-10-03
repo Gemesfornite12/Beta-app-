@@ -78,8 +78,23 @@ jobs:
       - name: Build isolated .test APK
         run: gradle assembleDebug --stacktrace
 
+      - name: Verify .test APK package and registered signer
+        run: |
+          set -eu
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          PACKAGE="$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+          test "$PACKAGE" = "com.aistudio.omnistudio.wkspea.test"
+          APK_SHA256="$("$APKSIGNER" verify --print-certs "$APK" 2>&1 | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($NF); exit}')"
+          KEY_SHA256="$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA256:/ {gsub(":", "", $2); print tolower($2); exit}')"
+          test -n "$APK_SHA256"
+          test -n "$KEY_SHA256"
+          test "$APK_SHA256" = "$KEY_SHA256"
+          echo "Verified Beta package $PACKAGE and test signer SHA-256 $APK_SHA256"
+
       - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --stacktrace
+        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
 
       - name: Upload unit test report after failure
         if: failure()
