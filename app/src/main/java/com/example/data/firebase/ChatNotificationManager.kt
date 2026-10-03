@@ -35,6 +35,7 @@ object ChatNotificationManager {
     const val EXTRA_SENDER_NAME = "extra_sender_name"
     const val EXTRA_CALL_ID = "extra_call_id"
     const val EXTRA_CALL_ACTION = "extra_call_action"
+    const val EXTRA_IS_VIDEO = "extra_is_video"
     const val ACTION_OPEN_CHAT = "com.example.action.OPEN_CHAT"
     const val ACTION_ANSWER_CALL = "com.example.action.ANSWER_CALL"
     const val ACTION_REJECT_CALL = "com.example.action.REJECT_CALL"
@@ -387,6 +388,7 @@ object ChatNotificationManager {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CHANNEL_ID, channelId)
             putExtra(EXTRA_CALL_ACTION, "ANSWER")
+            putExtra(EXTRA_IS_VIDEO, isVideo)
             putExtra(EXTRA_ROUTE, "chat")
         }
         val answerPendingIntent = PendingIntent.getActivity(
