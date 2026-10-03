@@ -25,6 +25,7 @@ jobs:
           set -eu
           mkdir -p apks/current apks/prior-aichat apks/prior-received-sending apks/prior-beta2 apks/prior-original
           gh release download omnistudio-fcm-review-20261002 --repo "$GITHUB_REPOSITORY" --pattern 'OmniStudio-main.apk' --dir apks/current
+          gh release download omnistudio-fcm-review-20261002 --repo "$GITHUB_REPOSITORY" --pattern 'OmniStudio-test.apk' --dir apks/current
           gh release download Betaaichat --repo "$GITHUB_REPOSITORY" --pattern 'OmniStudio_1.0.1.apk' --dir apks/prior-aichat
           gh release download BetaworkingReceivedsending --repo "$GITHUB_REPOSITORY" --pattern 'base.3.apk' --dir apks/prior-received-sending
           gh release download Beta2 --repo "$GITHUB_REPOSITORY" --pattern 'base.2.apk' --dir apks/prior-beta2
@@ -36,7 +37,7 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
           test -x "$APKSIGNER"
           test -x "$AAPT"
-          for file in apks/current/OmniStudio-main.apk apks/prior-aichat/OmniStudio_1.0.1.apk apks/prior-received-sending/base.3.apk apks/prior-beta2/base.2.apk apks/prior-original/base.1.apk; do
+          for file in apks/current/OmniStudio-main.apk apks/current/OmniStudio-test.apk apks/prior-aichat/OmniStudio_1.0.1.apk apks/prior-received-sending/base.3.apk apks/prior-beta2/base.2.apk apks/prior-original/base.1.apk; do
             echo "FILE: $file"
             "$AAPT" dump badging "$file" | head -n 1
             "$APKSIGNER" verify --verbose --print-certs "$file" 2>&1 || true
