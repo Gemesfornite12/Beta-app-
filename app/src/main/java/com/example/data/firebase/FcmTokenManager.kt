@@ -117,7 +117,7 @@ object FcmTokenManager {
                 syncTokenToFirestore(context.applicationContext, email, token)
                 return
             }
-            FirebaseMessaging.getInstance(app).token.addOnCompleteListener { task ->
+            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (task.isSuccessful && !task.result.isNullOrBlank()) {
                     _currentToken.value = task.result
                     syncTokenToFirestore(
