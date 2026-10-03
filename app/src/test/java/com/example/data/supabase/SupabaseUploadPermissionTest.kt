@@ -5,8 +5,10 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SupabaseUploadPermissionTest {
     private val uid = "firebaseUid123"
     private val mime = "image/jpeg"
