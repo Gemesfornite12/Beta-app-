@@ -1,0 +1,70 @@
+name: Build signed production APK for review
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-production-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Install Android 36 SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Restore production Firebase config and upload key
+        env:
+          PRODUCTION_GOOGLE_SERVICES_JSON_B64: ${{ secrets.PRODUCTION_GOOGLE_SERVICES_JSON_B64 }}
+          PRODUCTION_KEYSTORE_B64: ${{ secrets.PRODUCTION_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.PRODUCTION_KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+        run: |
+          test -n "$PRODUCTION_GOOGLE_SERVICES_JSON_B64"
+          test -n "$PRODUCTION_KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$PRODUCTION_GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json
+          printf '%s' "$PRODUCTION_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s app/google-services.json
+          test -s "$KEYSTORE_PATH"
+
+      - name: Build signed production APK
+        env:
+          STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.PRODUCTION_KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+        run: gradle assembleRelease --stacktrace
+
+      - name: Upload private review artifact (24h)
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnistudio-production-release-apk-review
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove Firebase config and signing material
+        if: always()
+        run: rm -f app/google-services.json my-upload-key.jks
