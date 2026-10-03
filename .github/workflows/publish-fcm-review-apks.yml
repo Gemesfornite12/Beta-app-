@@ -41,6 +41,7 @@ jobs:
           test -s staging/test/app-debug.apk
           mkdir -p dist
           cp staging/production/app-release.apk dist/OmniStudio-main.apk
+          cp staging/production/app-release.apk dist/OmniStudio-main-v2.apk
           cp staging/test/app-debug.apk dist/OmniStudio-test.apk
 
       - name: Publish review prerelease with direct APK assets
@@ -56,6 +57,7 @@ jobs:
           draft: false
           files: |
             dist/OmniStudio-main.apk
+            dist/OmniStudio-main-v2.apk
             dist/OmniStudio-test.apk
           fail_on_unmatched_files: true
           overwrite_files: true
