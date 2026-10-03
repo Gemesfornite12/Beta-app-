@@ -355,13 +355,11 @@ class RealtimeDatabaseService {
             Log.w(TAG, "Mensaje guardado pero no se pudieron actualizar metadatos del chat", e)
         }
 
-        if (BuildConfig.APPLICATION_ID.endsWith(".test")) {
-            try {
-                SupabaseChatPushService.requestNotification(message.channelId, docId)
-            } catch (e: Exception) {
-                // The message is already saved; notification delivery must not undo or fail the send.
-                Log.w(TAG, "Mensaje guardado; no se pudo solicitar la notificación de prueba", e)
-            }
+        try {
+            SupabaseChatPushService.requestNotification(message.channelId, docId)
+        } catch (e: Exception) {
+            // The message is already saved; notification delivery must not undo or fail the send.
+            Log.w(TAG, "Mensaje guardado; no se pudo solicitar la notificación push", e)
         }
 
         return docId

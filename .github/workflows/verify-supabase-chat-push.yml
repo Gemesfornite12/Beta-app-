@@ -26,3 +26,5 @@ jobs:
           deno-version: v2.x
       - name: Type-check chat push function
         run: deno check supabase/functions/notify-chat-message/index.ts
+      - name: Test push environment routing
+        run: deno test supabase/functions/notify-chat-message/push-routing_test.ts

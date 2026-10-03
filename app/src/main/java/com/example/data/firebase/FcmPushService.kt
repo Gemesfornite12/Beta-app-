@@ -42,9 +42,15 @@ class FcmPushService : FirebaseMessagingService() {
 
         // Las llamadas se enrutan solo en la app aislada de prueba.
         val data = remoteMessage.data
+        val currentPushEnvironment = if (BuildConfig.APPLICATION_ID.endsWith(".test")) "test" else "production"
+        val payloadEnvironment = data["pushEnvironment"].orEmpty()
+        if (payloadEnvironment.isNotBlank() && payloadEnvironment != currentPushEnvironment) {
+            Log.w(TAG, "Ignoring push for a different app environment.")
+            return
+        }
         if (data["eventType"] == "call") {
-            if (!BuildConfig.APPLICATION_ID.endsWith(".test") || data["pushEnvironment"] != "test") {
-                Log.w(TAG, "Ignoring call push outside the isolated test environment.")
+            if (payloadEnvironment != currentPushEnvironment) {
+                Log.w(TAG, "Ignoring call push without a matching app environment.")
                 return
             }
             val callId = data["callId"].orEmpty()
