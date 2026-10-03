@@ -106,23 +106,61 @@ object FcmTokenManager {
         }
     }
 
+    /** Refresh the authenticated app package's activity time for recipient routing. */
+    fun markAppActive(context: Context) {
+        try {
+            val app = FirebaseAppProvider.get(context.applicationContext)
+            val user = FirebaseAuth.getInstance(app).currentUser ?: return
+            val email = user.email?.takeIf { it.isNotBlank() } ?: return
+            val token = _currentToken.value
+            if (!token.isNullOrBlank()) {
+                syncTokenToFirestore(context.applicationContext, email, token)
+                return
+            }
+            FirebaseMessaging.getInstance(app).token.addOnCompleteListener { task ->
+                if (task.isSuccessful && !task.result.isNullOrBlank()) {
+                    _currentToken.value = task.result
+                    syncTokenToFirestore(
+                        context.applicationContext,
+                        email,
+                        task.result,
+                        appIsActive = ChatNotificationManager.isAppInForeground
+                    )
+                } else {
+                    Log.w(TAG, "Could not refresh app activity without a valid FCM token.")
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not mark this app package active: ${e.message}")
+        }
+    }
+
     /**
-     * Sincroniza el token en Firestore como respaldo y en RTDB, que usa el emisor push.
+     * Sincroniza el token y su última actividad en Firestore como respaldo y RTDB, que usa el emisor push.
      */
-    fun syncTokenToFirestore(context: Context? = null, userEmail: String, token: String) {
+    fun syncTokenToFirestore(
+        context: Context? = null,
+        userEmail: String,
+        token: String,
+        appIsActive: Boolean = true
+    ) {
         try {
             val app = context?.let { FirebaseAppProvider.get(it) } ?: FirebaseApp.getInstance()
             val db = FirebaseFirestore.getInstance(app)
             val normalizedEmail = userEmail.trim().lowercase()
             val cleanEmail = normalizedEmail.replace(".", "_").replace("@", "_at_")
-            val data = hashMapOf(
+            val now = System.currentTimeMillis()
+            val data = hashMapOf<String, Any>(
                 "email" to normalizedEmail,
                 "appId" to (context?.packageName ?: ""),
                 "fcmToken" to token,
-                "lastTokenRefresh" to System.currentTimeMillis(),
+                "lastTokenRefresh" to now,
+                "activityTrackingEnabled" to true,
                 "platform" to "Android",
                 "notificationsEnabled" to true
-            )
+            ).apply {
+                if (appIsActive) put("lastActiveAt", now)
+            }
 
             // Firestore queda como respaldo; las notificaciones de chat consultan RTDB.
             db.collection("user_fcm_tokens").document(cleanEmail)

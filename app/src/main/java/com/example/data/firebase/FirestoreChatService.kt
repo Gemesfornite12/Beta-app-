@@ -2,7 +2,6 @@ package com.example.data.firebase
 
 import android.content.Context
 import android.util.Log
-import com.example.BuildConfig
 import com.example.data.model.AudioProject
 import com.example.data.model.CallSession
 import com.example.data.model.ChatMessage
@@ -891,20 +890,18 @@ class FirestoreChatService(private val context: Context) {
         return if (saved) docId else null
     }
 
-    private fun isTestCallBuild(): Boolean = BuildConfig.APPLICATION_ID.endsWith(".test")
-
-    private fun callReference(channelId: String, callId: String) = rtdbRef?.let { root ->
-        if (isTestCallBuild()) root.child("calls_test").child(callId)
-        else root.child("calls").child(channelId).child(callId)
-    }
+    private fun callReference(callId: String) = rtdbRef?.child("calls")?.child(callId)
 
     /**
-     * Inicia una señal de llamada. La prueba usa un nodo plano y aislado,
-     * con participantes identificados por UID para proteger la negociación WebRTC.
+     * Crea una llamada individual en el espacio compartido por las dos variantes.
+     * La autorización final de callerUid/peerUid la aplican las reglas de RTDB.
      */
     suspend fun startCallSignal(call: CallSession): Boolean {
-        if (isTestCallBuild() && (call.callerUid.isBlank() || call.peerUid.isBlank())) {
-            Log.w(TAG, "Se canceló la llamada .test: faltan los UID de los dos participantes")
+        if (
+            call.callerUid.isBlank() || call.peerUid.isBlank() || call.callerUid == call.peerUid ||
+            call.groupName != null || !call.channelId.startsWith("direct")
+        ) {
+            Log.w(TAG, "Se canceló la llamada: requiere dos cuentas distintas y un chat privado individual")
             return false
         }
         val data = hashMapOf(
@@ -920,117 +917,78 @@ class FirestoreChatService(private val context: Context) {
             "peerUid" to call.peerUid,
             "callerAvatarUrl" to call.callerAvatarUrl,
             "peerAvatarUrl" to call.peerAvatarUrl,
-            "groupName" to call.groupName,
-            "pushEnvironment" to if (isTestCallBuild()) "test" else "production",
             "startTimeMs" to System.currentTimeMillis()
         )
-        var savedToRtdb = false
-        val callRef = callReference(call.channelId, call.callId)
-        if (callRef != null) {
-            try {
-                callRef.setValue(data).await()
-                savedToRtdb = true
-            } catch (error: Exception) {
-                Log.w(TAG, "No se pudo guardar la señal de llamada en RTDB", error)
-            }
+        val callRef = callReference(call.callId) ?: return false
+        return try {
+            callRef.setValue(data).await()
+            true
+        } catch (error: Exception) {
+            Log.w(TAG, "No se pudo guardar la señal de llamada en RTDB", error)
+            false
         }
-        val db = getDb()
-        if (db != null && !isTestCallBuild()) {
-            try {
-                db.collection("chat_channels")
-                    .document(call.channelId)
-                    .collection("active_calls")
-                    .document(call.callId)
-                    .set(data)
-                    .await()
-            } catch (error: Exception) {
-                Log.w(TAG, "No se pudo guardar el respaldo de llamada en Firestore", error)
-            }
-        }
-        return savedToRtdb
     }
 
     suspend fun getCallSignal(channelId: String, callId: String): CallSession? {
-        val ref = callReference(channelId, callId) ?: return null
+        val ref = callReference(callId) ?: return null
         return try {
-            snapshotToCallSession(ref.get().await(), channelId)
+            snapshotToCallSession(ref.get().await(), channelId)?.takeIf { it.channelId == channelId }
         } catch (error: Exception) {
             Log.w(TAG, "No se pudo recuperar la señal de llamada", error)
             null
         }
     }
 
-    /**
-     * Escucha las llamadas del usuario. En .test solo permite consultas filtradas
-     * por UID; la ruta de producción conserva el comportamiento existente.
-     */
+    /** Escucha llamadas compartidas mediante consultas por callerUid o peerUid. */
     fun listenToAllCalls(currentUid: String? = FirebaseAuth.getInstance().currentUser?.uid): Flow<List<CallSession>> = callbackFlow {
-        val root = rtdbRef?.child(if (isTestCallBuild()) "calls_test" else "calls")
-        if (root == null) {
+        val uid = currentUid?.takeIf { it.isNotBlank() }
+        val root = rtdbRef?.child("calls")
+        if (root == null || uid == null) {
             trySendBlocking(emptyList())
             awaitClose { }
             return@callbackFlow
         }
 
-        if (isTestCallBuild()) {
-            val uid = currentUid?.takeIf { it.isNotBlank() }
-            if (uid == null) {
-                trySendBlocking(emptyList())
-                awaitClose { }
-                return@callbackFlow
-            }
-            val byCaller = root.orderByChild("callerUid").equalTo(uid)
-            val byPeer = root.orderByChild("peerUid").equalTo(uid)
-            val callerCalls = mutableMapOf<String, CallSession>()
-            val peerCalls = mutableMapOf<String, CallSession>()
-            fun emitCalls() {
-                val all = (callerCalls.values + peerCalls.values)
-                    .associateBy { it.callId }
-                    .values
-                    .map { it.copy(isIncoming = it.peerUid == uid) }
-                trySendBlocking(all.toList())
-            }
-            val callerListener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    callerCalls.clear()
-                    snapshot.children.forEach { child ->
-                        snapshotToCallSession(child, "")?.let { callerCalls[it.callId] = it }
-                    }
-                    emitCalls()
+        val byCaller = root.orderByChild("callerUid").equalTo(uid)
+        val byPeer = root.orderByChild("peerUid").equalTo(uid)
+        val callerCalls = mutableMapOf<String, CallSession>()
+        val peerCalls = mutableMapOf<String, CallSession>()
+        fun emitCalls() {
+            val all = (callerCalls.values + peerCalls.values)
+                .associateBy { it.callId }
+                .values
+                .map { it.copy(isIncoming = it.peerUid == uid) }
+            trySendBlocking(all.toList())
+        }
+        val callerListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                callerCalls.clear()
+                snapshot.children.forEach { child ->
+                    snapshotToCallSession(child, "")?.let { callerCalls[it.callId] = it }
                 }
-                override fun onCancelled(error: DatabaseError) { Log.w(TAG, "Listener de llamadas salientes cancelado: ${error.message}") }
+                emitCalls()
             }
-            val peerListener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    peerCalls.clear()
-                    snapshot.children.forEach { child ->
-                        snapshotToCallSession(child, "")?.let { peerCalls[it.callId] = it }
-                    }
-                    emitCalls()
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "Listener de llamadas salientes cancelado: ${error.message}")
+            }
+        }
+        val peerListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                peerCalls.clear()
+                snapshot.children.forEach { child ->
+                    snapshotToCallSession(child, "")?.let { peerCalls[it.callId] = it }
                 }
-                override fun onCancelled(error: DatabaseError) { Log.w(TAG, "Listener de llamadas entrantes cancelado: ${error.message}") }
+                emitCalls()
             }
-            byCaller.addValueEventListener(callerListener)
-            byPeer.addValueEventListener(peerListener)
-            awaitClose {
-                byCaller.removeEventListener(callerListener)
-                byPeer.removeEventListener(peerListener)
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "Listener de llamadas entrantes cancelado: ${error.message}")
             }
-        } else {
-            val listener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    val allCalls = mutableListOf<CallSession>()
-                    snapshot.children.forEach { channelSnap ->
-                        channelSnap.children.forEach { callSnap ->
-                            snapshotToCallSession(callSnap, channelSnap.key ?: "")?.let { allCalls.add(it) }
-                        }
-                    }
-                    trySendBlocking(allCalls)
-                }
-                override fun onCancelled(error: DatabaseError) { Log.w(TAG, "Listener de llamadas cancelado: ${error.message}") }
-            }
-            root.addValueEventListener(listener)
-            awaitClose { root.removeEventListener(listener) }
+        }
+        byCaller.addValueEventListener(callerListener)
+        byPeer.addValueEventListener(peerListener)
+        awaitClose {
+            byCaller.removeEventListener(callerListener)
+            byPeer.removeEventListener(peerListener)
         }
     }
 
@@ -1057,35 +1015,16 @@ class FirestoreChatService(private val context: Context) {
         )
     }
 
-    /**
-     * Actualiza el estado de una señal de llamada (CONNECTED, ENDED, etc.)
-     */
+    /** Actualiza el estado de una señal compartida de llamada. */
     suspend fun updateCallStatus(channelId: String, callId: String, status: com.example.data.model.CallStatus) {
-        val ref = callReference(channelId, callId)
-        if (ref != null) {
-            try { ref.child("status").setValue(status.name).await() }
-            catch (error: Exception) { Log.w(TAG, "No se pudo actualizar el estado de llamada", error) }
-        }
-        val db = getDb()
-        if (db != null && !isTestCallBuild()) {
-            try {
-                db.collection("chat_channels").document(channelId)
-                    .collection("active_calls").document(callId)
-                    .update("status", status.name).await()
-            } catch (_: Exception) { }
-        }
+        try { callReference(callId)?.child("status")?.setValue(status.name)?.await() }
+        catch (error: Exception) { Log.w(TAG, "No se pudo actualizar el estado de llamada", error) }
     }
 
-    /** Finaliza la llamada en RTDB y Firestore. */
+    /** Finaliza la señal compartida de llamada en RTDB. */
     suspend fun endCallSignal(channelId: String, callId: String) {
-        try { callReference(channelId, callId)?.removeValue()?.await() }
+        try { callReference(callId)?.removeValue()?.await() }
         catch (error: Exception) { Log.w(TAG, "No se pudo finalizar señal RTDB", error) }
-        if (isTestCallBuild()) return
-        val db = getDb() ?: return
-        try {
-            db.collection("chat_channels").document(channelId)
-                .collection("active_calls").document(callId).delete().await()
-        } catch (_: Exception) { }
     }
 
     /**

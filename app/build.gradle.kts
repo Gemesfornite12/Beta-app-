@@ -19,8 +19,8 @@ android {
     applicationId = "com.aistudio.omnistudio.wkspea"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.0"
+    versionCode = 3
+    versionName = "1.0.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -30,7 +30,7 @@ android {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
       storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
+      keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
@@ -118,7 +118,7 @@ dependencies {
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.database)
   implementation(libs.firebase.messaging)
-  // Real one-to-one peer-to-peer audio/video for the .test call flow
+  // Real one-to-one peer-to-peer audio/video for both app variants
   implementation("io.github.webrtc-sdk:android:150.7871.01")
 
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google

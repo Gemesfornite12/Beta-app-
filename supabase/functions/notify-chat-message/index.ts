@@ -1,4 +1,4 @@
-import { androidPackageFor, callSignalPath, resolvePushEnvironment } from "./push-routing.ts";
+import { callSignalPath, selectRecipientDevices, uidForRecipientEmail } from "./push-routing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -150,31 +150,15 @@ async function firebaseGet(path: string, accessToken: string): Promise<unknown> 
   return await response.json();
 }
 
-async function findDeviceTokens(emails: string[], androidPackage: string, accessToken: string): Promise<Array<{ token: string; documentName: string }>> {
-  const requestedEmails = new Set(emails.map(normalizeEmail));
-  const usersValue = await firebaseGet("users", accessToken);
-  if (!usersValue || typeof usersValue !== "object" || Array.isArray(usersValue)) return [];
-
-  const unique = new Map<string, string>();
-  for (const [uid, userValue] of Object.entries(usersValue as Record<string, unknown>)) {
-    if (!userValue || typeof userValue !== "object" || Array.isArray(userValue)) continue;
-    const user = userValue as DataMap;
-    const userEmail = normalizeEmail(user.email);
-    const tokenValue = user.fcmTokens;
-    if (!tokenValue || typeof tokenValue !== "object" || Array.isArray(tokenValue)) continue;
-
-    for (const [tokenId, deviceValue] of Object.entries(tokenValue as Record<string, unknown>)) {
-      if (!deviceValue || typeof deviceValue !== "object" || Array.isArray(deviceValue)) continue;
-      const device = deviceValue as DataMap;
-      const deviceEmail = normalizeEmail(device.email) || userEmail;
-      if (!requestedEmails.has(deviceEmail)) continue;
-      if (text(device.appId) !== androidPackage || device.notificationsEnabled === false) continue;
-
-      const token = text(device.fcmToken);
-      if (token) unique.set(token, `users/${uid}/fcmTokens/${tokenId}`);
-    }
-  }
-  return [...unique.entries()].map(([token, documentName]) => ({ token, documentName }));
+function findDeviceTokens(
+  usersValue: unknown,
+  emails: string[],
+): Array<{ token: string; documentName: string; pushEnvironment: "test" | "production" }> {
+  return selectRecipientDevices(usersValue, emails).map(({ token, documentName, pushEnvironment }) => ({
+    token,
+    documentName,
+    pushEnvironment,
+  }));
 }
 
 function messagePreview(message: DataMap): string {
@@ -234,7 +218,7 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "Chat notifications are not configured" }, 503);
   }
 
-  let payload: { eventType?: unknown; channelId?: unknown; messageId?: unknown; callId?: unknown; pushEnvironment?: unknown };
+  let payload: { eventType?: unknown; channelId?: unknown; messageId?: unknown; callId?: unknown };
   try {
     payload = await request.json();
   } catch {
@@ -253,10 +237,6 @@ Deno.serve(async (request) => {
   if (eventType === "call" && !isValidDatabaseKey(payload.callId)) {
     return jsonResponse({ error: "Invalid call identifier" }, 400);
   }
-  const pushEnvironment = resolvePushEnvironment(payload.pushEnvironment);
-  if (!pushEnvironment) return jsonResponse({ error: "Invalid push environment" }, 400);
-  const targetAndroidPackage = androidPackageFor(pushEnvironment);
-
   let identity: FirebaseIdentity | null;
   try {
     identity = await verifyFirebaseIdToken(idToken, firebaseWebApiKey);
@@ -279,28 +259,27 @@ Deno.serve(async (request) => {
     const channelId = payload.channelId;
     const accessToken = await getGoogleAccessToken(serviceAccount);
     const eventPath = eventType === "call"
-      ? callSignalPath(pushEnvironment, channelId as string, payload.callId as string)
+      ? callSignalPath(payload.callId as string)
       : `chats/${channelId}/messages/${payload.messageId as string}`;
-    const [channelValue, eventValue] = await Promise.all([
+    const [channelValue, eventValue, usersValue] = await Promise.all([
       firebaseGet(`chats/${channelId}`, accessToken),
       firebaseGet(eventPath, accessToken),
+      firebaseGet("users", accessToken),
     ]);
     const channel = channelValue && typeof channelValue === "object" ? channelValue as DataMap : null;
     const event = eventValue && typeof eventValue === "object" ? eventValue as DataMap : null;
     if (!channel || !event) return jsonResponse({ error: "Chat event not found" }, 404);
 
     if (eventType === "message") {
-      if (text(event.pushEnvironment) !== pushEnvironment) return jsonResponse({ accepted: true, sent: 0 }, 200);
       if (text(event.senderId) !== identity.uid || normalizeEmail(event.senderEmail) !== identity.email) {
         return jsonResponse({ error: "Message sender does not match the authenticated account" }, 403);
       }
     } else {
-      if (text(event.pushEnvironment) !== pushEnvironment) return jsonResponse({ error: "Call is not eligible for this push environment" }, 403);
       if (text(event.callId) !== payload.callId || text(event.channelId) !== channelId) {
         return jsonResponse({ error: "Call identifiers do not match" }, 403);
       }
       if (text(event.status) !== "RINGING") return jsonResponse({ accepted: true, sent: 0 }, 200);
-      if (normalizeEmail(event.callerEmail) !== identity.email) {
+      if (text(event.callerUid) !== identity.uid || normalizeEmail(event.callerEmail) !== identity.email) {
         return jsonResponse({ error: "Call sender does not match the authenticated account" }, 403);
       }
     }
@@ -311,26 +290,30 @@ Deno.serve(async (request) => {
     const isGroup = channel.isGroup === true;
     let recipientEmails = memberEmails.filter((email) => email !== identity.email);
 
-    if (eventType === "call" && !isGroup) {
-      if (channel.isDirect !== true) {
-        return jsonResponse({ error: "Call notifications require a private chat or group" }, 403);
+    if (eventType === "call") {
+      if (isGroup || channel.isDirect !== true) {
+        return jsonResponse({ error: "Call notifications are restricted to one-to-one private chats" }, 403);
       }
       const peerEmail = normalizeEmail(event.peerEmail);
-      if (!peerEmail || peerEmail === identity.email || !memberEmails.includes(peerEmail)) {
-        return jsonResponse({ error: "Call recipient is not a member of the private chat" }, 403);
+      const peerUid = uidForRecipientEmail(usersValue, peerEmail);
+      if (
+        !peerEmail || peerEmail === identity.email || !memberEmails.includes(peerEmail) ||
+        !peerUid || text(event.peerUid) !== peerUid
+      ) {
+        return jsonResponse({ error: "Call recipient is not a verified member of the private chat" }, 403);
       }
       recipientEmails = [peerEmail];
     }
 
     if (recipientEmails.length === 0) {
-      console.info("Push notification has no recipients", { eventType, pushEnvironment, isGroup, memberCount: members.length });
+      console.info("Push notification has no recipients", { eventType, isGroup, memberCount: members.length });
       return jsonResponse({ accepted: true, sent: 0, recipientCount: 0, deviceCount: 0 }, 200);
     }
 
-    const devices = await findDeviceTokens(recipientEmails, targetAndroidPackage, accessToken);
+    const devices = findDeviceTokens(usersValue, recipientEmails);
     if (devices.length === 0) {
       console.info("Push notification has no eligible devices", {
-        eventType, pushEnvironment, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+        eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
       });
       return jsonResponse({ accepted: true, sent: 0, recipientCount: recipientEmails.length, deviceCount: 0 }, 200);
     }
@@ -347,7 +330,6 @@ Deno.serve(async (request) => {
         isVideo: String(event.isVideo === true),
         isGroup: String(isGroup),
         timeoutMinutes: "5",
-        pushEnvironment,
       }
       : {
         eventType: "message",
@@ -358,12 +340,16 @@ Deno.serve(async (request) => {
         text: messagePreview(event),
         isGroup: String(isGroup),
         messageId: text(event.messageId) || (payload.messageId as string),
-        pushEnvironment,
       };
 
     let sent = 0;
     for (const device of devices) {
-      const response = await sendFcm(device.token, fcmPayload, accessToken);
+      const recipientPayload = {
+        ...fcmPayload,
+        recipientUid: device.uid,
+        pushEnvironment: device.pushEnvironment,
+      };
+      const response = await sendFcm(device.token, recipientPayload, accessToken);
       if (response.ok) {
         sent++;
       } else {
@@ -372,13 +358,13 @@ Deno.serve(async (request) => {
         if (response.status === 404 || errorCodes.includes("UNREGISTERED")) {
           await removeStaleToken(device.documentName, accessToken);
         } else {
-          console.warn("FCM rejected a notification", { eventType, pushEnvironment, status: response.status });
+          console.warn("FCM rejected a notification", { eventType, status: response.status });
         }
       }
     }
 
     console.info("Push notification delivery result", {
-      eventType, pushEnvironment, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
+      eventType, isGroup, memberCount: members.length, recipientCount: recipientEmails.length,
       deviceCount: devices.length, sent,
     });
     return jsonResponse({

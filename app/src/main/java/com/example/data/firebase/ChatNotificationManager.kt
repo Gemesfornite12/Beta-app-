@@ -13,7 +13,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.R
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -365,7 +364,6 @@ object ChatNotificationManager {
         isVideo: Boolean,
         timeoutMinutes: Int = 5
     ) {
-        val isTestCallBuild = BuildConfig.APPLICATION_ID.endsWith(".test")
         val allowed = if (isVideo) isVideoCallNotificationEnabled(context, channelId) else isVoiceCallNotificationEnabled(context, channelId)
         if (!allowed) {
             Log.d(TAG, "Notificación de ${if (isVideo) "videollamada" else "llamada de voz"} desactivada para el canal $channelId")
@@ -451,11 +449,11 @@ object ChatNotificationManager {
             )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(!isTestCallBuild)
+            .setAutoCancel(false)
             .setOngoing(true)
             .setSound(defaultRingtone)
             .setVibrate(longArrayOf(0, 800, 500, 800, 500, 800))
-            .setContentIntent(if (isTestCallBuild) openCallPendingIntent else answerPendingIntent)
+            .setContentIntent(openCallPendingIntent)
             .addAction(
                 R.drawable.ic_stat_chat,
                 "✓ Responder",
@@ -467,12 +465,10 @@ object ChatNotificationManager {
                 rejectPendingIntent
             )
 
-        if (isTestCallBuild) {
-            if (canUseFullScreenIntent(context)) {
-                builder.setFullScreenIntent(openCallPendingIntent, true)
-            } else {
-                Log.i(TAG, "Full-screen call intent unavailable; showing high-priority notification instead.")
-            }
+        if (canUseFullScreenIntent(context)) {
+            builder.setFullScreenIntent(openCallPendingIntent, true)
+        } else {
+            Log.i(TAG, "Full-screen call intent unavailable; showing high-priority notification instead.")
         }
 
         val notificationId = (callId.hashCode() and 0x7FFFFFFF)
