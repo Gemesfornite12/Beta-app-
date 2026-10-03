@@ -153,8 +153,9 @@ async function firebaseGet(path: string, accessToken: string): Promise<unknown> 
 function findDeviceTokens(
   usersValue: unknown,
   emails: string[],
-): Array<{ token: string; documentName: string; pushEnvironment: "test" | "production" }> {
-  return selectRecipientDevices(usersValue, emails).map(({ token, documentName, pushEnvironment }) => ({
+): Array<{ uid: string; token: string; documentName: string; pushEnvironment: "test" | "production" }> {
+  return selectRecipientDevices(usersValue, emails).map(({ uid, token, documentName, pushEnvironment }) => ({
+    uid,
     token,
     documentName,
     pushEnvironment,
