@@ -15,7 +15,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4.0.4
       - name: Install APK inspection tools
         run: sdkmanager --install 'build-tools;36.0.0'
       - name: Download current and prior principal APKs
