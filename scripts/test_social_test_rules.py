@@ -43,7 +43,7 @@ assert "newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName',
 for required in (
     "newData.child('authorUid').isString()", "newData.child('authorUid').val() == auth.uid",
     "newData.child('authorUsername').isString()", "newData.child('authorDisplayName').isString()",
-    "newData.child('text').isString()", "newData.child('text').val().matches(/.*[^\\s].*/)" ,
+    "newData.child('text').isString()", "newData.child('text').val().matches(/.*\\S.*/)" ,
     "newData.child('text').val().length <= 1000", "newData.child('createdAt').isNumber()",
 ):
     assert required in validate, f"comment validation missing {required}"

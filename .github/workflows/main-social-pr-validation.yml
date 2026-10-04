@@ -66,7 +66,7 @@ jobs:
           }
           JSON
       - name: Compile Principal and test variants; run unit tests
-        run: gradle compileDebugKotlin compileReleaseKotlin testDebugUnitTest testReleaseUnitTest --stacktrace
+        run: gradle compileDebugKotlin compileReleaseKotlin testDebugUnitTest testReleaseUnitTest -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false --stacktrace
       - name: Check no Crashlytics custom user/content data is set
         run: python3 scripts/test_crashlytics_privacy.py
       - name: Remove disposable config
