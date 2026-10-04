@@ -109,7 +109,7 @@ jobs:
           echo "Verified Beta package and registered signer match"
 
       - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
+        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --tests com.example.data.firebase.MessageHistoryPagingTest --stacktrace
 
       - name: Upload unit test report after failure
         if: failure()

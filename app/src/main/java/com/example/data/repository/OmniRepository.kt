@@ -20,6 +20,9 @@ class OmniRepository(private val db: AppDatabase) {
     fun getMessagesForChannel(channelId: String): Flow<List<ChatMessage>> =
         db.chatMessageDao().getMessagesForChannel(channelId)
 
+    fun getRecentMessagesForChannel(channelId: String, limit: Int): Flow<List<ChatMessage>> =
+        db.chatMessageDao().getRecentMessagesForChannel(channelId, limit)
+
     fun searchDocuments(query: String): Flow<List<DocumentItem>> =
         db.documentDao().searchDocuments(query)
 

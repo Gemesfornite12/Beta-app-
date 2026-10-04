@@ -80,6 +80,9 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp ASC")
     fun getMessagesForChannel(channelId: String): Flow<List<ChatMessage>>
 
+    @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp DESC LIMIT :limit")
+    fun getRecentMessagesForChannel(channelId: String, limit: Int): Flow<List<ChatMessage>>
+
     @Query("SELECT * FROM chat_messages WHERE isSyncedFirestore = 0 OR firestoreId = ''")
     suspend fun getUnsyncedMessages(): List<ChatMessage>
 

@@ -18,6 +18,7 @@ import com.example.data.firebase.FirestoreChatService
 import com.example.data.webrtc.WebRtcCallClient
 import com.example.data.firebase.FirestoreConnectionStatus
 import com.example.data.firebase.GroupMember
+import com.example.data.firebase.MessageHistoryPaging
 import com.example.data.firebase.PresenceUser
 import com.example.data.firebase.RealtimeDatabaseService
 import com.example.data.firebase.SaraKnowledgeFirebaseStore
@@ -53,6 +54,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -1009,6 +1011,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
+    private val _hasOlderMessages = MutableStateFlow(true)
+    val hasOlderMessages: StateFlow<Boolean> = _hasOlderMessages.asStateFlow()
+
+    private val _isLoadingOlderMessages = MutableStateFlow(false)
+    val isLoadingOlderMessages: StateFlow<Boolean> = _isLoadingOlderMessages.asStateFlow()
+
     private val _chatInputText = MutableStateFlow("")
     val chatInputText: StateFlow<String> = _chatInputText.asStateFlow()
 
@@ -1023,6 +1031,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     private var roomMessagesJob: Job? = null
     private var channelMessagesJob: Job? = null
+    private var olderMessagesJob: Job? = null
     private var typingJob: Job? = null
     private var presenceJob: Job? = null
     private var chatAudioJob: Job? = null
@@ -1335,9 +1344,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     
                     val finalChannels = mergedMap.values.toList()
                     _availableChannels.value = finalChannels
-                    
-                    // Sincronizar todos los mensajes de estos canales en segundo plano de una sola vez
-                    syncAllChannelsMessages(finalChannels)
                 }
         }
 
@@ -2722,20 +2728,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             "${message.text}:${message.attachedDocId}:${message.attachedAudioId}"
     }
 
-    private fun mergeChatMessages(
-        remoteMessages: List<ChatMessage>,
-        pendingMessages: List<ChatMessage>
-    ): List<ChatMessage> {
-        val merged = LinkedHashMap<String, ChatMessage>()
-        // Prefer the server copy when it exists, then retain local messages that are
-        // still waiting for (or reporting) a transport result.
-        remoteMessages.forEach { merged[chatMessageMergeKey(it)] = it }
-        pendingMessages.forEach { message ->
-            merged.putIfAbsent(chatMessageMergeKey(message), message)
-        }
-        return merged.values.sortedBy { it.timestamp }
-    }
-
     private fun upsertChatMessageOnScreen(message: ChatMessage) {
         if (_currentChannel.value != message.channelId) return
         val current = _chatMessages.value
@@ -2754,59 +2746,55 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         syncPendingOfflineMessages()
         roomMessagesJob?.cancel()
         channelMessagesJob?.cancel()
+        olderMessagesJob?.cancel()
         typingJob?.cancel()
         presenceJob?.cancel()
+        _hasOlderMessages.value = true
+        _isLoadingOlderMessages.value = false
 
-        // 1. Limpiar la lista de mensajes inmediatamente para NO mostrar mensajes de otro canal
+        // Clear immediately to avoid showing another channel's history.
         _chatMessages.value = emptyList()
 
         val currentUserEmail = _authUiState.value.currentUser?.email ?: "gonzalez24029@gmail.com"
         val currentUserName = _authUiState.value.currentUser?.displayName ?: "Alex González"
 
-        // 2. Cargar mensajes locales en Room para ESTE canal específicamente (Respuesta instantánea)
+        // Load only a recent local page first; the RTDB live query below is also bounded.
         roomMessagesJob = viewModelScope.launch {
-            repo.getMessagesForChannel(channelId).collect { localMsgs ->
+            repo.getRecentMessagesForChannel(channelId, MessageHistoryPaging.PAGE_SIZE).collect { localPage ->
                 if (_currentChannel.value == channelId) {
-                    val pending = _chatMessages.value.filter {
-                        it.channelId == channelId &&
-                            (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
+                    withContext(Dispatchers.Default) {
+                        _chatMessages.update { current ->
+                            MessageHistoryPaging.mergeRecentPage(current, localPage)
+                        }
                     }
-                    _chatMessages.value = mergeChatMessages(localMsgs, pending)
                 }
             }
         }
 
-        // 3. Escuchar en tiempo real desde Firebase Realtime Database para ESTE canal
+        // Listen only to the latest page for the active chat, not its full history.
         channelMessagesJob = viewModelScope.launch {
-            rtdbService.listenToMessages(channelId).collect { rtdbMsgs ->
+            rtdbService.listenToMessages(channelId, MessageHistoryPaging.PAGE_SIZE).collect { rtdbMsgs ->
                 if (_currentChannel.value == channelId) {
-                    if (rtdbMsgs.isNotEmpty()) {
-                        val pending = _chatMessages.value.filter {
-                            it.channelId == channelId &&
-                                (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
+                    withContext(Dispatchers.Default) {
+                        _chatMessages.update { current ->
+                            MessageHistoryPaging.mergeRecentPage(current, rtdbMsgs)
                         }
-                        _chatMessages.value = mergeChatMessages(rtdbMsgs, pending)
-                        try {
-                            repo.insertChatMessages(rtdbMsgs)
-                        } catch (e: Exception) {
-                            Log.e("OmniViewModel", "No se pudieron guardar mensajes RTDB en Room para $channelId", e)
+                    }
+                    _hasOlderMessages.value = rtdbMsgs.size >= MessageHistoryPaging.PAGE_SIZE
+
+                    if (rtdbMsgs.isNotEmpty()) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                repo.insertChatMessages(rtdbMsgs)
+                            } catch (e: Exception) {
+                                Log.e("OmniViewModel", "No se pudieron guardar mensajes RTDB en Room para $channelId", e)
+                            }
                         }
                         viewModelScope.launch {
                             try {
                                 firestoreChatService.markChannelMessagesAsSeen(channelId, currentUserEmail)
                             } catch (e: Exception) {
                                 Log.w("OmniViewModel", "No se pudieron marcar mensajes como vistos en $channelId", e)
-                            }
-                        }
-                    } else {
-                        // Si el canal no tiene mensajes en RTDB aún, verificar si hay mensajes locales en Room
-                        repo.getMessagesForChannel(channelId).collect { localMsgs ->
-                            if (_currentChannel.value == channelId) {
-                                val pending = _chatMessages.value.filter {
-                                    it.channelId == channelId &&
-                                        (it.deliveryStatus == "enviando" || it.deliveryStatus == "error")
-                                }
-                                _chatMessages.value = mergeChatMessages(localMsgs, pending)
                             }
                         }
                     }
@@ -4373,20 +4361,47 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         _authUiState.value = _authUiState.value.copy(authFeedbackMessage = null)
     }
 
-    fun syncAllChannelsMessages(channels: List<ChannelInfo>) {
-        viewModelScope.launch(Dispatchers.IO) {
-            Log.d("OmniViewModel", "Sincronizando de una sola vez los mensajes de todos los canales (${channels.size})...")
-            for (ch in channels) {
-                try {
-                    val messages = firestoreChatService.getChannelMessagesOnce(ch.id)
-                    if (messages.isNotEmpty()) {
-                        repo.insertChatMessages(messages)
+
+    /** Load the bounded page immediately before the oldest loaded message in the active chat. */
+    fun loadOlderChannelMessages() {
+        val channelId = _currentChannel.value
+        if (!_hasOlderMessages.value || _isLoadingOlderMessages.value) return
+
+        olderMessagesJob = viewModelScope.launch {
+            if (_currentChannel.value != channelId || _isLoadingOlderMessages.value) return@launch
+            _isLoadingOlderMessages.value = true
+            try {
+                val cursor = withContext(Dispatchers.Default) {
+                    MessageHistoryPaging.oldestCursor(
+                        _chatMessages.value.filter { it.channelId == channelId }
+                    )
+                }
+                if (_currentChannel.value != channelId) return@launch
+                if (cursor == null) {
+                    _hasOlderMessages.value = false
+                    return@launch
+                }
+
+                val olderPage = withContext(Dispatchers.IO) {
+                    rtdbService.getOlderMessages(channelId, cursor, MessageHistoryPaging.PAGE_SIZE)
+                }
+                if (_currentChannel.value != channelId) return@launch
+                if (olderPage.isNotEmpty()) {
+                    withContext(Dispatchers.Default) {
+                        _chatMessages.update { current ->
+                            MessageHistoryPaging.mergeOlderPage(current, olderPage)
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e("OmniViewModel", "Error sincronizando mensajes para el canal ${ch.id}: ${e.message}")
+                    withContext(Dispatchers.IO) { repo.insertChatMessages(olderPage) }
+                }
+                _hasOlderMessages.value = olderPage.size >= MessageHistoryPaging.PAGE_SIZE
+            } catch (e: Exception) {
+                Log.w("OmniViewModel", "No se pudo cargar una página anterior de $channelId", e)
+            } finally {
+                if (_currentChannel.value == channelId) {
+                    _isLoadingOlderMessages.value = false
                 }
             }
-            Log.d("OmniViewModel", "Sincronización completa de todos los mensajes.")
         }
     }
 

@@ -116,6 +116,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -167,6 +168,7 @@ fun ChatScreen(
 ) {
     val currentChannel by viewModel.currentChannel.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
+    val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val chatInput by viewModel.chatInputText.collectAsState()
     val authState by viewModel.authUiState.collectAsState()
     val allDocs by viewModel.documents.collectAsState()
@@ -356,10 +358,24 @@ fun ChatScreen(
         messages.filter { it.channelId == currentChannel }
     }
 
-    // Scroll al último mensaje cuando cambia la cantidad del canal activo
-    LaunchedEffect(displayMessages.size) {
+    // Keep the newest message in view, but don't jump to the bottom when an older page is prepended.
+    val newestDisplayedMessageKey = displayMessages.lastOrNull()?.let {
+        it.firestoreId.ifBlank { it.id.toString() }
+    }
+    LaunchedEffect(currentChannel, newestDisplayedMessageKey) {
         if (displayMessages.isNotEmpty()) {
             listState.animateScrollToItem(displayMessages.size - 1)
+        }
+    }
+
+    // Fetch an older bounded page only when the user scrolls upward to the top of this chat.
+    LaunchedEffect(currentChannel, listState, hasOlderMessages) {
+        var previousIndex = listState.firstVisibleItemIndex
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { index ->
+            if (hasOlderMessages && index < previousIndex && index <= 1) {
+                viewModel.loadOlderChannelMessages()
+            }
+            previousIndex = index
         }
     }
 

@@ -12,10 +12,15 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 
@@ -47,82 +52,113 @@ class RealtimeDatabaseService {
     // --- ESCUCHAS (LISTENERS) EN TIEMPO REAL CON addValueEventListener ---
 
     /**
-     * Observa en tiempo real todos los chats y conversaciones del nodo 'chats'.
+     * Observa los datos de canal desde el esquema existente. This listener still observes
+     * /chats (which contains nested message history); mapping is deliberately limited to
+     * known metadata fields and happens away from the main thread.
      */
-    fun listenToChats(): Flow<List<ChannelInfo>> = callbackFlow {
+    fun listenToChats(): Flow<List<ChannelInfo>> = callbackFlow<DataSnapshot?> {
         val chatsRef = database.child("chats")
-        
         val listener = object : ValueEventListener {
-            @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
-                val chats = snapshot.children.mapNotNull { child ->
-                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
-                    mapToChannelInfo(child.key ?: "", map)
-                }
-                trySendBlocking(chats)
+                trySend(snapshot)
             }
 
             override fun onCancelled(error: DatabaseError) {
-                trySendBlocking(emptyList())
+                trySend(null)
             }
         }
-        
         chatsRef.addValueEventListener(listener)
         awaitClose { chatsRef.removeEventListener(listener) }
     }
+        .buffer(Channel.CONFLATED)
+        .map { snapshot ->
+            withContext(Dispatchers.Default) {
+                snapshot?.children?.mapNotNull { child -> mapToChannelInfo(child) } ?: emptyList()
+            }
+        }
 
-    private fun mapToChannelInfo(id: String, map: Map<String, Any>): ChannelInfo {
-        val membersList = (map["members"] as? List<Map<String, Any>>)?.map { m ->
+    private fun mapToChannelInfo(snapshot: DataSnapshot): ChannelInfo {
+        fun string(name: String, fallback: String = ""): String =
+            snapshot.child(name).getValue(String::class.java) ?: fallback
+        fun boolean(name: String, fallback: Boolean = false): Boolean =
+            snapshot.child(name).getValue(Boolean::class.java) ?: fallback
+
+        val membersList = snapshot.child("members").children.map { member ->
             GroupMember(
-                email = (m["email"] as? String) ?: "",
-                name = (m["name"] as? String) ?: "",
-                role = (m["role"] as? String) ?: "member",
-                canSendMessages = (m["canSendMessages"] as? Boolean) ?: true,
-                canSendMedia = (m["canSendMedia"] as? Boolean) ?: true,
-                canInviteMembers = (m["canInviteMembers"] as? Boolean) ?: true,
-                avatarUrl = (m["avatarUrl"] as? String) ?: ""
+                email = member.child("email").getValue(String::class.java) ?: "",
+                name = member.child("name").getValue(String::class.java) ?: "",
+                role = member.child("role").getValue(String::class.java) ?: "member",
+                canSendMessages = member.child("canSendMessages").getValue(Boolean::class.java) ?: true,
+                canSendMedia = member.child("canSendMedia").getValue(Boolean::class.java) ?: true,
+                canInviteMembers = member.child("canInviteMembers").getValue(Boolean::class.java) ?: true,
+                avatarUrl = member.child("avatarUrl").getValue(String::class.java) ?: ""
             )
-        } ?: emptyList()
+        }
 
         return ChannelInfo(
-            id = id,
-            name = (map["name"] as? String) ?: "Chat",
-            description = (map["description"] as? String) ?: "",
-            iconEmoji = (map["iconEmoji"] as? String) ?: "💬",
-            isDirect = (map["isDirect"] as? Boolean) ?: false,
-            isGroup = (map["isGroup"] as? Boolean) ?: false,
-            groupPhotoUrl = (map["groupPhotoUrl"] as? String) ?: "",
-            creatorEmail = (map["creatorEmail"] as? String) ?: "",
-            creatorName = (map["creatorName"] as? String) ?: "",
+            id = snapshot.key ?: "",
+            name = string("name", "Chat"),
+            description = string("description"),
+            iconEmoji = string("iconEmoji", "💬"),
+            isDirect = boolean("isDirect"),
+            isGroup = boolean("isGroup"),
+            groupPhotoUrl = string("groupPhotoUrl"),
+            creatorEmail = string("creatorEmail"),
+            creatorName = string("creatorName"),
             members = membersList,
-            pendingDeletionTimestamp = (map["pendingDeletionTimestamp"] as? Number)?.toLong(),
-            isDeleting = (map["isDeleting"] as? Boolean) ?: false
+            pendingDeletionTimestamp = (snapshot.child("pendingDeletionTimestamp").value as? Number)?.toLong(),
+            isDeleting = boolean("isDeleting")
         )
     }
 
-    /**
-     * Observa en tiempo real los mensajes de un chat específico dentro de 'chats/{chatId}/messages'.
-     */
-    fun listenToMessages(chatId: String): Flow<List<ChatMessage>> = callbackFlow {
-        val messagesRef = database.child("chats").child(chatId).child("messages")
-        
+    /** Observe only a bounded, most-recent page for the active chat. */
+    fun listenToMessages(
+        chatId: String,
+        pageSize: Int = MessageHistoryPaging.PAGE_SIZE
+    ): Flow<List<ChatMessage>> = callbackFlow<DataSnapshot?> {
+        val query = database.child("chats").child(chatId).child("messages")
+            .orderByChild("timestamp")
+            .limitToLast(pageSize.coerceAtLeast(1))
+
         val listener = object : ValueEventListener {
-            @Suppress("UNCHECKED_CAST")
             override fun onDataChange(snapshot: DataSnapshot) {
-                val messages = snapshot.children.mapNotNull { child ->
-                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
-                    mapToChatMessage(child.key ?: "", chatId, map)
-                }.sortedBy { it.timestamp }
-                trySendBlocking(messages)
+                trySend(snapshot)
             }
 
             override fun onCancelled(error: DatabaseError) {
-                trySendBlocking(emptyList())
+                trySend(null)
             }
         }
-        
-        messagesRef.addValueEventListener(listener)
-        awaitClose { messagesRef.removeEventListener(listener) }
+        query.addValueEventListener(listener)
+        awaitClose { query.removeEventListener(listener) }
+    }
+        .buffer(Channel.CONFLATED)
+        .map { snapshot ->
+            withContext(Dispatchers.Default) {
+                snapshot?.children?.mapNotNull { child ->
+                    val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                    mapToChatMessage(child.key ?: "", chatId, map)
+                }?.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.firestoreId }) ?: emptyList()
+            }
+        }
+
+    /** Fetch the page immediately older than the active chat's oldest loaded message. */
+    suspend fun getOlderMessages(
+        chatId: String,
+        before: MessageHistoryCursor,
+        pageSize: Int = MessageHistoryPaging.PAGE_SIZE
+    ): List<ChatMessage> = withContext(Dispatchers.IO) {
+        val query = database.child("chats").child(chatId).child("messages")
+            .orderByChild("timestamp")
+            .endBefore(before.timestamp, before.childKey)
+            .limitToLast(pageSize.coerceAtLeast(1))
+        val snapshot = query.get().await()
+        withContext(Dispatchers.Default) {
+            snapshot.children.mapNotNull { child ->
+                val map = child.value as? Map<String, Any> ?: return@mapNotNull null
+                mapToChatMessage(child.key ?: "", chatId, map)
+            }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.firestoreId })
+        }
     }
 
     private fun mapToChatMessage(id: String, channelId: String, map: Map<String, Any>): ChatMessage {
