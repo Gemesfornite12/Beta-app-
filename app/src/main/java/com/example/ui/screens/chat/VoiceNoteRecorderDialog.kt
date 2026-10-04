@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 internal enum class VoiceNoteDialogAction { START, STOP, CANCEL, PLAY_PREVIEW, DISCARD, SEND, CLOSE }
@@ -65,6 +66,35 @@ internal fun voiceNoteDialogActions(isRecording: Boolean, hasCapturedRecording: 
     isRecording -> setOf(VoiceNoteDialogAction.STOP, VoiceNoteDialogAction.CANCEL)
     hasCapturedRecording -> setOf(VoiceNoteDialogAction.PLAY_PREVIEW, VoiceNoteDialogAction.DISCARD, VoiceNoteDialogAction.SEND)
     else -> setOf(VoiceNoteDialogAction.START, VoiceNoteDialogAction.CLOSE)
+}
+
+internal enum class VoiceNoteGestureAction { CANCEL, LOCK }
+
+/** One gesture can trigger each intended action at most once; left cancels, upward locks. */
+internal class VoiceNoteGestureTracker(private val thresholdPx: Float = 90f) {
+    private var cancelled = false
+    private var locked = false
+
+    fun onMove(deltaX: Float, deltaY: Float): VoiceNoteGestureAction? {
+        if (cancelled) return null
+        if (deltaX <= -thresholdPx) {
+            cancelled = true
+            return VoiceNoteGestureAction.CANCEL
+        }
+        if (!locked && deltaY <= -thresholdPx) {
+            locked = true
+            return VoiceNoteGestureAction.LOCK
+        }
+        return null
+    }
+
+    fun shouldFinishOnRelease(isLocked: Boolean): Boolean = !cancelled && !locked && !isLocked
+}
+
+/** Protects the send callback from rapid taps and concurrent pointer events. */
+internal class VoiceNoteSendGate {
+    private val claimed = AtomicBoolean(false)
+    fun claim(): Boolean = claimed.compareAndSet(false, true)
 }
 
 @Composable
@@ -80,8 +110,11 @@ internal fun VoiceNoteRecorderDialog(
     var errorText by remember { mutableStateOf<String?>(null) }
     var recordingFormat by remember { mutableStateOf<VoiceRecordingFormat?>(null) }
     var captured by remember { mutableStateOf<CompletedVoiceRecording?>(null) }
+    var sending by remember { mutableStateOf(false) }
+    val sendGate = remember { VoiceNoteSendGate() }
     val amplitudeSamples = remember { mutableStateListOf<Int>() }
     val lockedState = rememberUpdatedState(isLocked)
+    val recordingState = rememberUpdatedState(isRecording)
     val actions = remember(isRecording, captured != null) {
         voiceNoteDialogActions(isRecording, captured != null)
     }
@@ -137,7 +170,7 @@ internal fun VoiceNoteRecorderDialog(
     }
 
     DisposableEffect(recorder) {
-        onDispose { if (isRecording) recorder.cancel() }
+        onDispose { if (recordingState.value) recorder.cancel() }
     }
 
     AlertDialog(
@@ -156,7 +189,16 @@ internal fun VoiceNoteRecorderDialog(
             ) {
                 when {
                     isRecording -> {
-                        Text(if (isLocked) "Grabando · manos libres" else "Grabando", color = Color(0xFFFCA5A5), fontSize = 14.sp)
+                        Text("Grabando", color = Color(0xFFFCA5A5), fontSize = 14.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(
+                                if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = if (isLocked) "Grabación bloqueada" else "Grabación sin bloqueo",
+                                tint = if (isLocked) Color(0xFFA5B4FC) else Color(0xFFCBD5E1),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(if (isLocked) "Bloqueada · manos libres" else "Desbloqueada", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        }
                         Text(recordingFormat?.label ?: "Audio", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                         Spacer(Modifier.height(4.dp))
                         Text(formatVoiceDuration(elapsedMillis), color = Color.White, fontSize = 25.sp)
@@ -165,11 +207,29 @@ internal fun VoiceNoteRecorderDialog(
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (VoiceNoteDialogAction.CANCEL in actions) {
-                                IconButton(
-                                    onClick = { discardRecording(); errorText = "Grabación descartada." },
-                                    modifier = Modifier.testTag("voice_note_cancel_recording")
-                                ) {
-                                    Icon(Icons.Default.Cancel, "Cancelar grabación", tint = Color(0xFFF87171))
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = { discardRecording(); errorText = "Grabación descartada." },
+                                        modifier = Modifier.testTag("voice_note_cancel_recording")
+                                    ) {
+                                        Icon(Icons.Default.Cancel, "Cancelar grabación", tint = Color(0xFFF87171))
+                                    }
+                                    Text("Cancelar", color = Color(0xFFF87171), fontSize = 10.sp)
+                                }
+                            }
+                            if (isRecording) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = { isLocked = !isLocked },
+                                        modifier = Modifier.testTag("voice_note_lock_toggle")
+                                    ) {
+                                        Icon(
+                                            if (isLocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                                            contentDescription = if (isLocked) "Desbloquear grabación" else "Bloquear grabación",
+                                            tint = Color(0xFFA5B4FC)
+                                        )
+                                    }
+                                    Text(if (isLocked) "Desbloquear" else "Bloquear", color = Color(0xFFA5B4FC), fontSize = 10.sp)
                                 }
                             }
                             if (VoiceNoteDialogAction.STOP in actions) {
@@ -186,7 +246,7 @@ internal fun VoiceNoteRecorderDialog(
                         }
                         Text(
                             if (isLocked) "Toca Detener y revisar cuando termines"
-                            else "Suelta para terminar · desliza a la izquierda para cancelar o arriba para bloquear",
+                            else "Suelta para terminar · usa Cancelar o Bloquear cuando lo necesites",
                             color = Color(0xFFCBD5E1), fontSize = 11.sp
                         )
                     }
@@ -223,17 +283,24 @@ internal fun VoiceNoteRecorderDialog(
                 Button(
                     onClick = {
                         val ready = captured ?: return@Button
+                        if (!sendGate.claim()) return@Button
+                        sending = true
                         val caption = "🎙 Nota de voz · ${formatVoiceDuration(elapsedMillis)} · ${ready.format.label}"
-                        captured = null
-                        onSend(ready.uri, ready.format.mimeType, caption)
-                        onDismiss()
+                        try {
+                            onSend(ready.uri, ready.format.mimeType, caption)
+                            captured = null
+                            onDismiss()
+                        } catch (error: Exception) {
+                            errorText = error.message ?: "No se pudo iniciar el envío del audio."
+                        }
                     },
+                    enabled = !sending,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
                     modifier = Modifier.testTag("voice_note_send")
                 ) {
                     Icon(Icons.Default.Send, null)
                     Spacer(Modifier.width(6.dp))
-                    Text("Enviar nota de voz")
+                    Text(if (sending) "Enviando audio…" else "Enviar audio")
                 }
             } else if (VoiceNoteDialogAction.CLOSE in actions) {
                 TextButton(onClick = onDismiss) { Text("Cerrar", color = Color(0xFFCBD5E1)) }
@@ -241,10 +308,10 @@ internal fun VoiceNoteRecorderDialog(
         },
         dismissButton = {
             if (VoiceNoteDialogAction.DISCARD in actions) {
-                TextButton(onClick = { discardRecording(); errorText = null }) {
+                TextButton(enabled = !sending, onClick = { discardRecording(); errorText = null }) {
                     Icon(Icons.Default.Delete, null, tint = Color(0xFFF87171))
                     Spacer(Modifier.width(4.dp))
-                    Text("Borrar", color = Color(0xFFF87171))
+                    Text("Borrar audio", color = Color(0xFFF87171))
                 }
             }
         }
@@ -274,21 +341,18 @@ private fun HoldToRecordButton(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     currentStart()
-                    var cancelled = false
-                    var lockTriggered = false
+                    val tracker = VoiceNoteGestureTracker(thresholdPx = 48.dp.toPx())
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull() ?: break
                         val delta = change.position - down.position
-                        if (!cancelled && delta.x < -90f) {
-                            cancelled = true
-                            currentCancel()
-                        } else if (!lockTriggered && delta.y < -90f) {
-                            lockTriggered = true
-                            currentLock()
+                        when (tracker.onMove(delta.x, delta.y)) {
+                            VoiceNoteGestureAction.CANCEL -> currentCancel()
+                            VoiceNoteGestureAction.LOCK -> currentLock()
+                            null -> Unit
                         }
                         if (!change.pressed) {
-                            if (!cancelled && !currentLocked.value) currentStop()
+                            if (tracker.shouldFinishOnRelease(currentLocked.value)) currentStop()
                             break
                         }
                         change.consume()
