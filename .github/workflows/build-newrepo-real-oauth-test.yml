@@ -92,6 +92,13 @@ jobs:
           PACKAGE="$("$AAPT" dump badging "$APK" | awk -F"'" '/^package:/ {print $2; exit}')"
           echo "Beta APK package: ${PACKAGE:-<missing>}"
           test "$PACKAGE" = "com.aistudio.omnistudio.wkspea.test"
+          if "$AAPT" dump badging "$APK" | grep -q '^application-debuggable'; then
+            echo "Refusing to publish a debuggable Beta APK"
+            exit 1
+          fi
+          MAPPING=app/build/outputs/mapping/beta/mapping.txt
+          test -s "$MAPPING"
+          echo "Verified non-debuggable Beta APK and R8 mapping output"
           APK_SHA256="$("$APKSIGNER" verify --print-certs "$APK" 2>&1 | awk -F': ' '/certificate SHA-256 digest:/ {gsub(/:/, "", $NF); print tolower($NF); exit}')"
           KEY_SHA256="$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | awk -F': ' '/SHA256:/ {gsub(/:/, "", $NF); print tolower($NF); exit}')"
           echo "APK signer SHA-256: ${APK_SHA256:-<missing>}"
@@ -102,14 +109,14 @@ jobs:
           echo "Verified Beta package and registered signer match"
 
       - name: Run connector and media-routing tests
-        run: gradle testBetaUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
+        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
 
       - name: Upload unit test report after failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: workspace-test-report
-          path: source/app/build/test-results/testBetaUnitTest/*.xml
+          path: source/app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: ignore
           retention-days: 1
 
