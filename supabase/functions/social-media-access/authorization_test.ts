@@ -10,11 +10,19 @@ Deno.test("legacy single-media posts keep signed-download access", () => {
 Deno.test("multi-media carousel and split video clips are authorized by mediaItems", () => {
   const clipA = "social_test/user_1/posts/split-part-0001.mp4";
   const clipB = "social_test/user_1/posts/split-part-0002.mp4";
-  const record = { mediaPath: clipA, mediaItems: [{ mediaPath: clipA }, { mediaPath: clipB }] };
-  if (!recordContainsMediaPath(record, clipA) || !recordContainsMediaPath(record, clipB)) {
+  const record = {
+    mediaPath: clipA,
+    mediaItems: [{ mediaPath: clipA }, { mediaPath: clipB }],
+  };
+  if (
+    !recordContainsMediaPath(record, clipA) ||
+    !recordContainsMediaPath(record, clipB)
+  ) {
     throw new Error("a stored mediaItems path was rejected");
   }
-  if (recordContainsMediaPath(record, "social_test/user_1/posts/unlisted.mp4")) {
+  if (
+    recordContainsMediaPath(record, "social_test/user_1/posts/unlisted.mp4")
+  ) {
     throw new Error("an unlisted object path was accepted");
   }
 });
