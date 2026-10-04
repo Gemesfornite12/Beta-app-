@@ -274,10 +274,11 @@ private fun HoldToRecordButton(
                     }
                 }
             }
-            .testTag("voice_note_hold_to_record"),
-        contentAlignment = Alignment.Center
+            .testTag("voice_note_hold_to_record")
     ) {
-        Icon(if (locked) Icons.Default.Lock else Icons.Default.Mic, contentDescription = "Mantener para grabar nota de voz", tint = Color.White, modifier = Modifier.size(34.dp))
+        Box(Modifier.fillMaxWidth().height(76.dp), contentAlignment = Alignment.Center) {
+            Icon(if (locked) Icons.Default.Lock else Icons.Default.Mic, contentDescription = "Mantener para grabar nota de voz", tint = Color.White, modifier = Modifier.size(34.dp))
+        }
     }
 }
 
