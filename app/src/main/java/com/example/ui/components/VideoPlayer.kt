@@ -11,6 +11,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -36,22 +37,28 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeOff
@@ -59,6 +66,8 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -110,8 +119,8 @@ private fun formatMillisToTime(millis: Long): String {
 
 /**
  * Reusable VideoPlayer composable for YouTube and standard video content (MP4, WebM, 3GP, local URI).
- * Renders video thumbnail, badges, playback controls, and handles launching
- * the in-app overlay player or standard video player dialog.
+ * Renders video thumbnails and badges, handing YouTube taps to the full-screen
+ * in-chat viewer and standard-video taps to the app's normal video player.
  */
 @Composable
 fun VideoPlayer(
@@ -1007,25 +1016,288 @@ fun StandardVideoPlayerDialog(
     }
 }
 
-/**
- * Overlay Player Dialog for YouTube Videos.
- * Plays the YouTube video directly inside an interactive modal overlay
- * in the chat screen using a hardware-accelerated WebView iframe embed.
- */
+/** Full-screen, in-app player for video attachments opened from a chat message. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YouTubeOverlayPlayerDialog(
-    videoId: String,
+fun ChatVideoViewerDialog(
+    videoUrl: String,
     title: String,
+    caption: String? = null,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    onSave: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onReply: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    var isPlayerLoading by remember { mutableStateOf(true) }
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val videoUrl = "https://www.youtube.com/watch?v=$videoId"
+    var isLoading by remember(videoUrl) { mutableStateOf(true) }
+    var errorMessage by remember(videoUrl) { mutableStateOf<String?>(null) }
+    var showMediaMenu by remember { mutableStateOf(false) }
+    var videoViewRef by remember(videoUrl) { mutableStateOf<VideoView?>(null) }
 
-    // Responsive embed HTML with YouTube Iframe API
+    Dialog(
+        onDismissRequest = {
+            try { videoViewRef?.stopPlayback() } catch (_: Exception) {}
+            onDismiss()
+        },
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
+    ) {
+        Surface(color = Color.Black, modifier = Modifier.fillMaxSize().testTag("chat_video_viewer")) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .background(Color(0xFF111111))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            try { videoViewRef?.stopPlayback() } catch (_: Exception) {}
+                            onDismiss()
+                        },
+                        modifier = Modifier.size(44.dp).testTag("btn_close_video_viewer")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver al chat", tint = Color.White)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Video • Reproductor en chat", color = Color(0xFF9CA3AF), fontSize = 10.sp)
+                    }
+                    IconButton(onClick = onSave, modifier = Modifier.size(40.dp).testTag("btn_save_video_viewer")) {
+                        Icon(Icons.Default.Save, contentDescription = "Guardar video", tint = Color.White)
+                    }
+                    IconButton(onClick = onShare, modifier = Modifier.size(40.dp).testTag("btn_share_video_viewer")) {
+                        Icon(Icons.Default.Share, contentDescription = "Compartir video", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { showMediaMenu = true }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Más opciones", tint = Color.White)
+                        }
+                        DropdownMenu(expanded = showMediaMenu, onDismissRequest = { showMediaMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Copiar enlace") },
+                                onClick = {
+                                    showMediaMenu = false
+                                    try {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Video URL", videoUrl))
+                                        Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {}
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (errorMessage == null) {
+                        AndroidView(
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                    val controller = MediaController(ctx)
+                                    controller.setAnchorView(this)
+                                    setMediaController(controller)
+                                    setOnPreparedListener {
+                                        isLoading = false
+                                        start()
+                                    }
+                                    setOnErrorListener { _, what, extra ->
+                                        isLoading = false
+                                        errorMessage = "Este video no se puede reproducir en este dispositivo (código $what/$extra)."
+                                        true
+                                    }
+                                    try {
+                                        setVideoURI(Uri.parse(videoUrl))
+                                    } catch (error: Exception) {
+                                        isLoading = false
+                                        errorMessage = error.localizedMessage ?: "No se pudo cargar el video."
+                                    }
+                                    videoViewRef = this
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                        )
+                        if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(38.dp))
+                    } else {
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            modifier = Modifier.fillMaxWidth().padding(24.dp)
+                        )
+                    }
+                }
+
+                Surface(color = Color(0xFF111111), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(caption?.takeIf(String::isNotBlank) ?: title, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = onReply, modifier = Modifier.testTag("btn_reply_video_viewer")) {
+                            Text("Responder", color = Color(0xFF93C5FD), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    DisposableEffect(videoUrl) {
+        onDispose {
+            try { videoViewRef?.stopPlayback() } catch (_: Exception) {}
+            videoViewRef = null
+        }
+    }
+}
+
+/** Full-screen, in-app photo/GIF viewer for media opened from a chat message. */
+@Composable
+fun ChatImageViewerDialog(
+    imageUrl: String,
+    title: String,
+    caption: String? = null,
+    mediaType: String = "image",
+    onDismiss: () -> Unit,
+    onSave: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onReply: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    var showMediaMenu by remember { mutableStateOf(false) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = Color.Black,
+            modifier = Modifier.fillMaxSize().testTag("dialog_media_preview")
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .background(Color(0xFF111111))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(44.dp).testTag("btn_close_preview_x")) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver al chat", tint = Color.White)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = when (mediaType) {
+                                "gif" -> "GIF"
+                                "sticker" -> "Sticker"
+                                else -> "Foto"
+                            },
+                            color = Color(0xFF9CA3AF),
+                            fontSize = 10.sp
+                        )
+                    }
+                    IconButton(onClick = onSave, modifier = Modifier.size(40.dp).testTag("btn_save_image_viewer")) {
+                        Icon(Icons.Default.Save, contentDescription = "Guardar foto", tint = Color.White)
+                    }
+                    IconButton(onClick = onShare, modifier = Modifier.size(40.dp).testTag("btn_share_image_viewer")) {
+                        Icon(Icons.Default.Share, contentDescription = "Compartir foto", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { showMediaMenu = true }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Más opciones", tint = Color.White)
+                        }
+                        DropdownMenu(expanded = showMediaMenu, onDismissRequest = { showMediaMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Copiar enlace") },
+                                onClick = {
+                                    showMediaMenu = false
+                                    try {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Media URL", imageUrl))
+                                        Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {}
+                                }
+                            )
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = imageUrl.replace("http://", "https://"),
+                        contentDescription = title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Surface(color = Color(0xFF111111), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = caption?.takeIf(String::isNotBlank) ?: title,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onReply, modifier = Modifier.testTag("btn_reply_image_viewer")) {
+                            Text("Responder", color = Color(0xFF93C5FD), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Builds a YouTube embed URL configured to stay in the app's WebView. */
+internal fun buildYouTubeEmbedUrl(videoId: String): String =
+    "https://www.youtube.com/embed/$videoId?autoplay=1&playsinline=1&controls=1&rel=0&modestbranding=1&enablejsapi=1"
+
+/** Full-screen YouTube player for chat messages; the WebView is created only after the thumbnail is tapped. */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun ChatYouTubeViewerDialog(
+    videoId: String,
+    title: String,
+    thumbnailUrl: String? = null,
+    caption: String? = null,
+    onDismiss: () -> Unit,
+    onShare: () -> Unit = {},
+    onReply: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val videoUrl = remember(videoId) { "https://www.youtube.com/watch?v=$videoId" }
+    var isLoading by remember(videoId) { mutableStateOf(true) }
+    var showMediaMenu by remember { mutableStateOf(false) }
+    var webViewRef by remember(videoId) { mutableStateOf<WebView?>(null) }
+    val posterUrl = remember(videoId, thumbnailUrl) {
+        thumbnailUrl?.takeIf(String::isNotBlank) ?: "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
+    }
     val embedHtml = remember(videoId) {
         """
         <!DOCTYPE html>
@@ -1033,18 +1305,16 @@ fun YouTubeOverlayPlayerDialog(
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; background: #000; }
-                body, html { width: 100%; height: 100%; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-                .video-container { position: relative; width: 100%; height: 100%; }
-                iframe { width: 100%; height: 100%; border: none; }
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                html, body, #player { width: 100%; height: 100%; overflow: hidden; background: #000; }
+                iframe { width: 100%; height: 100%; border: 0; }
             </style>
         </head>
         <body>
-            <div class="video-container">
-                <iframe 
-                    src="https://www.youtube.com/embed/$videoId?autoplay=1&playsinline=1&fs=1&rel=0&modestbranding=1&enablejsapi=1" 
-                    frameborder="0" 
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+            <div id="player">
+                <iframe src="${buildYouTubeEmbedUrl(videoId)}"
+                    title="YouTube video player"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowfullscreen>
                 </iframe>
             </div>
@@ -1054,130 +1324,56 @@ fun YouTubeOverlayPlayerDialog(
     }
 
     Dialog(
-        onDismissRequest = {
-            webViewRef?.destroy()
-            onDismiss()
-        },
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false
-        )
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.85f))
-                .clickable {
-                    webViewRef?.destroy()
-                    onDismiss()
-                }
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                border = BorderStroke(1.5.dp, Color(0xFFFF0000).copy(alpha = 0.6f)),
-                modifier = modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 550.dp)
-                    .wrapContentHeight()
-                    .clickable(enabled = false) {}
-                    .testTag("youtube_overlay_player_dialog")
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Header with title and controls
-                    Surface(
-                        color = Color(0xFF1E293B),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFFFF0000),
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
+        Surface(color = Color.Black, modifier = Modifier.fillMaxSize().testTag("chat_youtube_viewer")) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .background(Color(0xFF111111))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(44.dp).testTag("btn_close_youtube_viewer")) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver al chat", tint = Color.White)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("YouTube • Reproduciendo en OmniStudio", color = Color(0xFF9CA3AF), fontSize = 10.sp)
+                    }
+                    IconButton(onClick = onShare, modifier = Modifier.size(40.dp).testTag("btn_share_youtube_viewer")) {
+                        Icon(Icons.Default.Share, contentDescription = "Compartir video", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { showMediaMenu = true }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Más opciones", tint = Color.White)
+                        }
+                        DropdownMenu(expanded = showMediaMenu, onDismissRequest = { showMediaMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Copiar enlace") },
+                                onClick = {
+                                    showMediaMenu = false
+                                    try {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("YouTube URL", videoUrl))
+                                        Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {}
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = title.ifBlank { "Reproduciendo video" },
-                                        color = Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "YouTube Player • En Chat",
-                                        color = Color(0xFF38BDF8),
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Open in YouTube App
-                                IconButton(
-                                    onClick = {
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(videoUrl))
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {
-                                            Toast.makeText(context, "No se pudo abrir", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.OpenInNew,
-                                        contentDescription = "Abrir en App",
-                                        tint = Color(0xFF94A3B8),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-
-                                // Close Button
-                                IconButton(
-                                    onClick = {
-                                        webViewRef?.destroy()
-                                        onDismiss()
-                                    },
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .testTag("btn_close_youtube_overlay")
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Cerrar reproductor",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
+                            )
                         }
                     }
+                }
 
-                    // Video Player Screen 16:9 WebView Container
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1185,6 +1381,12 @@ fun YouTubeOverlayPlayerDialog(
                             .background(Color.Black),
                         contentAlignment = Alignment.Center
                     ) {
+                        AsyncImage(
+                            model = posterUrl,
+                            contentDescription = "Miniatura de $title",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
                         AndroidView(
                             factory = { ctx ->
                                 WebView(ctx).apply {
@@ -1202,62 +1404,32 @@ fun YouTubeOverlayPlayerDialog(
                                     webViewClient = object : WebViewClient() {
                                         override fun onPageFinished(view: WebView?, url: String?) {
                                             super.onPageFinished(view, url)
-                                            isPlayerLoading = false
+                                            isLoading = false
                                         }
                                     }
-                                    loadDataWithBaseURL(
-                                        "https://www.youtube.com",
-                                        embedHtml,
-                                        "text/html",
-                                        "UTF-8",
-                                        null
-                                    )
+                                    loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "UTF-8", null)
                                     webViewRef = this
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
                         )
-
-                        if (isPlayerLoading) {
-                            CircularProgressIndicator(
-                                color = Color(0xFFFF0000),
-                                modifier = Modifier.size(36.dp)
-                            )
+                        if (isLoading) {
+                            CircularProgressIndicator(color = Color(0xFFFF0000), modifier = Modifier.size(36.dp))
                         }
                     }
+                }
 
-                    // Bottom Action Bar inside Overlay
-                    Surface(
-                        color = Color(0xFF0F172A),
-                        modifier = Modifier.fillMaxWidth()
+                Surface(color = Color(0xFF111111), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "💡 Puedes interactuar con el chat mientras reproduces",
-                                color = Color(0xFF64748B),
-                                fontSize = 10.sp
-                            )
-
-                            TextButton(
-                                onClick = {
-                                    try {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                        val clip = android.content.ClipData.newPlainText("YouTube Link", videoUrl)
-                                        clipboard?.setPrimaryClip(clip)
-                                        Toast.makeText(context, "Enlace copiado", Toast.LENGTH_SHORT).show()
-                                    } catch (_: Exception) {}
-                                }
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF94A3B8))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Copiar Link", fontSize = 11.sp, color = Color(0xFF94A3B8))
-                            }
+                        Text(caption?.takeIf(String::isNotBlank) ?: title, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = onReply, modifier = Modifier.testTag("btn_reply_youtube_viewer")) {
+                            Text("Responder", color = Color(0xFF93C5FD), fontSize = 12.sp)
                         }
                     }
                 }
@@ -1267,7 +1439,15 @@ fun YouTubeOverlayPlayerDialog(
 
     DisposableEffect(videoId) {
         onDispose {
-            webViewRef?.destroy()
+            webViewRef?.let { webView ->
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.removeAllViews()
+                webView.destroy()
+            }
+            webViewRef = null
         }
     }
 }
+
+

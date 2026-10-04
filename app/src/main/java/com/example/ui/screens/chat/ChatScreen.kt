@@ -68,11 +68,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import com.example.ui.components.ChatImageViewerDialog
 import com.example.ui.components.MessageReactionMenuDialog
 import com.example.ui.components.MessageReactionsRow
-import com.example.ui.components.StandardVideoPlayerDialog
+import com.example.ui.components.ChatVideoViewerDialog
+import com.example.ui.components.ChatYouTubeViewerDialog
 import com.example.ui.components.VideoPlayer
-import com.example.ui.components.YouTubeOverlayPlayerDialog
+import com.example.data.youtube.YouTubeClient
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -204,6 +206,10 @@ fun ChatScreen(
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var previewMediaUrl by remember { mutableStateOf<String?>(null) }
     var previewMediaType by remember { mutableStateOf<String?>(null) }
+    var previewMediaTitle by remember { mutableStateOf<String?>(null) }
+    var previewMediaCaption by remember { mutableStateOf<String?>(null) }
+    var previewMediaThumbnail by remember { mutableStateOf<String?>(null) }
+    var previewMediaReplyAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
     // Estados para adjuntos pendientes (pre-envío) que el usuario puede revisar o borrar
@@ -233,8 +239,6 @@ fun ChatScreen(
     var showUserInfoDialog by remember { mutableStateOf(false) }
     var selectedUserForInfo by remember { mutableStateOf<GroupMember?>(null) }
     var showPermissionDeniedDialog by remember { mutableStateOf<String?>(null) }
-    var activeOverlayVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var activeStandardVideo by remember { mutableStateOf<Pair<String, String>?>(null) }
     var messageForReactionMenu by remember { mutableStateOf<ChatMessage?>(null) }
 
     LaunchedEffect(showMyChatsSheet) {
@@ -1753,6 +1757,28 @@ fun ChatScreen(
                         onPreviewMedia = { url, type ->
                             previewMediaUrl = url
                             previewMediaType = type
+                            previewMediaTitle = msg.text.takeIf(String::isNotBlank) ?: when (type) {
+                                "image" -> "Foto"
+                                "gif" -> "GIF"
+                                "sticker" -> "Sticker"
+                                else -> "Multimedia"
+                            }
+                            previewMediaCaption = msg.text.takeIf(String::isNotBlank)
+                            previewMediaThumbnail = msg.mediaThumbnail
+                            val replyText = msg.text.takeIf(String::isNotBlank)?.let { text ->
+                                "💬 @${msg.senderName}: \"${if (text.length > 30) text.take(30) + "..." else text}\"\n"
+                            }
+                            previewMediaReplyAction = replyText?.let { draft ->
+                                {
+                                    viewModel.onChatInputChanged(draft)
+                                    previewMediaUrl = null
+                                    previewMediaType = null
+                                    previewMediaTitle = null
+                                    previewMediaCaption = null
+                                    previewMediaThumbnail = null
+                                    previewMediaReplyAction = null
+                                }
+                            }
                         },
                         onStartVoiceCall = { peerName ->
                             val pEmail = msg.senderEmail
@@ -1781,11 +1807,47 @@ fun ChatScreen(
                             )
                             showUserInfoDialog = true
                         },
-                        onOpenYouTubeOverlay = { vId, vTitle ->
-                            activeOverlayVideo = Pair(vId, vTitle)
+                        onOpenYouTubeVideo = { videoId, title ->
+                            previewMediaUrl = "https://www.youtube.com/watch?v=$videoId"
+                            previewMediaType = "youtube"
+                            previewMediaTitle = title.ifBlank { "Video de YouTube" }
+                            previewMediaCaption = msg.text.takeIf(String::isNotBlank)
+                            previewMediaThumbnail = msg.mediaThumbnail
+                            val replyText = msg.text.takeIf(String::isNotBlank)?.let { text ->
+                                "💬 @${msg.senderName}: \"${if (text.length > 30) text.take(30) + "..." else text}\"\n"
+                            }
+                            previewMediaReplyAction = replyText?.let { draft ->
+                                {
+                                    viewModel.onChatInputChanged(draft)
+                                    previewMediaUrl = null
+                                    previewMediaType = null
+                                    previewMediaTitle = null
+                                    previewMediaCaption = null
+                                    previewMediaThumbnail = null
+                                    previewMediaReplyAction = null
+                                }
+                            }
                         },
-                        onOpenStandardVideo = { vUrl, vTitle ->
-                            activeStandardVideo = Pair(vUrl, vTitle)
+                        onOpenStandardVideo = { videoUrl, title ->
+                            previewMediaUrl = videoUrl
+                            previewMediaType = "video"
+                            previewMediaTitle = title.ifBlank { "Video" }
+                            previewMediaCaption = msg.text.takeIf(String::isNotBlank)
+                            previewMediaThumbnail = msg.mediaThumbnail
+                            val replyText = msg.text.takeIf(String::isNotBlank)?.let { text ->
+                                "💬 @${msg.senderName}: \"${if (text.length > 30) text.take(30) + "..." else text}\"\n"
+                            }
+                            previewMediaReplyAction = replyText?.let { draft ->
+                                {
+                                    viewModel.onChatInputChanged(draft)
+                                    previewMediaUrl = null
+                                    previewMediaType = null
+                                    previewMediaTitle = null
+                                    previewMediaCaption = null
+                                    previewMediaThumbnail = null
+                                    previewMediaReplyAction = null
+                                }
+                            }
                         }
                     )
                 }
@@ -1826,24 +1888,6 @@ fun ChatScreen(
                 val targetKey = targetMsg.firestoreId.ifBlank { targetMsg.id.toString() }
                 viewModel.retryOrTranslateMessage(targetKey, targetMsg.text, force = true)
             }
-        )
-    }
-
-    // Modal de Reproductor Overlay de YouTube en pantalla del chat
-    if (activeOverlayVideo != null) {
-        YouTubeOverlayPlayerDialog(
-            videoId = activeOverlayVideo!!.first,
-            title = activeOverlayVideo!!.second,
-            onDismiss = { activeOverlayVideo = null }
-        )
-    }
-
-    // Modal de Reproductor de Video Estándar (MP4, WebM, local/remoto) en pantalla del chat
-    if (activeStandardVideo != null) {
-        StandardVideoPlayerDialog(
-            videoUrl = activeStandardVideo!!.first,
-            title = activeStandardVideo!!.second,
-            onDismiss = { activeStandardVideo = null }
         )
     }
 
@@ -2140,109 +2184,57 @@ fun ChatScreen(
         )
     }
 
-    // Modal de visualización ampliada de Multimedia (Fotos, Videos, GIFs)
+    // Visor de pantalla completa dentro del chat para fotos, GIFs y videos.
     if (previewMediaUrl != null) {
-        if (previewMediaType == "video") {
-            StandardVideoPlayerDialog(
-                videoUrl = previewMediaUrl!!,
-                title = "Video adjunto",
-                onDismiss = {
-                    previewMediaUrl = null
-                    previewMediaType = null
-                }
+        val mediaUrl = previewMediaUrl.orEmpty()
+        val mediaTitle = previewMediaTitle ?: "Multimedia"
+        val mediaCaption = previewMediaCaption
+        val dismissPreview = {
+            previewMediaUrl = null
+            previewMediaType = null
+            previewMediaTitle = null
+            previewMediaCaption = null
+            previewMediaThumbnail = null
+            previewMediaReplyAction = null
+        }
+        val savePreview = {
+            downloadChatAttachment(context, mediaUrl, mediaTitle)
+        }
+        val sharePreview = {
+            shareChatAttachment(context, mediaUrl, mediaTitle)
+        }
+        val replyPreview: () -> Unit = {
+            previewMediaReplyAction?.invoke()
+        }
+        when (previewMediaType) {
+            "video" -> ChatVideoViewerDialog(
+                videoUrl = mediaUrl,
+                title = mediaTitle,
+                caption = mediaCaption,
+                onDismiss = dismissPreview,
+                onSave = savePreview,
+                onShare = sharePreview,
+                onReply = replyPreview
             )
-        } else {
-            androidx.compose.ui.window.Dialog(
-                onDismissRequest = {
-                    previewMediaUrl = null
-                    previewMediaType = null
-                },
-                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color(0xFF0F172A),
-                    modifier = Modifier
-                        .fillMaxWidth(0.95f)
-                        .padding(16.dp)
-                        .testTag("dialog_media_preview")
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = when (previewMediaType) {
-                                    "image" -> "📷 Imagen Ampliada"
-                                    "gif" -> "🎭 Animación GIF"
-                                    "sticker" -> "✨ Sticker Animado"
-                                    else -> "Multimedia"
-                                },
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
-                            )
-                            IconButton(
-                                onClick = {
-                                    previewMediaUrl = null
-                                    previewMediaType = null
-                                },
-                                modifier = Modifier.testTag("btn_close_preview_x")
-                            ) {
-                                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF1E293B),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 220.dp, max = 380.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                val safePreviewUrl = remember(previewMediaUrl) {
-                                    previewMediaUrl?.replace("http://", "https://")
-                                }
-                                AsyncImage(
-                                    model = safePreviewUrl,
-                                    contentDescription = "Vista previa multimedia",
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 220.dp, max = 380.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Botón para cerrar la vista previa de la imagen
-                        Button(
-                            onClick = {
-                                previewMediaUrl = null
-                                previewMediaType = null
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("btn_close_media_preview")
-                        ) {
-                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Cerrar Vista Previa", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
+            "youtube" -> ChatYouTubeViewerDialog(
+                videoId = YouTubeClient.extractVideoId(mediaUrl).orEmpty(),
+                title = mediaTitle,
+                caption = mediaCaption,
+                thumbnailUrl = previewMediaThumbnail,
+                onDismiss = dismissPreview,
+                onShare = sharePreview,
+                onReply = replyPreview
+            )
+            else -> ChatImageViewerDialog(
+                imageUrl = mediaUrl,
+                title = mediaTitle,
+                caption = mediaCaption,
+                mediaType = previewMediaType ?: "image",
+                onDismiss = dismissPreview,
+                onSave = savePreview,
+                onShare = sharePreview,
+                onReply = replyPreview
+            )
         }
     }
 
@@ -2345,6 +2337,92 @@ fun ChatScreen(
     }
 }
 
+private fun shareChatAttachment(context: Context, url: String, title: String) {
+    try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+            putExtra(android.content.Intent.EXTRA_TEXT, url)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "Compartir multimedia"))
+    } catch (_: Exception) {
+        android.widget.Toast.makeText(context, "No se pudo compartir este enlace", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun AttachmentDownloadCard(
+    title: String,
+    subtitle: String,
+    testTag: String,
+    onDownload: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF0F172A),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+            .testTag(testTag)
+    ) {
+        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFF475569), modifier = Modifier.size(32.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.AttachFile, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = Color(0xFF94A3B8), fontSize = 10.sp)
+            }
+            TextButton(onClick = onDownload, modifier = Modifier.testTag("btn_download_${testTag.substringAfterLast('_')}")) {
+                Text("Descargar", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+private fun downloadChatAttachment(context: Context, url: String, title: String) {
+    val uri = android.net.Uri.parse(url)
+    if (uri.scheme != "https" && uri.scheme != "http") {
+        android.widget.Toast.makeText(context, "No se puede descargar este enlace", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val request = android.app.DownloadManager.Request(uri)
+            .setTitle(title)
+            .setDescription("Descargando archivo adjunto")
+            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        manager.enqueue(request)
+        android.widget.Toast.makeText(context, "Descarga iniciada", android.widget.Toast.LENGTH_SHORT).show()
+    } catch (_: Exception) {
+        android.widget.Toast.makeText(context, "No se pudo iniciar la descarga", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun YouTubeChatMedia(
+    videoUrl: String,
+    title: String,
+    thumbnailUrl: String?,
+    onOpenYouTubeVideo: (videoId: String, title: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    VideoPlayer(
+        videoUrl = videoUrl,
+        title = title,
+        thumbnailUrl = thumbnailUrl,
+        showActionButtons = false,
+        onLaunchOverlay = { detectedId, detectedTitle ->
+            onOpenYouTubeVideo(detectedId, detectedTitle.ifBlank { title })
+        },
+        onLaunchStandardVideo = { _, _ -> Unit },
+        modifier = modifier
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -2369,7 +2447,7 @@ private fun MessageBubble(
     onStartVideoCall: (peerName: String) -> Unit,
     onStartDirectChat: (peerEmail: String, peerName: String) -> Unit,
     onViewProfile: (peerEmail: String, peerName: String) -> Unit,
-    onOpenYouTubeOverlay: (videoId: String, title: String) -> Unit = { _, _ -> },
+    onOpenYouTubeVideo: (videoId: String, title: String) -> Unit = { _, _ -> },
     onOpenStandardVideo: (videoUrl: String, title: String) -> Unit = { _, _ -> }
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -2683,7 +2761,7 @@ private fun MessageBubble(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
-                                    Text("Toca para abrir en Doc Editor", color = Color(0xFF38BDF8), fontSize = 10.sp)
+                                    Text("Toca para previsualizar en OmniStudio", color = Color(0xFF38BDF8), fontSize = 10.sp)
                                 }
                             }
                         }
@@ -2751,7 +2829,7 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de FOTOS adjuntas
+                    // Las fotos abren el visor de pantalla completa dentro del chat.
                     if (message.mediaType == "image" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Surface(
@@ -2764,11 +2842,7 @@ private fun MessageBubble(
                                 .testTag("msg_image_${message.id}")
                         ) {
                             Column {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(180.dp)
-                                ) {
+                                Box(modifier = Modifier.fillMaxWidth().height(180.dp)) {
                                     AsyncImage(
                                         model = message.mediaUrl,
                                         contentDescription = "Foto compartida",
@@ -2780,41 +2854,21 @@ private fun MessageBubble(
                                         color = Color.Black.copy(alpha = 0.65f),
                                         modifier = Modifier.align(Alignment.TopEnd)
                                     ) {
-                                        Text(
-                                            text = "📷 Toca para ampliar",
-                                            color = Color.White,
-                                            fontSize = 10.sp,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                        )
+                                        Text("📷 Toca para ampliar", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
                                     }
                                 }
-                                // Botón explícito e interactivo para abrir la imagen
-                                Surface(
-                                    color = Color(0xFF1E293B),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
+                                Surface(color = Color(0xFF1E293B), modifier = Modifier.fillMaxWidth()) {
                                     Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = "Imagen adjunta",
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 11.sp
-                                        )
+                                        Text("Imagen adjunta", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         TextButton(
                                             onClick = { onPreviewMedia(message.mediaUrl, "image") },
                                             modifier = Modifier.testTag("btn_view_full_image_${message.id}")
                                         ) {
-                                            Text(
-                                                "Ver imagen",
-                                                color = Color(0xFF38BDF8),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 11.sp
-                                            )
+                                            Text("Ver imagen", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                         }
                                     }
                                 }
@@ -2822,65 +2876,51 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de VIDEOS adjuntos (MP4, WebM, local o remoto)
+                    // YouTube y los demás videos abren su visor interno a pantalla completa.
                     if (message.mediaType == "video" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        VideoPlayer(
-                            videoUrl = message.mediaUrl,
-                            title = if (message.text.isNotBlank() && !message.text.startsWith("🎥 Video")) message.text else "Video",
-                            thumbnailUrl = message.mediaThumbnail,
-                            showActionButtons = true,
-                            onLaunchOverlay = onOpenYouTubeOverlay,
-                            onLaunchStandardVideo = onOpenStandardVideo,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .testTag("msg_video_${message.id}")
-                        )
+                        if (YouTubeClient.extractVideoId(message.mediaUrl) != null) {
+                            YouTubeChatMedia(
+                                videoUrl = message.mediaUrl,
+                                title = if (message.text.isNotBlank() && !message.text.startsWith("🎥 Video")) message.text else "Video de YouTube",
+                                thumbnailUrl = message.mediaThumbnail,
+                                onOpenYouTubeVideo = onOpenYouTubeVideo,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .testTag("msg_video_${message.id}")
+                            )
+                        } else {
+                            VideoPlayer(
+                                videoUrl = message.mediaUrl,
+                                title = if (message.text.isNotBlank() && !message.text.startsWith("🎥 Video")) message.text else "Video",
+                                thumbnailUrl = message.mediaThumbnail,
+                                showActionButtons = false,
+                                onLaunchStandardVideo = { url, title -> onOpenStandardVideo(url, title) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .testTag("msg_video_${message.id}")
+                            )
+                        }
                     }
 
                     // Reproductor/abridor de archivos de música subidos al chat.
+                    // Audio genérico sin reproductor en el chat: ofrecer descarga, sin abrir otra app.
                     if (message.mediaType == "audio" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF0F172A),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                        setDataAndType(android.net.Uri.parse(message.mediaUrl.orEmpty()), "audio/*")
-                                    }
-                                    runCatching { context.startActivity(intent) }
-                                }
-                                .border(1.dp, Color(0xFFA855F7).copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                                .testTag("msg_audio_${message.id}")
-                        ) {
-                            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFF9333EA),
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White)
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = message.text.takeIf { it.isNotBlank() } ?: "Audio adjunto",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text("Toca para reproducir o abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
-                                }
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir audio", tint = Color(0xFFA855F7))
+                        AttachmentDownloadCard(
+                            title = message.text.takeIf(String::isNotBlank) ?: "Audio adjunto",
+                            subtitle = "Archivo de audio • Descargar para guardar",
+                            testTag = "msg_audio_${message.id}",
+                            onDownload = {
+                                downloadChatAttachment(
+                                    context = context,
+                                    url = message.mediaUrl,
+                                    title = message.text.takeIf(String::isNotBlank) ?: "Audio adjunto"
+                                )
                             }
-                        }
+                        )
                     }
 
                     // Renderizado de GIFs y Stickers animados
@@ -2921,15 +2961,14 @@ private fun MessageBubble(
                         }
                     }
 
-                    // Renderizado de Videos de YOUTUBE interactivos con YouTube API y VideoPlayer
+                    // YouTube se abre en el visor de pantalla completa dentro de OmniStudio.
                     if (message.mediaType == "youtube" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        VideoPlayer(
+                        YouTubeChatMedia(
                             videoUrl = message.mediaUrl,
                             title = if (message.text.isNotBlank() && !message.text.startsWith("▶️ Video de YouTube")) message.text else "Video de YouTube",
                             thumbnailUrl = message.mediaThumbnail,
-                            onLaunchOverlay = onOpenYouTubeOverlay,
-                            onLaunchStandardVideo = onOpenStandardVideo,
+                            onOpenYouTubeVideo = onOpenYouTubeVideo,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("msg_youtube_${message.id}")
@@ -2996,67 +3035,51 @@ private fun MessageBubble(
                     // Renderizado de DOCUMENTOS (Archivos genéricos subidos o videos detectados automáticamente)
                     if (message.mediaType == "document" && !message.mediaUrl.isNullOrBlank()) {
                         val urlAndText = "${message.mediaUrl} ${message.text} ${message.attachedDocTitle.orEmpty()}".lowercase()
-                        val isDetectedVideo = urlAndText.contains(".mp4") || urlAndText.contains(".mov") ||
+                        val isDetectedVideo = YouTubeClient.extractVideoId(message.mediaUrl) != null ||
+                                urlAndText.contains(".mp4") || urlAndText.contains(".mov") ||
                                 urlAndText.contains(".mkv") || urlAndText.contains(".webm") ||
                                 urlAndText.contains(".avi") || urlAndText.contains(".3gp") || urlAndText.contains(".m4v")
 
                         if (isDetectedVideo) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            VideoPlayer(
-                                videoUrl = message.mediaUrl,
-                                title = if (message.text.isNotBlank() && !message.text.startsWith("📄")) message.text else "Video detectado",
-                                thumbnailUrl = message.mediaThumbnail,
-                                showActionButtons = true,
-                                onLaunchOverlay = onOpenYouTubeOverlay,
-                                onLaunchStandardVideo = onOpenStandardVideo,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .testTag("msg_video_doc_${message.id}")
-                            )
+                            if (YouTubeClient.extractVideoId(message.mediaUrl) != null) {
+                                YouTubeChatMedia(
+                                    videoUrl = message.mediaUrl,
+                                    title = if (message.text.isNotBlank() && !message.text.startsWith("📄")) message.text else "Video de YouTube",
+                                    thumbnailUrl = message.mediaThumbnail,
+                                    onOpenYouTubeVideo = onOpenYouTubeVideo,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .testTag("msg_video_doc_${message.id}")
+                                )
+                            } else {
+                                VideoPlayer(
+                                    videoUrl = message.mediaUrl,
+                                    title = if (message.text.isNotBlank() && !message.text.startsWith("📄")) message.text else "Video detectado",
+                                    thumbnailUrl = message.mediaThumbnail,
+                                    showActionButtons = false,
+                                    onLaunchStandardVideo = { url, title -> onOpenStandardVideo(url, title) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .testTag("msg_video_doc_${message.id}")
+                                )
+                            }
                         } else {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF0F172A),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
-                                        intent.data = android.net.Uri.parse(message.mediaUrl)
-                                        context.startActivity(intent)
-                                    }
-                                    .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                            ) {
-                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = Color(0xFF475569),
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                Icons.Default.AttachFile,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text("Toca para descargar/abrir", color = Color(0xFF94A3B8), fontSize = 10.sp)
-                                    }
+                            AttachmentDownloadCard(
+                                title = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
+                                subtitle = "Vista previa no disponible • Descargar para guardar",
+                                testTag = "msg_document_${message.id}",
+                                onDownload = {
+                                    downloadChatAttachment(
+                                        context = context,
+                                        url = message.mediaUrl,
+                                        title = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto"
+                                    )
                                 }
-                            }
+                            )
                         }
                     }
 
