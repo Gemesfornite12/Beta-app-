@@ -5,12 +5,17 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
 import android.widget.Toast
+import android.widget.FrameLayout
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
@@ -102,6 +107,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlin.math.roundToInt
 import coil.compose.AsyncImage
 import com.example.data.youtube.YouTubeClient
 import kotlinx.coroutines.delay
@@ -115,6 +121,31 @@ private fun formatMillisToTime(millis: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%02d:%02d", minutes, seconds)
+}
+
+
+internal data class FittedVideoSize(val width: Int, val height: Int)
+
+/** Fits portrait or landscape video inside a viewport without cropping or distorting it. */
+internal fun fitVideoIntoBounds(videoWidth: Int, videoHeight: Int, boundsWidth: Int, boundsHeight: Int): FittedVideoSize {
+    if (boundsWidth <= 0 || boundsHeight <= 0) return FittedVideoSize(0, 0)
+    val sourceWidth = videoWidth.takeIf { it > 0 } ?: 16
+    val sourceHeight = videoHeight.takeIf { it > 0 } ?: 9
+    val scale = minOf(boundsWidth.toFloat() / sourceWidth, boundsHeight.toFloat() / sourceHeight)
+    return FittedVideoSize(
+        width = (sourceWidth * scale).roundToInt().coerceIn(1, boundsWidth),
+        height = (sourceHeight * scale).roundToInt().coerceIn(1, boundsHeight)
+    )
+}
+
+/** VideoView otherwise sits in a fixed 16:9 Compose box; measure it to the source ratio inside the full viewer. */
+private class AspectFitVideoView(context: Context) : VideoView(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val boundsWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val boundsHeight = MeasureSpec.getSize(heightMeasureSpec)
+        val fitted = fitVideoIntoBounds(videoWidth, videoHeight, boundsWidth, boundsHeight)
+        setMeasuredDimension(fitted.width, fitted.height)
+    }
 }
 
 /**
@@ -1100,11 +1131,7 @@ fun ChatVideoViewerDialog(
                     if (errorMessage == null) {
                         AndroidView(
                             factory = { ctx ->
-                                VideoView(ctx).apply {
-                                    layoutParams = ViewGroup.LayoutParams(
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                    )
+                                val fittedVideo = AspectFitVideoView(ctx).apply {
                                     val controller = MediaController(ctx)
                                     controller.setAnchorView(this)
                                     setMediaController(controller)
@@ -1125,8 +1152,19 @@ fun ChatVideoViewerDialog(
                                     }
                                     videoViewRef = this
                                 }
+                                FrameLayout(ctx).apply {
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                    addView(
+                                        fittedVideo,
+                                        FrameLayout.LayoutParams(
+                                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                                            Gravity.CENTER
+                                        )
+                                    )
+                                }
                             },
-                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                            modifier = Modifier.fillMaxSize().testTag("chat_video_surface")
                         )
                         if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(38.dp))
                     } else {
@@ -1275,8 +1313,20 @@ fun ChatImageViewerDialog(
 }
 
 /** Builds a YouTube embed URL configured to stay in the app's WebView. */
-internal fun buildYouTubeEmbedUrl(videoId: String): String =
-    "https://www.youtube.com/embed/$videoId?autoplay=1&playsinline=1&controls=1&rel=0&modestbranding=1&enablejsapi=1"
+private const val YOUTUBE_APP_ORIGIN = "https://costalso2029.dpdns.org"
+
+internal fun buildYouTubeEmbedUrl(videoId: String, origin: String = YOUTUBE_APP_ORIGIN): String =
+    "https://www.youtube.com/embed/$videoId?autoplay=0&playsinline=1&controls=1&rel=0&modestbranding=1&enablejsapi=1&origin=${Uri.encode(origin)}"
+
+internal fun youtubePlayerErrorMessage(rawCode: String): String = when (rawCode.substringBefore('-').toIntOrNull()) {
+    2 -> "YouTube recibió un identificador de video no válido (error $rawCode)."
+    5 -> "El reproductor HTML5 no pudo reproducir este video (error $rawCode)."
+    100 -> "El video fue eliminado, es privado o no está disponible (error $rawCode)."
+    101, 150 -> "El propietario no permite reproducir este video dentro de otras apps (error $rawCode)."
+    152 -> "YouTube indicó que este video no está disponible en el reproductor incrustado (error $rawCode). No se abrirá otra app ni se evitará la restricción."
+    153 -> "YouTube rechazó la solicitud porque no recibió un Referer válido (error $rawCode)."
+    else -> "YouTube no pudo reproducir este video en el visor incrustado (error $rawCode). No se abrió otra app."
+}
 
 /** Full-screen YouTube player for chat messages; the WebView is created only after the thumbnail is tapped. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -1293,6 +1343,10 @@ fun ChatYouTubeViewerDialog(
     val context = LocalContext.current
     val videoUrl = remember(videoId) { "https://www.youtube.com/watch?v=$videoId" }
     var isLoading by remember(videoId) { mutableStateOf(true) }
+    var isPlayerReady by remember(videoId) { mutableStateOf(false) }
+    var hasStarted by remember(videoId) { mutableStateOf(false) }
+    var playerError by remember(videoId) { mutableStateOf<String?>(null) }
+    var isWebFullscreen by remember(videoId) { mutableStateOf(false) }
     var showMediaMenu by remember { mutableStateOf(false) }
     var webViewRef by remember(videoId) { mutableStateOf<WebView?>(null) }
     val posterUrl = remember(videoId, thumbnailUrl) {
@@ -1304,6 +1358,7 @@ fun ChatYouTubeViewerDialog(
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="referrer" content="origin">
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; }
                 html, body, #player { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -1311,16 +1366,41 @@ fun ChatYouTubeViewerDialog(
             </style>
         </head>
         <body>
-            <div id="player">
-                <iframe src="${buildYouTubeEmbedUrl(videoId)}"
-                    title="YouTube video player"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowfullscreen>
-                </iframe>
-            </div>
+            <div id="player"></div>
+            <script>
+                window.omniPlayer = null;
+                window.onYouTubeIframeAPIReady = function() {
+                    window.omniPlayer = new YT.Player('player', {
+                        videoId: '$videoId',
+                        playerVars: {
+                            autoplay: 0,
+                            playsinline: 1,
+                            controls: 1,
+                            rel: 0,
+                            modestbranding: 1,
+                            enablejsapi: 1,
+                            origin: '$YOUTUBE_APP_ORIGIN'
+                        },
+                        events: {
+                            onReady: function() { console.log('omnistudio-player-ready'); },
+                            onError: function(event) { console.log('omnistudio-player-error:' + event.data); },
+                            onStateChange: function(event) { console.log('omnistudio-player-state:' + event.data); }
+                        }
+                    });
+                };
+            </script>
+            <script src="https://www.youtube.com/iframe_api"></script>
         </body>
         </html>
         """.trimIndent()
+    }
+
+    LaunchedEffect(videoId, isPlayerReady, playerError) {
+        delay(20_000L)
+        if (!isPlayerReady && playerError == null) {
+            isLoading = false
+            playerError = "El reproductor incrustado de YouTube no terminó de inicializarse. Revisa la conexión o la versión de Android System WebView."
+        }
     }
 
     Dialog(
@@ -1328,12 +1408,178 @@ fun ChatYouTubeViewerDialog(
         properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
     ) {
         Surface(color = Color.Black, modifier = Modifier.fillMaxSize().testTag("chat_youtube_viewer")) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
+            // WebView owns the full dialog canvas; chrome floats over it instead of shrinking the player to 16:9.
+            Box(modifier = Modifier.fillMaxSize()) {
+                AndroidView(
+                    factory = { ctx ->
+                        val host = FrameLayout(ctx).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+                        var customView: View? = null
+                        var customViewCallback: WebChromeClient.CustomViewCallback? = null
+                        val webView = WebView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            settings.cacheMode = WebSettings.LOAD_DEFAULT
+                            settings.javaScriptCanOpenWindowsAutomatically = false
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                                    val message = consoleMessage.message()
+                                    when {
+                                        message == "omnistudio-player-ready" -> {
+                                            isPlayerReady = true
+                                            isLoading = false
+                                            playerError = null
+                                        }
+                                        message.startsWith("omnistudio-player-error:") -> {
+                                            val code = message.substringAfter(':').trim().take(24).ifBlank { "desconocido" }
+                                            playerError = youtubePlayerErrorMessage(code)
+                                            isLoading = false
+                                        }
+                                        message.startsWith("omnistudio-player-state:") -> {
+                                            when (message.substringAfter(':').toIntOrNull()) {
+                                                1 -> { hasStarted = true; isLoading = false; playerError = null }
+                                                2, 0 -> isLoading = false
+                                                3 -> isLoading = true
+                                            }
+                                        }
+                                    }
+                                    return if (message.startsWith("omnistudio-player-")) true else super.onConsoleMessage(consoleMessage)
+                                }
+
+                                override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+                                    if (customView != null) {
+                                        callback.onCustomViewHidden()
+                                        return
+                                    }
+                                    customView = view
+                                    customViewCallback = callback
+                                    isWebFullscreen = true
+                                    host.addView(
+                                        view,
+                                        FrameLayout.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                    )
+                                    this@apply.visibility = View.GONE
+                                }
+
+                                override fun onHideCustomView() {
+                                    customView?.let(host::removeView)
+                                    customView = null
+                                    this@apply.visibility = View.VISIBLE
+                                    isWebFullscreen = false
+                                    customViewCallback?.onCustomViewHidden()
+                                    customViewCallback = null
+                                }
+                            }
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
+                                    val uri = request.url
+                                    val hostName = uri.host.orEmpty().lowercase()
+                                    val path = uri.path.orEmpty()
+                                    val youtubeHost = hostName == "youtube.com" || hostName.endsWith(".youtube.com")
+                                    val watchPage = youtubeHost && (
+                                        hostName == "m.youtube.com" || path == "/watch" ||
+                                            path.startsWith("/shorts/") || path.startsWith("/live/")
+                                        )
+                                    if (watchPage) {
+                                        playerError = "YouTube indicó que este video no está disponible en el reproductor incrustado. No se abrió m.youtube.com ni otra app."
+                                        isLoading = false
+                                        return true
+                                    }
+                                    if (uri.scheme != "https" && uri.scheme != "http") return true
+                                    val appHost = YOUTUBE_APP_ORIGIN.removePrefix("https://").substringBefore('/')
+                                    if (request.isForMainFrame && hostName != appHost) return true
+                                    return false
+                                }
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                }
+                            }
+                        }
+                        host.addView(
+                            webView,
+                            FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                        webView.loadDataWithBaseURL("$YOUTUBE_APP_ORIGIN/", embedHtml, "text/html", "UTF-8", null)
+                        webViewRef = webView
+                        host
+                    },
+                    modifier = Modifier.fillMaxSize().testTag("webview_youtube_player")
+                )
+
+                if (playerError != null) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).fillMaxWidth().background(Color.Black.copy(alpha = 0.86f)).padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(playerError.orEmpty(), color = Color.White, fontSize = 14.sp)
+                        TextButton(
+                            onClick = {
+                                playerError = null
+                                isPlayerReady = false
+                                hasStarted = false
+                                isLoading = true
+                                webViewRef?.reload()
+                            },
+                            modifier = Modifier.testTag("btn_retry_youtube_viewer")
+                        ) { Text("Reintentar", color = Color(0xFF93C5FD)) }
+                    }
+                } else if (!hasStarted) {
+                    AsyncImage(
+                        model = posterUrl,
+                        contentDescription = "Miniatura de $title",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().background(Color.Black)
+                    )
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .clickable(enabled = isPlayerReady) {
+                                hasStarted = true
+                                isLoading = true
+                                webViewRef?.evaluateJavascript("window.omniPlayer && window.omniPlayer.playVideo();", null)
+                            }
+                            .testTag("btn_start_youtube_viewer"),
+                        shape = CircleShape,
+                        color = Color(0xFFDC2626).copy(alpha = if (isPlayerReady) 0.95f else 0.55f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir en YouTube", tint = Color.White, modifier = Modifier.size(42.dp))
+                        }
+                    }
+                    if (isLoading) {
+                        Text(
+                            "Preparando reproductor incrustado…",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            modifier = Modifier.align(Alignment.Center).padding(top = 94.dp)
+                        )
+                    }
+                } else if (isLoading) {
+                    CircularProgressIndicator(color = Color(0xFFFF0000), modifier = Modifier.align(Alignment.Center).size(36.dp))
+                }
+
+                if (!isWebFullscreen) Row(
                     modifier = Modifier
+                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .background(Color(0xFF111111))
+                        .background(Color.Black.copy(alpha = 0.68f))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1342,7 +1588,7 @@ fun ChatYouTubeViewerDialog(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("YouTube • Reproduciendo en OmniStudio", color = Color(0xFF9CA3AF), fontSize = 10.sp)
+                        Text("YouTube • Reproducción en OmniStudio", color = Color(0xFF9CA3AF), fontSize = 10.sp)
                     }
                     IconButton(onClick = onShare, modifier = Modifier.size(40.dp).testTag("btn_share_youtube_viewer")) {
                         Icon(Icons.Default.Share, contentDescription = "Compartir video", tint = Color.White)
@@ -1367,67 +1613,18 @@ fun ChatYouTubeViewerDialog(
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
+                if (!isWebFullscreen) Surface(
+                    color = Color.Black.copy(alpha = 0.68f),
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                            .background(Color.Black),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AsyncImage(
-                            model = posterUrl,
-                            contentDescription = "Miniatura de $title",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    layoutParams = ViewGroup.LayoutParams(
-                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                    )
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.mediaPlaybackRequiresUserGesture = false
-                                    settings.loadWithOverviewMode = true
-                                    settings.useWideViewPort = true
-                                    settings.cacheMode = WebSettings.LOAD_DEFAULT
-                                    webChromeClient = WebChromeClient()
-                                    webViewClient = object : WebViewClient() {
-                                        override fun onPageFinished(view: WebView?, url: String?) {
-                                            super.onPageFinished(view, url)
-                                            isLoading = false
-                                        }
-                                    }
-                                    loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "UTF-8", null)
-                                    webViewRef = this
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        if (isLoading) {
-                            CircularProgressIndicator(color = Color(0xFFFF0000), modifier = Modifier.size(36.dp))
-                        }
-                    }
-                }
-
-                Surface(color = Color(0xFF111111), modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(caption?.takeIf(String::isNotBlank) ?: title, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        Text(caption?.takeIf(String::isNotBlank) ?: title, color = Color.White, fontSize = 13.sp, maxLines = 2, modifier = Modifier.weight(1f))
                         TextButton(onClick = onReply, modifier = Modifier.testTag("btn_reply_youtube_viewer")) {
                             Text("Responder", color = Color(0xFF93C5FD), fontSize = 12.sp)
                         }
@@ -1449,5 +1646,6 @@ fun ChatYouTubeViewerDialog(
         }
     }
 }
+
 
 

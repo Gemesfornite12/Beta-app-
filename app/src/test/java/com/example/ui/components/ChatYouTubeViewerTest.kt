@@ -12,9 +12,28 @@ class ChatYouTubeViewerTest {
         val url = buildYouTubeEmbedUrl("dQw4w9WgXcQ")
 
         assertTrue(url.startsWith("https://www.youtube.com/embed/dQw4w9WgXcQ?"))
-        assertTrue(url.contains("autoplay=1"))
+        assertTrue(url.contains("autoplay=0"))
+        assertTrue(url.contains("origin=https%3A%2F%2Fcostalso2029.dpdns.org"))
         assertTrue(url.contains("playsinline=1"))
         assertFalse(url.startsWith("intent://"))
+    }
+
+    @Test
+    fun nonEmbeddableYouTubeErrorIsShownInAppWithoutExternalFallback() {
+        val message = youtubePlayerErrorMessage("152-4")
+        assertTrue(message.contains("no está disponible"))
+        assertTrue(message.contains("No se abrirá otra app"))
+    }
+
+    @Test
+    fun portraitAndLandscapeVideosFitAvailableBoundsWithoutCroppingOrStretching() {
+        val portrait = fitVideoIntoBounds(videoWidth = 720, videoHeight = 1280, boundsWidth = 1080, boundsHeight = 1800)
+        assertEquals(1013, portrait.width)
+        assertEquals(1800, portrait.height)
+
+        val landscape = fitVideoIntoBounds(videoWidth = 1920, videoHeight = 1080, boundsWidth = 1080, boundsHeight = 1800)
+        assertEquals(1080, landscape.width)
+        assertEquals(608, landscape.height)
     }
 
     @Test
