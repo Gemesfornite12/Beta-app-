@@ -73,6 +73,7 @@ import com.example.ui.components.MessageReactionMenuDialog
 import com.example.ui.components.MessageReactionsRow
 import com.example.ui.components.ChatVideoViewerDialog
 import com.example.ui.components.ChatYouTubeViewerDialog
+import com.example.ui.components.ChatFilePreviewDialog
 import com.example.ui.components.VideoPlayer
 import com.example.data.youtube.YouTubeClient
 import androidx.compose.material.icons.filled.Videocam
@@ -210,6 +211,9 @@ fun ChatScreen(
     var previewMediaCaption by remember { mutableStateOf<String?>(null) }
     var previewMediaThumbnail by remember { mutableStateOf<String?>(null) }
     var previewMediaReplyAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var previewFileUrl by remember { mutableStateOf<String?>(null) }
+    var previewFileTitle by remember { mutableStateOf<String?>(null) }
+    var previewDocument by remember { mutableStateOf<DocumentItem?>(null) }
     var selectedMessageForStatus by remember { mutableStateOf<ChatMessage?>(null) }
 
     // Estados para adjuntos pendientes (pre-envío) que el usuario puede revisar o borrar
@@ -1747,12 +1751,16 @@ fun ChatScreen(
                         onDelete = { messageToDelete = msg },
                         onShowDeliveryStatus = { selectedMessageForStatus = it },
                         onOpenAttachedDoc = { docId ->
-                            val doc = allDocs.firstOrNull { it.id == docId }
-                            if (doc != null) onOpenDoc(doc)
+                            previewDocument = allDocs.firstOrNull { it.id == docId }
                         },
                         onOpenAttachedAudio = { audioId ->
                             val audio = allAudio.firstOrNull { it.id == audioId }
                             if (audio != null) onOpenAudio(audio)
+                        },
+                        onPreviewFile = { url, title ->
+                            previewFileUrl = url
+                            previewFileTitle = title.ifBlank { "Archivo adjunto" }
+                            previewDocument = null
                         },
                         onPreviewMedia = { url, type ->
                             previewMediaUrl = url
@@ -2238,6 +2246,22 @@ fun ChatScreen(
         }
     }
 
+    if (previewDocument != null || previewFileUrl != null) {
+        val documentToPreview = previewDocument
+        val previewTitle = previewFileTitle ?: documentToPreview?.title ?: "Archivo adjunto"
+        ChatFilePreviewDialog(
+            fileName = previewTitle,
+            url = previewFileUrl,
+            document = documentToPreview,
+            onDismiss = {
+                previewFileUrl = null
+                previewFileTitle = null
+                previewDocument = null
+            },
+            onDownload = { url, title -> downloadChatAttachment(context, url, title) }
+        )
+    }
+
     if (showChatNotificationPrefsDialog) {
         val currentPref = channelNotificationPrefs[currentChannel] ?: ChannelNotificationPreference(currentChannel)
         AlertDialog(
@@ -2355,13 +2379,15 @@ private fun AttachmentDownloadCard(
     title: String,
     subtitle: String,
     testTag: String,
-    onDownload: () -> Unit
+    onDownload: () -> Unit,
+    onPreview: (() -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = Color(0xFF0F172A),
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(enabled = onPreview != null) { onPreview?.invoke() }
             .border(1.dp, Color(0xFF64748B).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
             .testTag(testTag)
     ) {
@@ -2442,6 +2468,7 @@ private fun MessageBubble(
     onShowDeliveryStatus: (ChatMessage) -> Unit = {},
     onOpenAttachedDoc: (Long) -> Unit,
     onOpenAttachedAudio: (Long) -> Unit,
+    onPreviewFile: (url: String, title: String) -> Unit,
     onPreviewMedia: (url: String, type: String) -> Unit,
     onStartVoiceCall: (peerName: String) -> Unit,
     onStartVideoCall: (peerName: String) -> Unit,
@@ -3068,17 +3095,21 @@ private fun MessageBubble(
                             }
                         } else {
                             Spacer(modifier = Modifier.height(8.dp))
+                            val attachmentTitle = message.attachedDocTitle
+                                ?: message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" }
+                                ?: message.mediaUrl.substringAfterLast('/').substringBefore('?').ifBlank { "Archivo adjunto" }
                             AttachmentDownloadCard(
-                                title = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto",
-                                subtitle = "Vista previa no disponible • Descargar para guardar",
+                                title = attachmentTitle,
+                                subtitle = "Toca para vista previa en OmniStudio • Descargar para guardar",
                                 testTag = "msg_document_${message.id}",
                                 onDownload = {
                                     downloadChatAttachment(
                                         context = context,
                                         url = message.mediaUrl,
-                                        title = message.text.takeIf { it.isNotBlank() && it != "📄 Archivo adjunto" } ?: "Archivo adjunto"
+                                        title = attachmentTitle
                                     )
-                                }
+                                },
+                                onPreview = { onPreviewFile(message.mediaUrl, attachmentTitle) }
                             )
                         }
                     }
@@ -3476,3 +3507,4 @@ private fun TimelineItem(
         }
     }
 }
+
