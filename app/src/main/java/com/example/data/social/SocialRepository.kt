@@ -30,6 +30,12 @@ data class SocialProfile(
     val isPrivate: Boolean get() = visibility != "public"
 }
 
+data class SocialPostMedia(
+    val mediaPath: String = "",
+    val mediaType: String = "image",
+    val mimeType: String = ""
+)
+
 data class SocialPost(
     val id: String = "",
     val ownerUid: String = "",
@@ -41,8 +47,20 @@ data class SocialPost(
     val topics: List<String> = emptyList(),
     val mediaPath: String = "",
     val mediaType: String = "text",
-    val mediaUrl: String = ""
-)
+    val mediaUrl: String = "",
+    val mediaItems: List<SocialPostMedia> = emptyList()
+) {
+    val containsVideo: Boolean get() = mediaType == "video" || mediaItems.any { it.mediaType == "video" }
+}
+
+/** Keeps Social uploads aligned with the existing private bucket's server allowlist. */
+internal fun supportedSocialMediaType(mimeType: String): String? = when (mimeType.substringBefore(';').trim().lowercase()) {
+    "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif" -> "image"
+    "video/mp4", "video/quicktime", "video/webm", "video/3gpp", "video/x-m4v" -> "video"
+    else -> null
+}
+
+data class SocialMediaUpload(val uri: android.net.Uri, val mimeType: String)
 
 internal object SocialInteractionPaths {
     fun comments(ownerUid: String, postId: String): String = "comments/$ownerUid/$postId"
@@ -315,38 +333,55 @@ class SocialRepository(context: Context) {
         caption: String,
         uri: android.net.Uri,
         mimeType: String
+    ): SocialPost = createMediaPost(profile, caption, listOf(SocialMediaUpload(uri, mimeType)))
+
+    suspend fun createMediaPost(
+        profile: SocialProfile,
+        caption: String,
+        uploads: List<SocialMediaUpload>
     ): SocialPost {
         val uid = currentUid()
         require(uid == profile.uid) { "El perfil actual no coincide con la sesión." }
+        require(uploads.isNotEmpty() && uploads.size <= 10) { "Selecciona entre 1 y 10 fotos o videos." }
+        val kinds = uploads.map { supportedSocialMediaType(it.mimeType) }
+        require(kinds.all { it != null }) { "Social admite fotos, GIFs y videos compatibles; no admite documentos." }
         val cleanCaption = caption.trim().take(2200)
-        val mediaPath = mediaService.upload(uri, "post", mimeType)
-        val postRef = root.child("postsByUser").child(uid).push()
-        val postId = postRef.key ?: error("No se pudo crear el identificador de la publicación.")
-        val mediaType = if (mimeType.startsWith("video/")) "video" else "image"
-        val post = SocialPost(
-            id = postId,
-            ownerUid = uid,
-            username = profile.username,
-            displayName = profile.displayName,
-            avatarUrl = profile.avatarUrl,
-            caption = cleanCaption,
-            createdAt = System.currentTimeMillis(),
-            topics = extractTopics(cleanCaption),
-            mediaPath = mediaPath,
-            mediaType = mediaType
-        )
+        val uploadedPaths = mutableListOf<String>()
         try {
+            val mediaItems = uploads.mapIndexed { index, upload ->
+                val path = mediaService.upload(upload.uri, "post", upload.mimeType)
+                uploadedPaths += path
+                SocialPostMedia(path, kinds[index]!!, upload.mimeType.substringBefore(';').trim().lowercase())
+            }
+            val postRef = root.child("postsByUser").child(uid).push()
+            val postId = postRef.key ?: error("No se pudo crear el identificador de la publicación.")
+            // Keep the legacy mediaPath/mediaType pointed at a video when the
+            // carousel contains one, so existing video-feed/save rules still work.
+            val primary = mediaItems.firstOrNull { it.mediaType == "video" } ?: mediaItems.first()
+            val post = SocialPost(
+                id = postId,
+                ownerUid = uid,
+                username = profile.username,
+                displayName = profile.displayName,
+                avatarUrl = profile.avatarUrl,
+                caption = cleanCaption,
+                createdAt = System.currentTimeMillis(),
+                topics = extractTopics(cleanCaption),
+                mediaPath = primary.mediaPath,
+                mediaType = primary.mediaType,
+                mediaItems = mediaItems
+            )
             postRef.setValue(post.toMap()).await()
             if (!profile.isPrivate) {
                 root.child("publicFeed").child(publicFeedKey(uid, postId)).setValue(post.toMap()).await()
             }
+            FirebaseAnalyticsManager.logSocialEvent(appContext, "social_post_created")
+            requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
+            return post
         } catch (error: Exception) {
-            runCatching { mediaService.delete(mediaPath) }
+            uploadedPaths.forEach { path -> runCatching { mediaService.delete(path) } }
             throw error
         }
-        FirebaseAnalyticsManager.logSocialEvent(appContext, "social_post_created")
-        requestSocialPush { SupabaseSocialPushService.publishedPost(postId) }
-        return post
     }
 
     suspend fun createStory(profile: SocialProfile, uri: android.net.Uri, mimeType: String): SocialStory {
@@ -464,7 +499,7 @@ class SocialRepository(context: Context) {
 
     suspend fun setVideoSaved(post: SocialPost, saved: Boolean) {
         val uid = currentUid()
-        require(post.mediaType == "video") { "Solo se pueden guardar videos." }
+        require(post.containsVideo) { "Solo se pueden guardar videos." }
         val savedRef = root.child(SocialInteractionPaths.savedVideo(uid, post.ownerUid, post.id))
         if (saved) {
             savedRef.setValue(
@@ -491,7 +526,7 @@ class SocialRepository(context: Context) {
                 val post = runCatching {
                     root.child("postsByUser").child(ownerUid).child(postId).get().await().toSocialPost()
                 }.getOrNull()
-                if (post?.mediaType == "video") posts += savedAt to post
+                if (post?.containsVideo == true) posts += savedAt to post
             }
         }
         return posts.sortedByDescending { it.first }.map { it.second }
@@ -667,7 +702,7 @@ class SocialRepository(context: Context) {
         "createdAt" to createdAt
     )
 
-    private fun SocialPost.toMap(): Map<String, Any?> = mapOf(
+    private fun SocialPost.toMap(): Map<String, Any?> = mutableMapOf<String, Any?>(
         "id" to id,
         "ownerUid" to ownerUid,
         "username" to username,
@@ -678,7 +713,13 @@ class SocialRepository(context: Context) {
         "topics" to topics.associateWith { true },
         "mediaPath" to mediaPath,
         "mediaType" to mediaType
-    )
+    ).apply {
+        if (mediaItems.isNotEmpty()) {
+            this["mediaItems"] = mediaItems.map { item ->
+                mapOf("mediaPath" to item.mediaPath, "mediaType" to item.mediaType, "mimeType" to item.mimeType)
+            }
+        }
+    }
 
     private fun SocialStory.toMap(): Map<String, Any?> = mapOf(
         "id" to id,
@@ -729,6 +770,19 @@ class SocialRepository(context: Context) {
         val id = child("id").getValue(String::class.java) ?: key.orEmpty()
         if (ownerUid.isBlank() || id.isBlank()) return null
         val topics = child("topics").children.mapNotNull { it.key }
+        val legacyPath = child("mediaPath").getValue(String::class.java).orEmpty()
+        val legacyType = child("mediaType").getValue(String::class.java) ?: "text"
+        val storedMediaItems = child("mediaItems").children.mapNotNull { item ->
+            val path = item.child("mediaPath").getValue(String::class.java).orEmpty()
+            if (path.isBlank()) null else SocialPostMedia(
+                mediaPath = path,
+                mediaType = item.child("mediaType").getValue(String::class.java) ?: "image",
+                mimeType = item.child("mimeType").getValue(String::class.java).orEmpty()
+            )
+        }
+        val mediaItems = storedMediaItems.ifEmpty {
+            if (legacyPath.isBlank()) emptyList() else listOf(SocialPostMedia(legacyPath, legacyType))
+        }
         return SocialPost(
             id = id,
             ownerUid = ownerUid,
@@ -738,8 +792,9 @@ class SocialRepository(context: Context) {
             caption = child("caption").getValue(String::class.java).orEmpty(),
             createdAt = child("createdAt").getValue(Long::class.java) ?: 0L,
             topics = topics,
-            mediaPath = child("mediaPath").getValue(String::class.java).orEmpty(),
-            mediaType = child("mediaType").getValue(String::class.java) ?: "text"
+            mediaPath = legacyPath,
+            mediaType = legacyType,
+            mediaItems = mediaItems
         )
     }
 }

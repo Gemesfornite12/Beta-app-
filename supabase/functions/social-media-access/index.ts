@@ -28,7 +28,17 @@ const supportedTypes: Record<string, { extension: string; kind: "image" | "video
 };
 
 type IdentityLookupResponse = { users?: Array<{ localId?: string }> };
-type SocialMediaRecord = { ownerUid?: string; mediaPath?: string; expiresAt?: number };
+type SocialMediaRecord = {
+  ownerUid?: string;
+  mediaPath?: string;
+  mediaItems?: Array<{ mediaPath?: string }>;
+  expiresAt?: number;
+};
+
+function recordContainsMediaPath(record: SocialMediaRecord, mediaPath: string): boolean {
+  return record.mediaPath === mediaPath ||
+    (Array.isArray(record.mediaItems) && record.mediaItems.some((item) => item?.mediaPath === mediaPath));
+}
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -86,7 +96,7 @@ async function visibleRecord(
   const response = await fetch(url);
   if (!response.ok) return null;
   const record = (await response.json()) as SocialMediaRecord | null;
-  if (!record || record.ownerUid !== ownerUid || typeof record.mediaPath !== "string") return null;
+  if (!record || record.ownerUid !== ownerUid) return null;
   if (entityType === "story" && (typeof record.expiresAt !== "number" || record.expiresAt <= Date.now())) return null;
   return record;
 }
@@ -157,7 +167,9 @@ Deno.serve(async (request) => {
     } catch {
       return jsonResponse({ error: "Could not verify social media access" }, 502);
     }
-    if (!record || record.mediaPath !== storagePath) return jsonResponse({ error: "Media is unavailable or private" }, 403);
+    if (!record || !recordContainsMediaPath(record, storagePath)) {
+      return jsonResponse({ error: "Media is unavailable or private" }, 403);
+    }
 
     const { data, error } = await storage.createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
     if (error || !data?.signedUrl) {

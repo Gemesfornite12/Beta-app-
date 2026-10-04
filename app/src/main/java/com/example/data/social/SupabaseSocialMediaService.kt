@@ -39,7 +39,8 @@ class SupabaseSocialMediaService(context: Context) {
 
     suspend fun upload(uri: Uri, entityType: String, mimeType: String): String = withContext(Dispatchers.IO) {
         require(entityType == "post" || entityType == "story") { "Tipo de publicación no válido." }
-        require(mimeType.startsWith("image/") || mimeType.startsWith("video/")) { "Solo se aceptan fotos y videos." }
+        val normalizedMimeType = mimeType.substringBefore(';').trim().lowercase()
+        require(supportedSocialMediaType(normalizedMimeType) != null) { "El formato no está permitido para publicaciones de Social." }
         val user = auth.currentUser ?: error("Inicia sesión para subir contenido.")
         val idToken = user.getIdToken(false).await().token ?: error("No se pudo verificar la sesión.")
         val tempFile = copyToTempFile(uri)
@@ -50,7 +51,7 @@ class SupabaseSocialMediaService(context: Context) {
                 JSONObject()
                     .put("action", "create-upload")
                     .put("entityType", entityType)
-                    .put("mimeType", mimeType.lowercase())
+                    .put("mimeType", normalizedMimeType)
             )
             val signedUrl = normalizeUrl(prepared.optString("signedUrl"))
             val storagePath = prepared.optString("storagePath")
@@ -59,8 +60,8 @@ class SupabaseSocialMediaService(context: Context) {
             val uploadRequest = Request.Builder()
                 .url(signedUrl)
                 .header("apikey", PUBLISHABLE_KEY)
-                .header("Content-Type", mimeType)
-                .put(tempFile.asRequestBody(mimeType.toMediaTypeOrNull()))
+                .header("Content-Type", normalizedMimeType)
+                .put(tempFile.asRequestBody(normalizedMimeType.toMediaTypeOrNull()))
                 .build()
             http.newCall(uploadRequest).execute().use { response ->
                 if (!response.isSuccessful) {

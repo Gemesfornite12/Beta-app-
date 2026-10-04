@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -86,6 +88,8 @@ import com.example.ui.components.VideoPlayer
 import com.example.data.social.SocialComment
 import com.example.data.social.SocialFollowRequest
 import com.example.data.social.SocialPost
+import com.example.data.social.SocialPostMedia
+import com.example.data.social.SocialMediaUpload
 import com.example.data.social.SocialProfile
 import com.example.data.social.SocialStory
 import android.net.Uri
@@ -129,7 +133,10 @@ fun SocialScreen(
     var selectedSection by remember { mutableStateOf(SocialSection.FOR_YOU) }
     var searchQuery by remember { mutableStateOf("") }
     var newPostText by remember { mutableStateOf("") }
-    var newPostMediaUri by remember { mutableStateOf<Uri?>(null) }
+    var newPostMediaUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var showSocialCamera by remember { mutableStateOf(false) }
+    var cameraAudioEnabled by remember { mutableStateOf(false) }
+    var cameraStorageEnabled by remember { mutableStateOf(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) }
     var pickerTarget by remember { mutableStateOf("post") }
     var activeStory by remember { mutableStateOf<SocialStory?>(null) }
     var videoToPlay by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -175,8 +182,45 @@ fun SocialScreen(
                     }
                 }
             } else {
-                newPostMediaUri = uri
+                newPostMediaUris = (newPostMediaUris + uri).distinct().take(10)
             }
+        }
+    }
+
+    val multiMediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10)
+    ) { uris ->
+        if (uris.isNotEmpty()) newPostMediaUris = (newPostMediaUris + uris).distinct().take(10)
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val cameraGranted = result[android.Manifest.permission.CAMERA] == true ||
+            context.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        cameraAudioEnabled = result[android.Manifest.permission.RECORD_AUDIO] == true ||
+            context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        cameraStorageEnabled = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ||
+            result[android.Manifest.permission.WRITE_EXTERNAL_STORAGE] == true ||
+            context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (cameraGranted) showSocialCamera = true else errorMessage = "Se necesita permiso de cámara para tomar una foto o grabar un video."
+    }
+
+    fun requestSocialCamera() {
+        val cameraGranted = context.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val audioGranted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val storageGranted = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ||
+            context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (cameraGranted && audioGranted && storageGranted) {
+            cameraAudioEnabled = true
+            cameraStorageEnabled = true
+            showSocialCamera = true
+        } else {
+            val permissions = mutableListOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO)
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+                permissions += android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            }
+            cameraPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
 
@@ -188,14 +232,19 @@ fun SocialScreen(
         items.forEach { post ->
             val key = postKey(post)
             likedPosts[key] = runCatching { repository.likedByCurrentUser(post) }.getOrDefault(false)
-            if (post.mediaType == "video") {
+            if (post.containsVideo) {
                 savedVideoKeys[key] = runCatching { repository.isVideoSaved(post) }.getOrDefault(false)
             }
         }
     }
 
     fun openSocialVideoFeed(source: List<SocialPost>, selected: SocialPost) {
-        val videos = source.filter { it.mediaType == "video" && it.mediaPath.isNotBlank() }
+        val videos = source.mapNotNull { post ->
+            val media = post.mediaItems.ifEmpty {
+                if (post.mediaPath.isBlank()) emptyList() else listOf(SocialPostMedia(post.mediaPath, post.mediaType))
+            }.firstOrNull { it.mediaType == "video" }
+            media?.let { post.copy(mediaPath = it.mediaPath, mediaType = "video", mediaItems = listOf(it)) }
+        }
         if (videos.isEmpty()) return
         videoFeedPosts = videos
         videoFeedIndex = videos.indexOfFirst { postKey(it) == postKey(selected) }.coerceAtLeast(0)
@@ -447,7 +496,7 @@ fun SocialScreen(
         } else {
             when (selectedSection) {
                 SocialSection.FOR_YOU, SocialSection.FOLLOWING, SocialSection.VIDEOS -> {
-                    val displayPosts = if (selectedSection == SocialSection.VIDEOS) feed.filter { it.mediaType == "video" } else feed
+                    val displayPosts = if (selectedSection == SocialSection.VIDEOS) feed.filter { it.containsVideo } else feed
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -785,36 +834,55 @@ fun SocialScreen(
                         minLines = 3,
                         maxLines = 6
                     )
-                    TextButton(onClick = {
-                        pickerTarget = "post"
-                        mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                    }) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
-                        Text(if (newPostMediaUri == null) "Adjuntar foto o video" else "Cambiar foto o video", color = Color(0xFFF472B6))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            pickerTarget = "post"
+                            multiMediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        }) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
+                            Text(if (newPostMediaUris.isEmpty()) "Elegir fotos, GIFs o videos" else "Añadir más medios", color = Color(0xFFF472B6))
+                        }
+                        TextButton(onClick = { requestSocialCamera() }) {
+                            Text("Cámara", color = Color(0xFFF472B6))
+                        }
                     }
-                    newPostMediaUri?.let {
-                        Text("Multimedia seleccionada · máximo 50 MB", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    if (newPostMediaUris.isNotEmpty()) {
+                        Text("${newPostMediaUris.size}/10 seleccionados · máximo 50 MB por archivo", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            itemsIndexed(newPostMediaUris) { index, uri ->
+                                Row(
+                                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFF202A3A)).padding(start = 8.dp, end = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("${index + 1}. ${context.contentResolver.getType(uri)?.substringBefore('/') ?: "media"}", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                                    IconButton(onClick = { newPostMediaUris = newPostMediaUris.filterIndexed { itemIndex, _ -> itemIndex != index } }, modifier = Modifier.size(30.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Quitar medio", tint = Color(0xFFCBD5E1), modifier = Modifier.size(15.dp))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = (newPostText.isNotBlank() || newPostMediaUri != null) && !isUploadingMedia,
+                    enabled = (newPostText.isNotBlank() || newPostMediaUris.isNotEmpty()) && !isUploadingMedia,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C)),
                     onClick = {
                         val current = myProfile ?: return@Button
                         scope.launch {
                             isUploadingMedia = true
                             try {
-                                val mediaUri = newPostMediaUri
-                                if (mediaUri == null) {
+                                if (newPostMediaUris.isEmpty()) {
                                     repository.createTextPost(current, newPostText)
                                 } else {
-                                    val mimeType = context.contentResolver.getType(mediaUri) ?: "image/jpeg"
-                                    repository.createMediaPost(current, newPostText, mediaUri, mimeType)
+                                    val uploads = newPostMediaUris.map { uri ->
+                                        SocialMediaUpload(uri, context.contentResolver.getType(uri) ?: "image/jpeg")
+                                    }
+                                    repository.createMediaPost(current, newPostText, uploads)
                                 }
                                 newPostText = ""
-                                newPostMediaUri = null
+                                newPostMediaUris = emptyList()
                                 showCreatePost = false
                                 selectedSection = SocialSection.FOR_YOU
                                 refreshFeed()
@@ -831,6 +899,19 @@ fun SocialScreen(
             dismissButton = { TextButton(onClick = { showCreatePost = false }) { Text("Cancelar") } }
         )
     }
+
+    if (showSocialCamera) {
+        SocialCameraDialog(
+            enableAudio = cameraAudioEnabled,
+            videoStorageAllowed = cameraStorageEnabled,
+            onDismiss = { showSocialCamera = false },
+            onCapture = { uri, _ ->
+                newPostMediaUris = (newPostMediaUris + uri).distinct().take(10)
+                showSocialCamera = false
+            }
+        )
+    }
+
 }
 
 @Composable
@@ -881,9 +962,14 @@ private fun SocialPostCard(
     onVideoClick: ((SocialPost) -> Unit)? = null,
     onAuthorClick: () -> Unit
 ) {
-    val signedMediaUrl by produceState(initialValue = post.mediaUrl, post.mediaPath, post.id) {
-        if (post.mediaPath.isNotBlank() && value.isBlank()) {
-            value = runCatching { repository.signedMediaUrl(post.mediaPath, "post", post.id) }.getOrDefault("")
+    val mediaItems = remember(post.mediaItems, post.mediaPath, post.mediaType) {
+        post.mediaItems.ifEmpty {
+            if (post.mediaPath.isBlank()) emptyList() else listOf(SocialPostMedia(post.mediaPath, post.mediaType))
+        }
+    }
+    val signedMediaUrls by produceState(initialValue = List(mediaItems.size) { "" }, post.id, mediaItems) {
+        value = mediaItems.map { item ->
+            runCatching { repository.signedMediaUrl(item.mediaPath, "post", post.id) }.getOrDefault("")
         }
     }
     var videoToPlay by remember(post.id) { mutableStateOf<Pair<String, String>?>(null) }
@@ -905,28 +991,39 @@ private fun SocialPostCard(
             if (post.caption.isNotBlank()) {
                 Text(post.caption, color = Color(0xFFE2E8F0), fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 12.dp))
             }
-            if (post.mediaPath.isNotBlank()) {
-                if (signedMediaUrl.isBlank()) {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color(0xFFE1306C), modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                    }
-                } else if (post.mediaType == "video") {
-                    VideoPlayer(
-                        videoUrl = signedMediaUrl,
-                        title = "Video de @${post.username}",
-                        showActionButtons = false,
-                        modifier = Modifier.padding(top = 10.dp),
-                        onLaunchStandardVideo = { url, title ->
-                            if (onVideoClick != null) onVideoClick(post) else videoToPlay = url to title
+            if (mediaItems.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(mediaItems) { index, item ->
+                        val url = signedMediaUrls.getOrElse(index) { "" }
+                        Box(Modifier.width(300.dp).heightIn(max = 340.dp), contentAlignment = Alignment.Center) {
+                            if (url.isBlank()) {
+                                CircularProgressIndicator(color = Color(0xFFE1306C), modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                            } else if (item.mediaType == "video") {
+                                VideoPlayer(
+                                    videoUrl = url,
+                                    title = "Video de @${post.username}",
+                                    showActionButtons = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onLaunchStandardVideo = { videoUrl, title ->
+                                        if (onVideoClick != null) onVideoClick(post) else videoToPlay = videoUrl to title
+                                    }
+                                )
+                            } else {
+                                AsyncImage(
+                                    model = url,
+                                    contentDescription = "Publicación de ${post.displayName}",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp)
+                                )
+                            }
                         }
-                    )
-                } else {
-                    AsyncImage(
-                        model = signedMediaUrl,
-                        contentDescription = "Publicación de ${post.displayName}",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(300.dp)
-                    )
+                    }
+                }
+                if (mediaItems.size > 1) {
+                    Text("${mediaItems.size} archivos · desliza para verlos", color = Color(0xFF94A3B8), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
             if (post.topics.isNotEmpty()) {

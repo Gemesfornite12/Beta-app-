@@ -84,6 +84,7 @@ jobs:
         run: gradle assembleBeta --stacktrace
 
       - name: Verify .test APK package and registered signer
+        id: verify-beta-apk
         run: |
           set -eu
           APK=app/build/outputs/apk/beta/app-beta.apk
@@ -123,7 +124,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      - name: Upload real-connection test APK (24h)
+      - name: Upload verified Beta test APK (24h)
+        if: always() && steps.verify-beta-apk.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: omnistudio-r8-beta-apk
