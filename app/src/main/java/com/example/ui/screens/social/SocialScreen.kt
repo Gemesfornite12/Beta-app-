@@ -139,6 +139,7 @@ fun SocialScreen(
     var selectedSection by remember { mutableStateOf(SocialSection.FOR_YOU) }
     var searchQuery by remember { mutableStateOf("") }
     var newPostText by remember { mutableStateOf("") }
+    var selectedPostOriginalUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var newPostMediaUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var isPreparingPostMedia by remember { mutableStateOf(false) }
     var isPublishingPost by remember { mutableStateOf(false) }
@@ -176,10 +177,11 @@ fun SocialScreen(
 
     fun preparePostMediaSelection(candidates: List<Uri>) {
         val unique = candidates.distinct()
-        if (unique.size > SocialMediaUploadLimits.MAX_MEDIA_PER_POST) {
-            postUploadError = "No se agregaron los archivos nuevos: la publicación admite como máximo 10 elementos. Quita medios seleccionados antes de volver a elegirlos."
+        if (unique.size > SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST) {
+            postUploadError = "No se agregaron los archivos nuevos: puedes seleccionar hasta ${SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST} originales. Quita originales seleccionados antes de volver a elegirlos."
             return
         }
+        selectedPostOriginalUris = unique
         postMediaPreparationGeneration += 1
         val generation = postMediaPreparationGeneration
         postMediaPreparationJob?.cancel()
@@ -197,6 +199,8 @@ fun SocialScreen(
             return
         }
         isPreparingPostMedia = true
+        newPostMediaUris = emptyList()
+        postSplitSummary = null
         postMediaPreparationJob = scope.launch {
             try {
                 val prepared = SocialVideoAutoSplitter(context).prepare(unique)
@@ -213,7 +217,7 @@ fun SocialScreen(
                 postMediaPreflightError = null
                 postUploadError = null
                 postSplitSummary = prepared.splitVideoNames.takeIf { it.isNotEmpty() }?.let { names ->
-                    "Videos grandes divididos: ${names.joinToString().take(180)}. Originales intactos; revisa los fragmentos antes de publicar."
+                    "${unique.size} originales → ${prepared.uploads.size} archivos preparados (${prepared.generatedFiles.size} fragmentos generados). Videos divididos: ${names.joinToString().take(180)}. Se conservaron todos los segmentos y su orden; los originales siguen intactos."
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -223,7 +227,7 @@ fun SocialScreen(
                     (oldGenerated - retainedOld.toSet()).forEach { it.delete() }
                     generatedPostClipFiles.clear()
                     generatedPostClipFiles.addAll(retainedOld)
-                    newPostMediaUris = unique
+                    newPostMediaUris = emptyList()
                     postSplitSummary = null
                     postMediaPreflightError = error.message ?: "No se pudieron preparar los archivos seleccionados."
                 }
@@ -249,6 +253,7 @@ fun SocialScreen(
         postMediaPreparationJob?.cancel()
         postMediaPreparationJob = null
         cleanPostSplitCache()
+        selectedPostOriginalUris = emptyList()
         newPostMediaUris = emptyList()
         newPostText = ""
         postMediaPreflightError = null
@@ -290,15 +295,15 @@ fun SocialScreen(
                     }
                 }
             } else {
-                preparePostMediaSelection(newPostMediaUris + uri)
+                preparePostMediaSelection(selectedPostOriginalUris + uri)
             }
         }
     }
 
     val multiMediaPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10)
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST)
     ) { uris ->
-        if (showCreatePost && uris.isNotEmpty()) preparePostMediaSelection(newPostMediaUris + uris)
+        if (showCreatePost && uris.isNotEmpty()) preparePostMediaSelection(selectedPostOriginalUris + uris)
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -951,16 +956,23 @@ fun SocialScreen(
                             }
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(18.dp))
-                            Text(if (newPostMediaUris.isEmpty()) "Elegir fotos, GIFs o videos" else "Añadir más medios", color = Color(0xFFF472B6))
+                            Text(if (selectedPostOriginalUris.isEmpty()) "Elegir fotos, GIFs o videos" else "Añadir más medios", color = Color(0xFFF472B6))
                         }
                         TextButton(onClick = { requestSocialCamera() }, enabled = !isPreparingPostMedia && !isPublishingPost) {
                             Text("Cámara", color = Color(0xFFF472B6))
                         }
                     }
-                    if (newPostMediaUris.isNotEmpty()) {
-                        Text("${newPostMediaUris.size}/${SocialMediaUploadLimits.MAX_MEDIA_PER_POST} seleccionados · máximo 50 MiB por archivo", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    if (selectedPostOriginalUris.isNotEmpty()) {
+                        Text(
+                            if (isPreparingPostMedia) {
+                                "${selectedPostOriginalUris.size}/${SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST} originales · preparando archivos…"
+                            } else {
+                                "${selectedPostOriginalUris.size}/${SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST} originales · ${newPostMediaUris.size}/${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST} archivos preparados · máximo 50 MiB cada uno"
+                            },
+                            color = Color(0xFF94A3B8), fontSize = 11.sp
+                        )
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            itemsIndexed(newPostMediaUris) { index, uri ->
+                            itemsIndexed(selectedPostOriginalUris) { index, uri ->
                                 Row(
                                     modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFF202A3A)).padding(start = 8.dp, end = 2.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -968,17 +980,12 @@ fun SocialScreen(
                                     Text("${index + 1}. ${context.contentResolver.getType(uri)?.substringBefore('/') ?: if (uri.path?.endsWith(".mp4", true) == true) "video" else "media"}", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                                     IconButton(
                                         onClick = {
-                                            val removed = newPostMediaUris.getOrNull(index)
-                                            removed?.let { value ->
-                                                generatedPostClipFiles.filter { Uri.fromFile(it) == value }.forEach { it.delete() }
-                                                generatedPostClipFiles.removeAll { Uri.fromFile(it) == value }
-                                            }
-                                            preparePostMediaSelection(newPostMediaUris.filterIndexed { itemIndex, _ -> itemIndex != index })
+                                            preparePostMediaSelection(selectedPostOriginalUris.filterIndexed { itemIndex, _ -> itemIndex != index })
                                         },
                                         modifier = Modifier.size(30.dp),
                                         enabled = !isPreparingPostMedia && !isPublishingPost
                                     ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Quitar medio", tint = Color(0xFFCBD5E1), modifier = Modifier.size(15.dp))
+                                        Icon(Icons.Default.Close, contentDescription = "Quitar original", tint = Color(0xFFCBD5E1), modifier = Modifier.size(15.dp))
                                     }
                                 }
                             }
@@ -987,10 +994,13 @@ fun SocialScreen(
                     if (isPreparingPostMedia) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFF472B6))
-                            Text("Revisando medios y dividiendo videos grandes… No se publicará automáticamente.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                            Text("Preparando ${selectedPostOriginalUris.size} originales; los videos grandes se dividen en clips menores de 50 MiB. Se conservarán todos los segmentos y el orden.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                         }
                     }
                     postSplitSummary?.let { Text(it, color = Color(0xFF86EFAC), fontSize = 11.sp) }
+                    if (isPublishingPost) {
+                        Text("Subiendo ${newPostMediaUris.size} archivos preparados desde ${selectedPostOriginalUris.size} originales…", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    }
                     postMediaPreflightError?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 11.sp) }
                     postUploadError?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 11.sp) }
                 }
@@ -1022,6 +1032,7 @@ fun SocialScreen(
                                 }
                                 cleanPostSplitCache()
                                 newPostText = ""
+                                selectedPostOriginalUris = emptyList()
                                 newPostMediaUris = emptyList()
                                 postMediaPreflightError = null
                                 postUploadError = null
@@ -1050,7 +1061,7 @@ fun SocialScreen(
             videoStorageAllowed = cameraStorageEnabled,
             onDismiss = { showSocialCamera = false },
             onCapture = { uri, _ ->
-                preparePostMediaSelection(newPostMediaUris + uri)
+                preparePostMediaSelection(selectedPostOriginalUris + uri)
                 showSocialCamera = false
             }
         )

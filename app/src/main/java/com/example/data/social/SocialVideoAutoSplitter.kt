@@ -22,7 +22,11 @@ import kotlin.math.max
 
 internal object SocialMediaUploadLimits {
     const val MAX_FILE_BYTES = 50L * 1024L * 1024L
-    const val MAX_MEDIA_PER_POST = 10
+    const val MAX_SELECTED_MEDIA_PER_POST = 10
+    const val MAX_PREPARED_MEDIA_PER_POST = 20
+
+    fun isValidOriginalSelectionCount(count: Int): Boolean = count in 1..MAX_SELECTED_MEDIA_PER_POST
+    fun isValidPreparedMediaCount(count: Int): Boolean = count in 1..MAX_PREPARED_MEDIA_PER_POST
 
     fun isUploadableSize(bytes: Long): Boolean = bytes in 1L..MAX_FILE_BYTES
 }
@@ -111,7 +115,7 @@ internal object SocialVideoSplitPlanner {
     }
 
     fun fitsPostLimit(existingCount: Int, additionalCount: Int): Boolean =
-        existingCount >= 0 && additionalCount >= 0 && existingCount + additionalCount <= SocialMediaUploadLimits.MAX_MEDIA_PER_POST
+        existingCount >= 0 && additionalCount >= 0 && existingCount + additionalCount <= SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST
 
     fun ranges(durationMs: Long, count: Int): List<SocialVideoClipRange> {
         require(durationMs > 0L)
@@ -145,7 +149,7 @@ internal object SocialPostPublishPolicy {
         hasPreflightError: Boolean
     ): Boolean =
         (hasCaption || mediaCount > 0) &&
-            mediaCount <= SocialMediaUploadLimits.MAX_MEDIA_PER_POST &&
+            mediaCount <= SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST &&
             !isPreparing && !isUploading && !hasPreflightError
 }
 
@@ -163,7 +167,9 @@ internal class SocialVideoAutoSplitter(context: Context) {
     private val appContext = context.applicationContext
 
     suspend fun prepare(uris: List<Uri>): PreparedSocialMedia = withContext(Dispatchers.IO) {
-        require(uris.isNotEmpty()) { "Selecciona al menos un archivo." }
+        require(SocialMediaUploadLimits.isValidOriginalSelectionCount(uris.distinct().size)) {
+            "Selecciona entre 1 y ${SocialMediaUploadLimits.MAX_SELECTED_MEDIA_PER_POST} archivos originales."
+        }
         val info = uris.map { SocialMediaFileInspector.inspect(appContext, it) }
         val kindByUri = info.associate { it.uri to supportedSocialMediaType(it.mimeType) }
         val unsupportedNames = info.filter { kindByUri[it.uri] == null }.map { it.displayName }
@@ -182,10 +188,10 @@ internal class SocialVideoAutoSplitter(context: Context) {
                 SocialVideoSplitPlanner.estimatedClipCount(file.sizeBytes).toLong()
             } else 1L
         }
-        if (minimumOutputCount > SocialMediaUploadLimits.MAX_MEDIA_PER_POST.toLong()) {
+        if (minimumOutputCount > SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST.toLong()) {
             val oversizedVideos = info.filter { it.sizeBytes > SocialMediaUploadLimits.MAX_FILE_BYTES }
                 .joinToString { "${it.displayName} (al menos ${SocialVideoSplitPlanner.estimatedClipCount(it.sizeBytes)} fragmentos)" }
-            throw IOException("La selección requiere al menos $minimumOutputCount elementos y Social admite 10 por publicación. Videos grandes: $oversizedVideos. No se omitió ningún fragmento.")
+            throw IOException("La selección requiere al menos $minimumOutputCount elementos y Social admite hasta ${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST} archivos preparados por publicación. Videos grandes: $oversizedVideos. No se omitió ningún fragmento.")
         }
 
         val uploads = mutableListOf<SocialMediaUpload>()
@@ -206,7 +212,7 @@ internal class SocialVideoAutoSplitter(context: Context) {
 
                 val plannedCount = SocialVideoSplitPlanner.estimatedClipCount(file.sizeBytes)
                 if (!SocialVideoSplitPlanner.fitsPostLimit(uploads.size, plannedCount)) {
-                    throw IOException("${file.displayName} requiere al menos $plannedCount fragmentos; ya hay ${uploads.size} medios preparados y una publicación admite como máximo 10. Quita elementos o reduce el video antes de continuar.")
+                    throw IOException("${file.displayName} requiere al menos $plannedCount fragmentos; ya hay ${uploads.size} medios preparados y una publicación admite como máximo ${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST}. Quita elementos o reduce el video antes de continuar.")
                 }
                 val durationMs = try {
                     videoDurationMs(file.uri)
@@ -239,7 +245,7 @@ internal class SocialVideoAutoSplitter(context: Context) {
                             throw IOException("Un fragmento de ${file.displayName} todavía supera 50 MiB y ya no puede dividirse sin perder una parte del video.", error)
                         }
                         if (!SocialVideoSplitPlanner.fitsPostLimit(uploads.size + pending.size, 2)) {
-                            throw IOException("${file.displayName} necesita más de los 10 medios permitidos para mantener cada fragmento por debajo de 50 MiB. No se omitió ningún fragmento; reduce el video o quita otros medios.")
+                            throw IOException("${file.displayName} necesita más de los ${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST} archivos preparados permitidos para mantener cada fragmento por debajo de 50 MiB. No se omitió ningún fragmento; reduce el video o quita otros medios.")
                         }
                         // Put the first half before the second to keep playback order.
                         pending.add(0, second)
@@ -257,8 +263,8 @@ internal class SocialVideoAutoSplitter(context: Context) {
     }
 
     private fun ensureMediaCount(count: Int, name: String) {
-        if (count > SocialMediaUploadLimits.MAX_MEDIA_PER_POST) {
-            throw IOException("La selección de $name supera el máximo de 10 medios por publicación. No se omitió ningún archivo; quita medios o elige un video más corto.")
+        if (count > SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST) {
+            throw IOException("La selección de $name supera el máximo de ${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST} archivos preparados por publicación. No se omitió ningún archivo; quita medios o elige un video más corto.")
         }
     }
 

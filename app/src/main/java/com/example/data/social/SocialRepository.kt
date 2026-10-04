@@ -342,7 +342,9 @@ class SocialRepository(context: Context) {
     ): SocialPost {
         val uid = currentUid()
         require(uid == profile.uid) { "El perfil actual no coincide con la sesión." }
-        require(uploads.isNotEmpty() && uploads.size <= 10) { "Selecciona entre 1 y 10 fotos o videos." }
+        require(SocialMediaUploadLimits.isValidPreparedMediaCount(uploads.size)) {
+            "Una publicación admite entre 1 y ${SocialMediaUploadLimits.MAX_PREPARED_MEDIA_PER_POST} archivos preparados."
+        }
         val kinds = uploads.map { supportedSocialMediaType(it.mimeType) }
         require(kinds.all { it != null }) { "Social admite fotos, GIFs y videos compatibles; no admite documentos." }
         val cleanCaption = caption.trim().take(2200)
