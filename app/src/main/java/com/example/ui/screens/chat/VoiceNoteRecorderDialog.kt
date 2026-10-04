@@ -43,6 +43,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +55,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
@@ -95,6 +99,7 @@ internal class VoiceNoteGestureTracker(private val thresholdPx: Float = 90f) {
 internal class VoiceNoteSendGate {
     private val claimed = AtomicBoolean(false)
     fun claim(): Boolean = claimed.compareAndSet(false, true)
+    fun releaseAfterFailure() { claimed.set(false) }
 }
 
 @Composable
@@ -109,8 +114,15 @@ internal fun VoiceNoteRecorderDialog(
     var elapsedMillis by remember { mutableStateOf(0L) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var recordingFormat by remember { mutableStateOf<VoiceRecordingFormat?>(null) }
+    var sourceCaptured by remember { mutableStateOf<CompletedVoiceRecording?>(null) }
     var captured by remember { mutableStateOf<CompletedVoiceRecording?>(null) }
+    var selectedEffect by remember { mutableStateOf(VoiceNoteEffectPreset.ORIGINAL) }
+    var appliedEffect by remember { mutableStateOf(VoiceNoteEffectPreset.ORIGINAL) }
+    var processingEffect by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
+    val temporaryAudioFiles = remember { mutableSetOf<java.io.File>() }
+    var keepAudioFile by remember { mutableStateOf<java.io.File?>(null) }
+    val coroutineScope = rememberCoroutineScope()
     val sendGate = remember { VoiceNoteSendGate() }
     val amplitudeSamples = remember { mutableStateListOf<Int>() }
     val lockedState = rememberUpdatedState(isLocked)
@@ -141,7 +153,13 @@ internal fun VoiceNoteRecorderDialog(
         isRecording = false
         isLocked = false
         try {
-            captured = recorder.stop()
+            val completed = recorder.stop()
+            sourceCaptured = completed
+            captured = completed
+            temporaryAudioFiles += completed.file
+            selectedEffect = VoiceNoteEffectPreset.ORIGINAL
+            appliedEffect = VoiceNoteEffectPreset.ORIGINAL
+            processingEffect = false
             errorText = null
         } catch (error: Exception) {
             captured = null
@@ -151,12 +169,51 @@ internal fun VoiceNoteRecorderDialog(
 
     fun discardRecording() {
         if (isRecording) recorder.cancel()
-        captured?.file?.delete()
+        temporaryAudioFiles.forEach { it.delete() }
+        temporaryAudioFiles.clear()
+        sourceCaptured = null
         captured = null
+        selectedEffect = VoiceNoteEffectPreset.ORIGINAL
+        appliedEffect = VoiceNoteEffectPreset.ORIGINAL
+        processingEffect = false
         isRecording = false
         isLocked = false
         amplitudeSamples.clear()
         elapsedMillis = 0L
+    }
+
+    fun selectEffect(preset: VoiceNoteEffectPreset) {
+        val original = sourceCaptured ?: return
+        if (processingEffect || preset == selectedEffect) return
+        selectedEffect = preset
+        if (preset == VoiceNoteEffectPreset.ORIGINAL) {
+            captured = original
+            appliedEffect = preset
+            errorText = null
+            return
+        }
+        processingEffect = true
+        errorText = null
+        coroutineScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { VoiceNoteAudioEffects.process(original, preset) }
+            }
+            processingEffect = false
+            result.onSuccess { processed ->
+                temporaryAudioFiles += processed.file
+                captured = processed
+                appliedEffect = preset
+            }.onFailure { error ->
+                selectedEffect = appliedEffect
+                errorText = error.message ?: "No se pudo aplicar el efecto de audio."
+            }
+        }
+    }
+
+    fun deleteTemporaryAudioExcept(keep: java.io.File? = keepAudioFile) {
+        temporaryAudioFiles.filter { it != keep }.forEach { it.delete() }
+        temporaryAudioFiles.clear()
+        keep?.let(temporaryAudioFiles::add)
     }
 
     LaunchedEffect(isRecording) {
@@ -170,14 +227,19 @@ internal fun VoiceNoteRecorderDialog(
     }
 
     DisposableEffect(recorder) {
-        onDispose { if (recordingState.value) recorder.cancel() }
+        onDispose {
+            if (recordingState.value) recorder.cancel()
+            deleteTemporaryAudioExcept()
+        }
     }
 
     AlertDialog(
         onDismissRequest = {
-            if (isRecording) recorder.cancel()
-            captured?.file?.delete()
-            onDismiss()
+            if (!processingEffect) {
+                if (isRecording) recorder.cancel()
+                deleteTemporaryAudioExcept()
+                onDismiss()
+            }
         },
         properties = DialogProperties(usePlatformDefaultWidth = false),
         containerColor = Color(0xFF0F172A),
@@ -254,8 +316,18 @@ internal fun VoiceNoteRecorderDialog(
                         Text("Vista previa", color = Color(0xFFCBD5E1), fontSize = 13.sp)
                         Spacer(Modifier.height(6.dp))
                         Text("${captured!!.format.label} · ${formatVoiceDuration(elapsedMillis)}", color = Color.White, fontSize = 12.sp)
-                        Spacer(Modifier.height(10.dp))
-                        if (VoiceNoteDialogAction.PLAY_PREVIEW in actions) VoiceNotePreviewPlayer(captured!!.uri)
+                        Spacer(Modifier.height(8.dp))
+                        VoiceNoteEffectPicker(
+                            selected = selectedEffect,
+                            enabled = !processingEffect && !sending,
+                            onSelect = ::selectEffect
+                        )
+                        if (processingEffect) {
+                            Spacer(Modifier.height(6.dp))
+                            Text("Procesando audio real para la vista previa…", color = Color(0xFFA5B4FC), fontSize = 11.sp)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        if (VoiceNoteDialogAction.PLAY_PREVIEW in actions && !processingEffect) VoiceNotePreviewPlayer(captured!!.uri)
                         VoiceWaveform(amplitudeSamples.toList(), Modifier.fillMaxWidth().height(54.dp))
                     }
                     else -> {
@@ -283,18 +355,23 @@ internal fun VoiceNoteRecorderDialog(
                 Button(
                     onClick = {
                         val ready = captured ?: return@Button
-                        if (!sendGate.claim()) return@Button
+                        if (processingEffect || !sendGate.claim()) return@Button
                         sending = true
                         val caption = "🎙 Nota de voz · ${formatVoiceDuration(elapsedMillis)} · ${ready.format.label}"
                         try {
                             onSend(ready.uri, ready.format.mimeType, caption)
+                            keepAudioFile = ready.file
+                            deleteTemporaryAudioExcept(ready.file)
                             captured = null
+                            sourceCaptured = null
                             onDismiss()
                         } catch (error: Exception) {
+                            sendGate.releaseAfterFailure()
+                            sending = false
                             errorText = error.message ?: "No se pudo iniciar el envío del audio."
                         }
                     },
-                    enabled = !sending,
+                    enabled = !sending && !processingEffect,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
                     modifier = Modifier.testTag("voice_note_send")
                 ) {
@@ -308,7 +385,7 @@ internal fun VoiceNoteRecorderDialog(
         },
         dismissButton = {
             if (VoiceNoteDialogAction.DISCARD in actions) {
-                TextButton(enabled = !sending, onClick = { discardRecording(); errorText = null }) {
+                TextButton(enabled = !sending && !processingEffect, onClick = { discardRecording(); errorText = null }) {
                     Icon(Icons.Default.Delete, null, tint = Color(0xFFF87171))
                     Spacer(Modifier.width(4.dp))
                     Text("Borrar audio", color = Color(0xFFF87171))
@@ -316,6 +393,29 @@ internal fun VoiceNoteRecorderDialog(
             }
         }
     )
+}
+
+@Composable
+private fun VoiceNoteEffectPicker(
+    selected: VoiceNoteEffectPreset,
+    enabled: Boolean,
+    onSelect: (VoiceNoteEffectPreset) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        Text("Efecto de voz · se aplica al archivo que escucharás y enviarás", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+            VoiceNoteEffectPreset.entries.forEach { preset ->
+                Button(
+                    onClick = { onSelect(preset) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f).testTag("voice_note_effect_${preset.name.lowercase()}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected == preset) Color(0xFF4F46E5) else Color(0xFF273449)
+                    )
+                ) { Text(preset.label, color = Color.White, fontSize = 10.sp) }
+            }
+        }
+    }
 }
 
 @Composable

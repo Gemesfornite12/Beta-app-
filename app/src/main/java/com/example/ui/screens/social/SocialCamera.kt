@@ -11,9 +11,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.media3.effect.Media3Effect
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
@@ -60,6 +62,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.RgbFilter
+import androidx.media3.effect.RgbMatrix
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
@@ -90,6 +95,40 @@ internal fun matrixFor(filter: SocialPhotoFilter): FloatArray? = when (filter) {
 
 private fun composeColorFilter(filter: SocialPhotoFilter): ColorFilter? =
     matrixFor(filter)?.let { ColorFilter.colorMatrix(ColorMatrix(it)) }
+
+internal enum class SocialVideoFilter(val label: String) {
+    ORIGINAL("Original"), MONOCHROME("B/N"), SEPIA("Sepia")
+}
+
+/** Column-major RGB transforms used by CameraX's Media3 GPU effect pipeline (linear RGB). */
+internal fun videoMatrixFor(filter: SocialVideoFilter): FloatArray? = when (filter) {
+    SocialVideoFilter.ORIGINAL -> null
+    SocialVideoFilter.MONOCHROME -> floatArrayOf(
+        0.2126f, 0.2126f, 0.2126f, 0f,
+        0.7152f, 0.7152f, 0.7152f, 0f,
+        0.0722f, 0.0722f, 0.0722f, 0f,
+        0f, 0f, 0f, 1f
+    )
+    SocialVideoFilter.SEPIA -> floatArrayOf(
+        0.393f, 0.349f, 0.272f, 0f,
+        0.769f, 0.686f, 0.534f, 0f,
+        0.189f, 0.168f, 0.131f, 0f,
+        0f, 0f, 0f, 1f
+    )
+}
+
+@OptIn(UnstableApi::class)
+private class SocialSepiaRgbMatrix : RgbMatrix {
+    private val matrix = checkNotNull(videoMatrixFor(SocialVideoFilter.SEPIA))
+    override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray = matrix
+}
+
+@OptIn(UnstableApi::class)
+private fun videoEffectFor(filter: SocialVideoFilter): RgbMatrix? = when (filter) {
+    SocialVideoFilter.ORIGINAL -> null
+    SocialVideoFilter.MONOCHROME -> RgbFilter.createGrayscaleFilter()
+    SocialVideoFilter.SEPIA -> SocialSepiaRgbMatrix()
+}
 
 /** Applies a pixel filter into an identically-sized bitmap; the photo bounds and aspect ratio stay unchanged. */
 internal fun applyPhotoFilterToBitmap(source: Bitmap, filter: SocialPhotoFilter): Bitmap {
@@ -123,6 +162,7 @@ private fun applyStillPhotoFilter(context: Context, uri: Uri, filter: SocialPhot
     return Uri.fromFile(output)
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 internal fun SocialCameraDialog(
     enableAudio: Boolean,
@@ -148,21 +188,36 @@ internal fun SocialCameraDialog(
     var isCapturing by remember { mutableStateOf(false) }
     var capturedPhoto by remember { mutableStateOf<Uri?>(null) }
     var photoFilter by remember { mutableStateOf(SocialPhotoFilter.ORIGINAL) }
+    var videoFilter by remember { mutableStateOf(SocialVideoFilter.ORIGINAL) }
     var message by remember { mutableStateOf<String?>(null) }
     val latestRecording by rememberUpdatedState(activeRecording)
+    val cameraExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    val videoEffect = remember(context) {
+        Media3Effect(
+            context,
+            CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE,
+            cameraExecutor
+        ) { error -> message = "No se pudo aplicar el efecto de video: ${error.message ?: "error de cámara"}" }
+    }
 
-    DisposableEffect(controller, lifecycleOwner) {
+    LaunchedEffect(videoMode, videoFilter, videoEffect) {
+        val effects = if (videoMode) videoEffectFor(videoFilter)?.let(::listOf) ?: emptyList() else emptyList()
+        videoEffect.setEffects(effects)
+    }
+
+    DisposableEffect(controller, lifecycleOwner, videoEffect) {
         controller.bindToLifecycle(lifecycleOwner)
+        controller.setEffects(setOf(videoEffect))
         controllerRef = controller
         onDispose {
             latestRecording?.stop()
             controller.unbind()
+            videoEffect.close()
             controllerRef = null
         }
     }
 
     val flashAvailable = controllerRef?.cameraInfo?.hasFlashUnit() == true
-    val cameraExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     Dialog(
         onDismissRequest = { if (!recording) latestDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -238,7 +293,8 @@ internal fun SocialCameraDialog(
                         SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
                         Text("El filtro seleccionado se aplicará a la foto capturada.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                     } else {
-                        Text("Los filtros solo se aplican a fotos; el video se graba sin filtro.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        SocialVideoFilterPicker(selected = videoFilter, onSelect = { videoFilter = it })
+                        Text("El efecto GPU se muestra en la vista previa y queda aplicado al video grabado, sin cambiar el encuadre.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(
@@ -337,6 +393,28 @@ private fun SocialPhotoFilterPicker(
                 Button(
                     onClick = { onSelect(filter) },
                     modifier = Modifier.weight(1f).testTag("social_photo_filter_${filter.name.lowercase()}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
+                    )
+                ) { Text(filter.label, color = Color.White, fontSize = 12.sp) }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SocialVideoFilterPicker(
+    selected: SocialVideoFilter,
+    onSelect: (SocialVideoFilter) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Filtros para video", color = Color.White, fontSize = 13.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SocialVideoFilter.entries.forEach { filter ->
+                Button(
+                    onClick = { onSelect(filter) },
+                    modifier = Modifier.weight(1f).testTag("social_video_filter_${filter.name.lowercase()}"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (selected == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
                     )
