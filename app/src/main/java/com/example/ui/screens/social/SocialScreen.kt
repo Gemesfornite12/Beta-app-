@@ -155,7 +155,7 @@ fun SocialScreen(
     var pickerTarget by remember { mutableStateOf("post") }
     var activeStory by remember { mutableStateOf<SocialStory?>(null) }
     var videoToPlay by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var videoFeedPosts by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
+    var videoFeedEntries by remember { mutableStateOf<List<SocialVideoFeedEntry>>(emptyList()) }
     var videoFeedIndex by remember { mutableIntStateOf(0) }
     var showSocialVideoFeed by remember { mutableStateOf(false) }
     var savedVideos by remember { mutableStateOf<List<SocialPost>>(emptyList()) }
@@ -351,16 +351,13 @@ fun SocialScreen(
         }
     }
 
-    fun openSocialVideoFeed(source: List<SocialPost>, selected: SocialPost) {
-        val videos = source.mapNotNull { post ->
-            val media = post.mediaItems.ifEmpty {
-                if (post.mediaPath.isBlank()) emptyList() else listOf(SocialPostMedia(post.mediaPath, post.mediaType))
-            }.firstOrNull { it.mediaType == "video" }
-            media?.let { post.copy(mediaPath = it.mediaPath, mediaType = "video", mediaItems = listOf(it)) }
-        }
-        if (videos.isEmpty()) return
-        videoFeedPosts = videos
-        videoFeedIndex = videos.indexOfFirst { postKey(it) == postKey(selected) }.coerceAtLeast(0)
+    fun openSocialVideoFeed(source: List<SocialPost>, selected: SocialPost, selectedMediaIndex: Int) {
+        val entries = SocialVideoFeedLogic.expandVideos(source)
+        if (entries.isEmpty()) return
+        videoFeedEntries = entries
+        videoFeedIndex = SocialVideoFeedLogic.selectedEntryIndex(
+            entries, selected.ownerUid, selected.id, selectedMediaIndex
+        )
         showSocialVideoFeed = true
     }
 
@@ -649,7 +646,7 @@ fun SocialScreen(
                                     repository = repository,
                                     liked = likedPosts[postKey(post)] == true,
                                     onLike = { toggleLike(post) },
-                                    onVideoClick = { selected -> openSocialVideoFeed(displayPosts, selected) },
+                                    onVideoClick = { selected, mediaIndex -> openSocialVideoFeed(displayPosts, selected, mediaIndex) },
                                     onAuthorClick = {
                                         scope.launch {
                                             try {
@@ -685,7 +682,7 @@ fun SocialScreen(
                                     repository = repository,
                                     liked = likedPosts[postKey(post)] == true,
                                     onLike = { toggleLike(post) },
-                                    onVideoClick = { selected -> openSocialVideoFeed(savedVideos, selected) },
+                                    onVideoClick = { selected, mediaIndex -> openSocialVideoFeed(savedVideos, selected, mediaIndex) },
                                     onAuthorClick = {}
                                 )
                             }
@@ -792,7 +789,7 @@ fun SocialScreen(
                                 repository = repository,
                                 liked = likedPosts[postKey(post)] == true,
                                 onLike = { toggleLike(post) },
-                                onVideoClick = { selected -> openSocialVideoFeed(myPosts, selected) },
+                                onVideoClick = { selected, mediaIndex -> openSocialVideoFeed(myPosts, selected, mediaIndex) },
                                 onAuthorClick = {}
                             )
                         }
@@ -802,9 +799,9 @@ fun SocialScreen(
         }
     }
 
-    if (showSocialVideoFeed && videoFeedPosts.isNotEmpty()) {
+    if (showSocialVideoFeed && videoFeedEntries.isNotEmpty()) {
         SocialVideoFeedDialog(
-            posts = videoFeedPosts,
+            entries = videoFeedEntries,
             initialIndex = videoFeedIndex,
             isLiked = { likedPosts[postKey(it)] == true },
             isSaved = { savedVideoKeys[postKey(it)] == true },
@@ -1114,7 +1111,7 @@ private fun SocialPostCard(
     repository: SocialRepository,
     liked: Boolean,
     onLike: () -> Unit,
-    onVideoClick: ((SocialPost) -> Unit)? = null,
+    onVideoClick: ((SocialPost, Int) -> Unit)? = null,
     onAuthorClick: () -> Unit
 ) {
     val mediaItems = remember(post.mediaItems, post.mediaPath, post.mediaType) {
@@ -1163,7 +1160,7 @@ private fun SocialPostCard(
                                     showActionButtons = false,
                                     modifier = Modifier.fillMaxWidth(),
                                     onLaunchStandardVideo = { videoUrl, title ->
-                                        if (onVideoClick != null) onVideoClick(post) else videoToPlay = videoUrl to title
+                                        if (onVideoClick != null) onVideoClick(post, index) else videoToPlay = videoUrl to title
                                     }
                                 )
                             } else {
@@ -1205,7 +1202,7 @@ private fun SocialPostCard(
 
 @Composable
 private fun SocialVideoFeedDialog(
-    posts: List<SocialPost>,
+    entries: List<SocialVideoFeedEntry>,
     initialIndex: Int,
     isLiked: (SocialPost) -> Boolean,
     isSaved: (SocialPost) -> Boolean,
@@ -1217,15 +1214,16 @@ private fun SocialVideoFeedDialog(
     onPositionChanged: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    if (posts.isEmpty()) return
-    var currentIndex by remember(posts, initialIndex) {
-        mutableIntStateOf(initialIndex.coerceIn(0, posts.lastIndex))
+    if (entries.isEmpty()) return
+    var currentIndex by remember(entries, initialIndex) {
+        mutableIntStateOf(initialIndex.coerceIn(0, entries.lastIndex))
     }
-    val post = posts[currentIndex]
+    val entry = entries[currentIndex]
+    val post = entry.post
     val context = LocalContext.current
-    val signedMediaUrl by produceState(initialValue = post.mediaUrl, post.mediaPath, post.id) {
-        value = if (post.mediaPath.isNotBlank()) {
-            runCatching { SocialRepository(context).signedMediaUrl(post.mediaPath, "post", post.id) }
+    val signedMediaUrl by produceState(initialValue = "", post.mediaPath, post.id, entry.mediaIndex, entry.media.mediaPath) {
+        value = if (entry.media.mediaPath.isNotBlank()) {
+            runCatching { SocialRepository(context).signedMediaUrl(entry.media.mediaPath, "post", post.id) }
                 .getOrDefault("")
         } else post.mediaUrl
     }
@@ -1240,13 +1238,13 @@ private fun SocialVideoFeedDialog(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(currentIndex, posts.size) {
+                    .pointerInput(currentIndex, entries.size) {
                         var totalDrag = 0f
                         detectVerticalDragGestures(
                             onVerticalDrag = { _, dragAmount -> totalDrag += dragAmount },
                             onDragEnd = {
                                 val direction = SocialVideoFeedLogic.swipeDirection(totalDrag, swipeThreshold)
-                                val next = SocialVideoFeedLogic.adjacentIndex(currentIndex, posts.size, direction)
+                                val next = SocialVideoFeedLogic.adjacentIndex(currentIndex, entries.size, direction)
                                 if (next != null) {
                                     currentIndex = next
                                     onPositionChanged(next)
@@ -1257,7 +1255,7 @@ private fun SocialVideoFeedDialog(
                         )
                     }
             ) {
-                key(post.ownerUid, post.id, signedMediaUrl) {
+                key(entry.stableKey, signedMediaUrl) {
                     if (signedMediaUrl.isBlank()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = Color(0xFFE1306C))
@@ -1282,7 +1280,7 @@ private fun SocialVideoFeedDialog(
                     Icon(Icons.Default.Close, contentDescription = "Cerrar video", tint = Color.White)
                 }
                 Text(
-                    text = "Videos · ${currentIndex + 1}/${posts.size}",
+                    text = "Videos · ${currentIndex + 1}/${entries.size}",
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
