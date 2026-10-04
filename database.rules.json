@@ -188,6 +188,61 @@
           ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test').child('profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
           ".validate": "!newData.exists() || (newData.child('ownerUid').val() == auth.uid && newData.child('id').isString() && newData.child('createdAt').isNumber() && newData.child('expiresAt').isNumber())"
         }
+      },
+      "comments": {
+        "$ownerUid": {
+          "$postId": {
+            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+            ".indexOn": [
+              "createdAt"
+            ],
+            "$commentId": {
+              ".write": "auth != null && !data.exists() && newData.exists() && newData.child('authorUid').val() == auth.uid && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+              ".validate": "!newData.exists() || (newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName', 'text', 'createdAt']) && newData.child('authorUid').isString() && newData.child('authorUid').val() == auth.uid && newData.child('authorUsername').isString() && newData.child('authorDisplayName').isString() && newData.child('text').isString() && newData.child('text').val().matches(/.*\\S.*/) && newData.child('text').val().length <= 1000 && newData.child('createdAt').isNumber())",
+              "authorUid": {
+                ".validate": true
+              },
+              "authorUsername": {
+                ".validate": true
+              },
+              "authorDisplayName": {
+                ".validate": true
+              },
+              "text": {
+                ".validate": true
+              },
+              "createdAt": {
+                ".validate": true
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
+      },
+      "savedPosts": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          "$ownerUid": {
+            "$postId": {
+              ".write": "auth != null && auth.uid == $uid && (!newData.exists() || (root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).child('mediaType').val() == 'video' && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')))",
+              ".validate": "!newData.exists() || (newData.hasChildren(['ownerUid', 'postId', 'savedAt']) && newData.child('ownerUid').isString() && newData.child('ownerUid').val() == $ownerUid && newData.child('postId').isString() && newData.child('postId').val() == $postId && newData.child('savedAt').isNumber())",
+              "ownerUid": {
+                ".validate": true
+              },
+              "postId": {
+                ".validate": true
+              },
+              "savedAt": {
+                ".validate": true
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
       }
     },
     "calls_test": {
