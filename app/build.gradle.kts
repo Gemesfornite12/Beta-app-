@@ -49,10 +49,19 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      isMinifyEnabled = true
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      // Keep ordinary debug builds debuggable and unminified.
+      isDebuggable = true
+      isMinifyEnabled = false
+    }
+    create("beta") {
+      // The downloadable .test Beta build is separately optimized and not debuggable,
+      // so R8 can perform full code shrinking, optimization, and obfuscation.
+      initWith(getByName("debug"))
       applicationIdSuffix = ".test"
       versionNameSuffix = "-test"
+      isDebuggable = false
+      isMinifyEnabled = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("debugConfig")
     }
   }

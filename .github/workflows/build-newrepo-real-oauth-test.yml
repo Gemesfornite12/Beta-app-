@@ -21,7 +21,7 @@ on:
         description: New unique public prerelease tag for this test APK
         required: true
         type: string
-        default: zapia-r8-beta-20261003
+        default: zapia-r8-full-beta-20261003
 
 permissions:
   contents: read
@@ -80,13 +80,13 @@ jobs:
             -deststorepass android -destkeypass android -destalias androiddebugkey
           keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -A1 'SHA1:'
 
-      - name: Build isolated .test APK
-        run: gradle assembleDebug --stacktrace
+      - name: Build isolated, optimized non-debuggable Beta .test APK
+        run: gradle assembleBeta --stacktrace
 
       - name: Verify .test APK package and registered signer
         run: |
           set -eu
-          APK=app/build/outputs/apk/debug/app-debug.apk
+          APK=app/build/outputs/apk/beta/app-beta.apk
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
           PACKAGE="$("$AAPT" dump badging "$APK" | awk -F"'" '/^package:/ {print $2; exit}')"
@@ -102,22 +102,22 @@ jobs:
           echo "Verified Beta package and registered signer match"
 
       - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
+        run: gradle testBetaUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --stacktrace
 
       - name: Upload unit test report after failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: workspace-test-report
-          path: source/app/build/test-results/testDebugUnitTest/*.xml
+          path: source/app/build/test-results/testBetaUnitTest/*.xml
           if-no-files-found: ignore
           retention-days: 1
 
       - name: Upload real-connection test APK (24h)
         uses: actions/upload-artifact@v4
         with:
-          name: omnistudio-real-oauth-test-apk
-          path: source/app/build/outputs/apk/debug/app-debug.apk
+          name: omnistudio-r8-beta-apk
+          path: source/app/build/outputs/apk/beta/app-beta.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -132,10 +132,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download the freshly built .test APK
+      - name: Download the freshly built optimized Beta .test APK
         uses: actions/download-artifact@v4
         with:
-          name: omnistudio-real-oauth-test-apk
+          name: omnistudio-r8-beta-apk
           path: release_asset
 
       - name: Refuse to modify an existing release tag
@@ -165,14 +165,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: OmniStudio Beta R8 .test APK (${{ inputs.release_tag }})
+          name: OmniStudio optimized Beta R8 .test APK (${{ inputs.release_tag }})
           body: |-
-            Temporary direct-download APK built from the isolated Beta .test branch with R8 optimization enabled.
+            Temporary direct-download APK built from the isolated Beta .test branch using a non-debuggable beta build type with R8 code shrinking, optimization, and obfuscation enabled.
+            The package remains com.aistudio.omnistudio.wkspea.test and is signed with the registered test signing key.
             This is not the production APK or a Play Store release.
           target_commitish: zapia/test-newrepo-real-oauth-20260930
           prerelease: true
           draft: false
-          files: release_asset/app-debug.apk
+          files: release_asset/app-beta.apk
           fail_on_unmatched_files: true
           overwrite_files: false
           token: ${{ secrets.GITHUB_TOKEN }}
