@@ -210,6 +210,8 @@ fun ChatScreen(
     var pendingMediaTitle by remember { mutableStateOf<String?>(null) }
     var pendingDocItem by remember { mutableStateOf<com.example.data.model.DocumentItem?>(null) }
     var pendingAudioProject by remember { mutableStateOf<com.example.data.model.AudioProject?>(null) }
+    var pendingChatMedia by remember { mutableStateOf<List<ChatMediaSelection>>(emptyList()) }
+    var showVoiceNoteRecorder by remember { mutableStateOf(false) }
 
     // Estados de búsqueda y archivado de canales
     var isSearching by remember { mutableStateOf(false) }
@@ -322,6 +324,13 @@ fun ChatScreen(
         }
     }
 
+    val voiceNotePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) showVoiceNoteRecorder = true
+        else showPermissionDeniedDialog = "Se requiere permiso de micrófono para grabar una nota de voz."
+    }
+
     val launchVoiceCall = {
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (hasMic) {
@@ -367,6 +376,13 @@ fun ChatScreen(
     val myGroupMember = activeChannelInfo?.members?.firstOrNull { it.email == currentUserEmail }
     val canSendMessages = if (activeChannelInfo?.isGroup == true && myGroupMember != null) myGroupMember.canSendMessages else true
     val canSendMedia = if (activeChannelInfo?.isGroup == true && myGroupMember != null) myGroupMember.canSendMedia else true
+    val launchVoiceNoteRecorder = {
+        if (canSendMessages && canSendMedia) {
+            val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            if (hasMic) showVoiceNoteRecorder = true
+            else voiceNotePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
     val currentCountdown = groupDeletionCountdowns[currentChannel]
 
     // Índices de mensajes que coinciden con la búsqueda por palabra clave
@@ -1458,6 +1474,48 @@ fun ChatScreen(
                     }
                 }
 
+                if (pendingChatMedia.isNotEmpty()) {
+                    Surface(
+                        color = Color(0xFF0F172A),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Text("${pendingChatMedia.size} elemento(s) seleccionado(s) · máximo 20", color = Color(0xFFCBD5E1), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(6.dp))
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(pendingChatMedia, key = { it.uri.toString() }) { item ->
+                                    Column(
+                                        modifier = Modifier.width(74.dp).testTag("chat_batch_item_${item.uri.lastPathSegment.orEmpty().hashCode()}"),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Box(Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1E293B))) {
+                                            if (item.mediaType in setOf("image", "gif", "video")) {
+                                                AsyncImage(model = item.uri, contentDescription = item.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                                            } else {
+                                                Icon(
+                                                    imageVector = if (item.mediaType == "audio") Icons.Default.MusicNote else Icons.Default.AttachFile,
+                                                    contentDescription = item.displayName,
+                                                    tint = Color(0xFF818CF8),
+                                                    modifier = Modifier.align(Alignment.Center).size(26.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { pendingChatMedia = pendingChatMedia.filterNot { it.uri == item.uri } },
+                                                modifier = Modifier.align(Alignment.TopEnd).size(22.dp).background(Color.Black.copy(alpha = 0.7f), CircleShape).testTag("remove_chat_batch_item")
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "Quitar ${item.displayName}", tint = Color.White, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+                                        Text(item.displayName, color = Color(0xFFCBD5E1), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(item.mediaType.uppercase(Locale.ROOT), color = Color(0xFF94A3B8), fontSize = 8.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Barra de entrada de texto
                 Row(
                     modifier = Modifier
@@ -1490,6 +1548,16 @@ fun ChatScreen(
                         )
                     }
 
+                    if (chatInput.isBlank() && pendingMediaType == null && pendingChatMedia.isEmpty() && pendingDocItem == null && pendingAudioProject == null) {
+                        IconButton(
+                            onClick = { launchVoiceNoteRecorder() },
+                            enabled = canSendMessages && canSendMedia,
+                            modifier = Modifier.testTag("btn_record_voice_note")
+                        ) {
+                            Icon(Icons.Default.Mic, contentDescription = "Grabar nota de voz", tint = if (canSendMessages && canSendMedia) Color(0xFF34D399) else Color(0xFF475569))
+                        }
+                    }
+
                     OutlinedTextField(
                         value = chatInput,
                         onValueChange = { viewModel.onChatInputChanged(it) },
@@ -1497,7 +1565,7 @@ fun ChatScreen(
                         placeholder = {
                             Text(
                                 if (!canSendMessages) "Permiso restringido por el creador"
-                                else if (pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null) "Añade un comentario / leyenda opcional..."
+                                else if (pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null || pendingChatMedia.isNotEmpty()) "Añade un comentario / leyenda opcional..."
                                 else "Escribe en #${activeChannelInfo?.name ?: currentChannel}...",
                                 color = Color(0xFF64748B),
                                 fontSize = 13.sp
@@ -1580,8 +1648,8 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(6.dp))
 
-                    val hasAnyInput = chatInput.isNotBlank() || pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null
-                    val canSendPendingMedia = pendingMediaType == null || canSendMedia
+                    val hasAnyInput = chatInput.isNotBlank() || pendingMediaType != null || pendingDocItem != null || pendingAudioProject != null || pendingChatMedia.isNotEmpty()
+                    val canSendPendingMedia = (pendingMediaType == null || canSendMedia) && (pendingChatMedia.isEmpty() || canSendMedia)
 
                     Surface(
                         modifier = Modifier
@@ -1591,6 +1659,19 @@ fun ChatScreen(
                                 if (canSendMessages && canSendPendingMedia) {
                                     var submitted = false
                                     when {
+                                        pendingChatMedia.isNotEmpty() -> {
+                                            val selectedBatch = pendingChatMedia.toList()
+                                            selectedBatch.forEach { item ->
+                                                viewModel.sendMediaMessage(
+                                                    mediaType = item.mediaType,
+                                                    mediaUrl = item.uri.toString(),
+                                                    caption = chatInput,
+                                                    mimeType = item.mimeType
+                                                )
+                                            }
+                                            viewModel.onChatInputChanged("")
+                                            submitted = true
+                                        }
                                         pendingMediaType != null -> {
                                             val selectedMediaUrl = pendingMediaUrl
                                             if (!selectedMediaUrl.isNullOrBlank()) {
@@ -1624,6 +1705,7 @@ fun ChatScreen(
                                         pendingMediaType = null
                                         pendingMediaUrl = null
                                         pendingMediaTitle = null
+                                        pendingChatMedia = emptyList()
                                         pendingDocItem = null
                                         pendingAudioProject = null
                                     }
@@ -1965,10 +2047,22 @@ fun ChatScreen(
                 pendingMediaType = type
                 pendingMediaUrl = url
                 pendingMediaTitle = caption
+                pendingChatMedia = emptyList()
                 pendingDocItem = null
                 pendingAudioProject = null
             },
+            onSelectMediaBatch = { selections ->
+                if (selections.isNotEmpty()) {
+                    pendingChatMedia = appendChatMediaSelections(pendingChatMedia, selections)
+                    pendingMediaType = null
+                    pendingMediaUrl = null
+                    pendingMediaTitle = null
+                    pendingDocItem = null
+                    pendingAudioProject = null
+                }
+            },
             onSendDoc = { doc ->
+                pendingChatMedia = emptyList()
                 pendingMediaType = null
                 pendingMediaUrl = null
                 pendingMediaTitle = null
@@ -1976,6 +2070,7 @@ fun ChatScreen(
                 pendingAudioProject = null
             },
             onSendAudio = { audio ->
+                pendingChatMedia = emptyList()
                 pendingMediaType = null
                 pendingMediaUrl = null
                 pendingMediaTitle = null
@@ -1983,6 +2078,20 @@ fun ChatScreen(
                 pendingAudioProject = audio
             },
             onDismiss = { showAttachDialog = false }
+        )
+    }
+
+    if (showVoiceNoteRecorder) {
+        VoiceNoteRecorderDialog(
+            onDismiss = { showVoiceNoteRecorder = false },
+            onSend = { uri, mimeType, caption ->
+                viewModel.sendMediaMessage(
+                    mediaType = "audio",
+                    mediaUrl = uri.toString(),
+                    caption = caption,
+                    mimeType = mimeType
+                )
+            }
         )
     }
 
@@ -2826,6 +2935,9 @@ private fun MessageBubble(
                     // Reproductor/abridor de archivos de música subidos al chat.
                     if (message.mediaType == "audio" && !message.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
+                        if (message.text.startsWith("🎙 Nota de voz")) {
+                            VoiceNoteMessagePlayer(url = message.mediaUrl, caption = message.text)
+                        } else {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = Color(0xFF0F172A),
@@ -2864,6 +2976,7 @@ private fun MessageBubble(
                                 }
                                 Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir audio", tint = Color(0xFFA855F7))
                             }
+                        }
                         }
                     }
 

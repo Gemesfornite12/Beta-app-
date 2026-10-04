@@ -32,8 +32,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 /**
@@ -52,6 +55,7 @@ class BackgroundUploadService : Service() {
 
         const val EXTRA_MEDIA_URI = "extra_media_uri"
         const val EXTRA_MEDIA_TYPE = "extra_media_type"
+        const val EXTRA_MIME_TYPE = "extra_mime_type"
         const val EXTRA_CAPTION = "extra_caption"
         const val EXTRA_CHANNEL_ID = "extra_channel_id"
         const val EXTRA_OWNER_UID = "extra_owner_uid"
@@ -79,12 +83,14 @@ class BackgroundUploadService : Service() {
             channelId: String,
             ownerUid: String,
             senderName: String,
-            senderEmail: String
+            senderEmail: String,
+            mimeType: String? = null
         ) {
             val intent = Intent(context, BackgroundUploadService::class.java).apply {
                 action = ACTION_START_UPLOAD
                 putExtra(EXTRA_MEDIA_URI, mediaUri)
                 putExtra(EXTRA_MEDIA_TYPE, mediaType)
+                putExtra(EXTRA_MIME_TYPE, mimeType)
                 putExtra(EXTRA_CAPTION, caption)
                 putExtra(EXTRA_CHANNEL_ID, channelId)
                 putExtra(EXTRA_OWNER_UID, ownerUid)
@@ -100,6 +106,8 @@ class BackgroundUploadService : Service() {
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val uploadMutex = Mutex()
+    private val pendingUploadCount = AtomicInteger(0)
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -124,6 +132,7 @@ class BackgroundUploadService : Service() {
             ACTION_START_UPLOAD -> {
                 val mediaUriStr = intent.getStringExtra(EXTRA_MEDIA_URI).orEmpty()
                 val mediaType = intent.getStringExtra(EXTRA_MEDIA_TYPE) ?: "video"
+                val mimeType = intent.getStringExtra(EXTRA_MIME_TYPE).orEmpty()
                 val caption = intent.getStringExtra(EXTRA_CAPTION).orEmpty()
                 val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID).orEmpty()
                 val ownerUid = intent.getStringExtra(EXTRA_OWNER_UID).orEmpty()
@@ -136,6 +145,7 @@ class BackgroundUploadService : Service() {
                     return START_NOT_STICKY
                 }
 
+                pendingUploadCount.incrementAndGet()
                 val initialNotification = buildNotification(
                     title = "Subiendo ${getMediaTypeName(mediaType)}...",
                     content = "Iniciando transferencia en segundo plano...",
@@ -168,7 +178,8 @@ class BackgroundUploadService : Service() {
                     channelId = channelId,
                     ownerUid = ownerUid,
                     senderName = senderName,
-                    senderEmail = senderEmail
+                    senderEmail = senderEmail,
+                    mimeType = mimeType
                 )
                 return START_REDELIVER_INTENT
             }
@@ -186,9 +197,11 @@ class BackgroundUploadService : Service() {
         channelId: String,
         ownerUid: String,
         senderName: String,
-        senderEmail: String
+        senderEmail: String,
+        mimeType: String
     ) {
         serviceScope.launch {
+            uploadMutex.withLock {
             _uploadStateFlow.value = UploadState(
                 isUploading = true,
                 mediaType = mediaType,
@@ -202,8 +215,9 @@ class BackgroundUploadService : Service() {
                 val mediaStorageService = SupabaseMediaStorageService(context)
                 val uri = Uri.parse(mediaUriStr)
 
-                val mimeType = context.contentResolver.getType(uri)
-                    ?: when (mediaType) {
+                val resolvedMimeType = mimeType.ifBlank { context.contentResolver.getType(uri).orEmpty() }
+                val effectiveMimeType = resolvedMimeType.ifBlank {
+                    when (mediaType) {
                         "video" -> "video/mp4"
                         "image" -> "image/jpeg"
                         "audio" -> "audio/mpeg"
@@ -211,9 +225,10 @@ class BackgroundUploadService : Service() {
                         "sticker" -> "image/webp"
                         else -> "application/octet-stream"
                     }
+                }
 
                 // Detect real media type if requested type is generic
-                val detectedType = detectMediaType(context, uri, mediaType, mimeType)
+                val detectedType = detectMediaType(context, uri, mediaType, effectiveMimeType)
 
                 updateNotification(
                     title = "Subiendo ${getMediaTypeName(detectedType)} en segundo plano...",
@@ -225,7 +240,8 @@ class BackgroundUploadService : Service() {
                     ownerUid = ownerUid,
                     localUri = uri,
                     mediaType = detectedType,
-                    mimeType = mimeType,
+                    mimeType = effectiveMimeType,
+                    originalName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.contains('.') },
                     onProgress = { transferred, total ->
                         val percent = if (total > 0L) {
                             ((transferred * 90L) / total).toInt().coerceIn(0, 90)
@@ -366,7 +382,9 @@ class BackgroundUploadService : Service() {
                 )
                 notifyManager.notify(NOTIFICATION_ID + 2, errorNotification)
             } finally {
-                stopForegroundService()
+                val uploadsRemaining = pendingUploadCount.decrementAndGet()
+                if (uploadsRemaining <= 0) stopForegroundService()
+            }
             }
         }
     }

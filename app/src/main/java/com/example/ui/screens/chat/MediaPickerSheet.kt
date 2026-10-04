@@ -190,6 +190,7 @@ fun MediaPickerSheet(
     docs: List<DocumentItem>,
     audios: List<AudioProject>,
     onSendMedia: (type: String, url: String, caption: String) -> Unit,
+    onSelectMediaBatch: (List<ChatMediaSelection>) -> Unit,
     onSendDoc: (DocumentItem) -> Unit,
     onSendAudio: (AudioProject) -> Unit,
     onDismiss: () -> Unit
@@ -324,24 +325,22 @@ fun MediaPickerSheet(
         }
     }
 
-    // Photo Picker nativo de Android (zero permissions)
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val fileName = getFileNameFromUri(context, uri)
-            onSendMedia("image", uri.toString(), "📷 $fileName")
+    // Mantiene el selector nativo de Android/Google Photos, pero permite elegir varios elementos en una sola pasada.
+    val visualBatchPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 20)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onSelectMediaBatch(uris.map { uri -> chatMediaSelection(context, uri) })
             onDismiss()
         }
     }
 
-    // Video Picker nativo de Android (zero permissions)
-    val videoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val fileName = getFileNameFromUri(context, uri)
-            onSendMedia("video", uri.toString(), "🎥 $fileName")
+    // El selector de documentos también admite selección múltiple para archivos locales.
+    val fileBatchPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onSelectMediaBatch(uris.map { uri -> chatMediaSelection(context, uri) })
             onDismiss()
         }
     }
@@ -470,8 +469,8 @@ fun MediaPickerSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            photoPickerLauncher.launch(
-                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            visualBatchPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                             )
                                         }
                                         .testTag("btn_pick_device_photo")
@@ -483,8 +482,8 @@ fun MediaPickerSheet(
                                         Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFF38BDF8))
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
-                                            Text("Elegir de mi galería", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text("Abre el selector nativo de Android", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                            Text("Elegir varias fotos, videos o GIFs", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("Selector nativo de Android/Google Photos · hasta 20", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         }
                                     }
                                 }
@@ -536,8 +535,8 @@ fun MediaPickerSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            videoPickerLauncher.launch(
-                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                                            visualBatchPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                             )
                                         }
                                         .testTag("btn_pick_device_video")
@@ -549,8 +548,8 @@ fun MediaPickerSheet(
                                         Icon(Icons.Default.VideoLibrary, contentDescription = null, tint = Color(0xFFA855F7))
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
-                                            Text("Elegir video del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text("Video clip o captura de pantalla", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                            Text("Elegir varios medios del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("Fotos, videos y GIFs · hasta 20 en una selección", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         }
                                     }
                                 }
@@ -1302,6 +1301,25 @@ fun MediaPickerSheet(
                                         Column {
                                             Text("Elegir archivo del dispositivo", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                             Text("PDF, Word, ZIP, música y otros archivos (máx. 50 MB)", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFF25334A),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { fileBatchPickerLauncher.launch(arrayOf("*/*")) }
+                                        .testTag("btn_pick_multiple_device_files")
+                                ) {
+                                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = Color(0xFF38BDF8))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Seleccionar varios archivos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("Imágenes, videos, GIFs y documentos en una sola tanda", color = Color(0xFF94A3B8), fontSize = 11.sp)
                                         }
                                     }
                                 }
