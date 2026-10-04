@@ -140,10 +140,19 @@ internal fun fitVideoIntoBounds(videoWidth: Int, videoHeight: Int, boundsWidth: 
 
 /** VideoView otherwise sits in a fixed 16:9 Compose box; measure it to the source ratio inside the full viewer. */
 private class AspectFitVideoView(context: Context) : VideoView(context) {
+    private var sourceWidth = 0
+    private var sourceHeight = 0
+
+    fun updateSourceSize(width: Int, height: Int) {
+        sourceWidth = width
+        sourceHeight = height
+        requestLayout()
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val boundsWidth = MeasureSpec.getSize(widthMeasureSpec)
         val boundsHeight = MeasureSpec.getSize(heightMeasureSpec)
-        val fitted = fitVideoIntoBounds(videoWidth, videoHeight, boundsWidth, boundsHeight)
+        val fitted = fitVideoIntoBounds(sourceWidth, sourceHeight, boundsWidth, boundsHeight)
         setMeasuredDimension(fitted.width, fitted.height)
     }
 }
@@ -1135,7 +1144,8 @@ fun ChatVideoViewerDialog(
                                     val controller = MediaController(ctx)
                                     controller.setAnchorView(this)
                                     setMediaController(controller)
-                                    setOnPreparedListener {
+                                    setOnPreparedListener { mediaPlayer ->
+                                        updateSourceSize(mediaPlayer.videoWidth, mediaPlayer.videoHeight)
                                         isLoading = false
                                         start()
                                     }
