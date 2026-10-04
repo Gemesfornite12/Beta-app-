@@ -1,5 +1,8 @@
 package com.example.ui.screens.social
 
+import com.example.data.social.SocialPost
+import com.example.data.social.SocialPostMedia
+
 /** One playable video in its parent post, retaining the video's position in that post's media list. */
 internal data class SocialVideoFeedEntry(
     val post: SocialPost,
