@@ -2,9 +2,15 @@ name: Build signed production APK for review
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_production:
+        description: Publish the verified APK to the existing production release
+        required: true
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-production-apk:
@@ -122,6 +128,16 @@ jobs:
           DIGEST="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1 | awk -F': ' '/certificate SHA-256 digest:/ {print tolower($NF); exit}')"
           test "$DIGEST" = "$EXPECTED_CERT_SHA256"
           echo "Verified Principal package $PACKAGE and original production signing certificate SHA-256 $DIGEST"
+
+      - name: Publish to existing production GitHub Release
+        if: ${{ inputs.publish_production }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          gh release upload omnistudio-principal-production-20261004 "$APK#omnistudio-principal.apk" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Upload private review artifact (24h)
         uses: actions/upload-artifact@v4
