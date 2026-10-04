@@ -3490,7 +3490,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // RICH MEDIA MESSAGING (Fotos, Videos, GIFs)
-    fun sendMediaMessage(mediaType: String, mediaUrl: String, caption: String = "") {
+    fun sendMediaMessage(mediaType: String, mediaUrl: String, caption: String = "", mimeType: String? = null) {
         val user = _authUiState.value.currentUser
         val senderName = user?.displayName ?: "Alex González"
         val senderEmail = user?.email ?: "gonzalez24029@gmail.com"
@@ -3527,7 +3527,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                     setOf("content", "file", "android.resource")
 
                 // Auto-detección del tipo de archivo (p. ej. .mp4 -> video)
-                val mimeTypeFromResolver = if (isLocalMediaUri) context.contentResolver.getType(mediaUri)?.lowercase().orEmpty() else ""
+                val mimeTypeFromResolver = if (isLocalMediaUri) {
+                    (context.contentResolver.getType(mediaUri) ?: mimeType).orEmpty().lowercase()
+                } else ""
                 val fileNameOrUrl = mediaUrl.substringAfterLast('/')
                 val ext = fileNameOrUrl.substringAfterLast('.').lowercase().substringBefore('?')
 
@@ -3565,7 +3567,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         channelId = channelId,
                         ownerUid = ownerUid,
                         senderName = senderName,
-                        senderEmail = senderEmail
+                        senderEmail = senderEmail,
+                        mimeType = mimeType
                     )
                     return@launch
                 }
