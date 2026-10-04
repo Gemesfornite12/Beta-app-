@@ -39,12 +39,10 @@ for required in (
     assert required in write, f"comment create rule missing {required}"
 comment_fields = {"authorUid", "authorUsername", "authorDisplayName", "text", "createdAt"}
 validate = comment[".validate"]
-# The Database Emulator rejects \s/\S, so spell out the Unicode White_Space set.
-whitespace_codepoints = (
-    9, 10, 11, 12, 13, 32, 133, 160, 5760, *range(8192, 8203),
-    8232, 8233, 8239, 8287, 12288,
+# The Database Emulator rejects \s/\S. The TAB-VT range includes LF without embedding a regex line break.
+whitespace_chars = chr(9) + "-" + chr(11) + chr(12) + chr(13) + " " + "".join(
+    chr(cp) for cp in (133, 160, 5760, *range(8192, 8203), 8232, 8233, 8239, 8287, 12288)
 )
-whitespace_chars = "".join(chr(cp) for cp in whitespace_codepoints)
 non_whitespace_match = "newData.child('text').val().matches(/.*[^" + whitespace_chars + "].*/)"
 assert "newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName', 'text', 'createdAt'])" in validate
 for required in (
