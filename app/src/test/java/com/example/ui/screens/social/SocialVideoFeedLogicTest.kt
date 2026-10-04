@@ -1,5 +1,7 @@
 package com.example.ui.screens.social
 
+import com.example.data.social.SocialPost
+import com.example.data.social.SocialPostMedia
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
