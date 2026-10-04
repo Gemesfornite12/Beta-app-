@@ -159,6 +159,31 @@
           }
         }
       },
+      "comments": {
+        "$ownerUid": {
+          "$postId": {
+            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+            ".indexOn": [
+              "createdAt"
+            ],
+            "$commentId": {
+              ".write": "auth != null && !data.exists() && newData.exists() && newData.child('authorUid').val() == auth.uid && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+              ".validate": "!newData.exists() || (newData.numChildren() == 5 && newData.child('authorUid').isString() && newData.child('authorUid').val() == auth.uid && newData.child('authorUsername').isString() && newData.child('authorDisplayName').isString() && newData.child('text').isString() && newData.child('text').val().matches(/.*\\S.*/) && newData.child('text').val().length <= 1000 && newData.child('createdAt').isNumber())"
+            }
+          }
+        }
+      },
+      "savedPosts": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          "$ownerUid": {
+            "$postId": {
+              ".write": "auth != null && auth.uid == $uid && (!newData.exists() || (root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).child('mediaType').val() == 'video' && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')))",
+              ".validate": "!newData.exists() || (newData.numChildren() == 3 && newData.child('ownerUid').isString() && newData.child('ownerUid').val() == $ownerUid && newData.child('postId').isString() && newData.child('postId').val() == $postId && newData.child('savedAt').isNumber())"
+            }
+          }
+        }
+      },
       "preferences": {
         "$uid": {
           ".read": "auth != null && auth.uid == $uid",

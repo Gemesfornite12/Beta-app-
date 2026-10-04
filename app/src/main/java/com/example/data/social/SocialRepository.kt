@@ -44,6 +44,25 @@ data class SocialPost(
     val mediaUrl: String = ""
 )
 
+internal object SocialInteractionPaths {
+    fun comments(ownerUid: String, postId: String): String = "comments/$ownerUid/$postId"
+    fun savedVideo(uid: String, ownerUid: String, postId: String): String =
+        "savedPosts/$uid/$ownerUid/$postId"
+}
+
+data class SocialComment(
+    val id: String = "",
+    val authorUid: String = "",
+    val authorUsername: String = "",
+    val authorDisplayName: String = "",
+    val text: String = "",
+    val createdAt: Long = 0L
+) {
+    companion object {
+        fun isValidBody(value: String): Boolean = value.trim().isNotEmpty() && value.trim().length <= 1000
+    }
+}
+
 data class SocialStory(
     val id: String = "",
     val ownerUid: String = "",
@@ -411,6 +430,73 @@ class SocialRepository(context: Context) {
             .get().await().getValue(Boolean::class.java) == true
     }
 
+    suspend fun loadComments(post: SocialPost): List<SocialComment> {
+        currentUid()
+        return root.child(SocialInteractionPaths.comments(post.ownerUid, post.id))
+            .orderByChild("createdAt")
+            .get().await().children.mapNotNull { it.toSocialComment() }
+    }
+
+    suspend fun addComment(post: SocialPost, text: String): SocialComment {
+        val uid = currentUid()
+        require(SocialComment.isValidBody(text)) { "El comentario debe tener entre 1 y 1000 caracteres." }
+        val cleanText = text.trim()
+        val commentRef = root.child(SocialInteractionPaths.comments(post.ownerUid, post.id)).push()
+        val commentId = commentRef.key ?: error("No se pudo crear el identificador del comentario.")
+        val profile = root.child("profiles").child(uid).get().await()
+        val comment = SocialComment(
+            id = commentId,
+            authorUid = uid,
+            authorUsername = profile.child("username").getValue(String::class.java).orEmpty(),
+            authorDisplayName = profile.child("displayName").getValue(String::class.java).orEmpty(),
+            text = cleanText,
+            createdAt = System.currentTimeMillis()
+        )
+        commentRef.setValue(comment.toMap()).await()
+        return comment
+    }
+
+    suspend fun isVideoSaved(post: SocialPost): Boolean {
+        val uid = currentUid()
+        return root.child(SocialInteractionPaths.savedVideo(uid, post.ownerUid, post.id))
+            .get().await().exists()
+    }
+
+    suspend fun setVideoSaved(post: SocialPost, saved: Boolean) {
+        val uid = currentUid()
+        require(post.mediaType == "video") { "Solo se pueden guardar videos." }
+        val savedRef = root.child(SocialInteractionPaths.savedVideo(uid, post.ownerUid, post.id))
+        if (saved) {
+            savedRef.setValue(
+                mapOf(
+                    "ownerUid" to post.ownerUid,
+                    "postId" to post.id,
+                    "savedAt" to System.currentTimeMillis()
+                )
+            ).await()
+        } else {
+            savedRef.removeValue().await()
+        }
+    }
+
+    suspend fun loadSavedVideos(): List<SocialPost> {
+        val uid = currentUid()
+        val savedSnapshot = root.child("savedPosts").child(uid).get().await()
+        val posts = mutableListOf<Pair<Long, SocialPost>>()
+        for (ownerNode in savedSnapshot.children) {
+            val ownerUid = ownerNode.key ?: continue
+            for (savedNode in ownerNode.children) {
+                val postId = savedNode.key ?: continue
+                val savedAt = savedNode.child("savedAt").getValue(Long::class.java) ?: 0L
+                val post = runCatching {
+                    root.child("postsByUser").child(ownerUid).child(postId).get().await().toSocialPost()
+                }.getOrNull()
+                if (post?.mediaType == "video") posts += savedAt to post
+            }
+        }
+        return posts.sortedByDescending { it.first }.map { it.second }
+    }
+
     suspend fun follow(target: SocialProfile, requester: SocialProfile) {
         val uid = currentUid()
         require(uid == requester.uid) { "El perfil solicitante no coincide con la sesión." }
@@ -547,6 +633,29 @@ class SocialRepository(context: Context) {
 
     private fun publicFeedKey(uid: String, postId: String) = "${uid}_$postId"
     private fun publicStoryKey(uid: String, storyId: String) = "${uid}_$storyId"
+
+    private fun SocialComment.toMap(): Map<String, Any?> = mapOf(
+        "authorUid" to authorUid,
+        "authorUsername" to authorUsername,
+        "authorDisplayName" to authorDisplayName,
+        "text" to text,
+        "createdAt" to createdAt
+    )
+
+    private fun DataSnapshot.toSocialComment(): SocialComment? {
+        if (!exists()) return null
+        val authorUid = child("authorUid").getValue(String::class.java).orEmpty()
+        val text = child("text").getValue(String::class.java).orEmpty()
+        if (authorUid.isBlank() || !SocialComment.isValidBody(text)) return null
+        return SocialComment(
+            id = key.orEmpty(),
+            authorUid = authorUid,
+            authorUsername = child("authorUsername").getValue(String::class.java).orEmpty(),
+            authorDisplayName = child("authorDisplayName").getValue(String::class.java).orEmpty(),
+            text = text,
+            createdAt = child("createdAt").getValue(Long::class.java) ?: 0L
+        )
+    }
 
     private fun SocialProfile.toMap(): Map<String, Any?> = mapOf(
         "uid" to uid,
