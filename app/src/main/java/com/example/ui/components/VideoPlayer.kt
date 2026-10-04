@@ -1326,7 +1326,7 @@ fun ChatImageViewerDialog(
 private const val YOUTUBE_APP_ORIGIN = "https://costalso2029.dpdns.org"
 
 internal fun buildYouTubeEmbedUrl(videoId: String, origin: String = YOUTUBE_APP_ORIGIN): String =
-    "https://www.youtube.com/embed/$videoId?autoplay=0&playsinline=1&controls=1&rel=0&modestbranding=1&enablejsapi=1&origin=${Uri.encode(origin)}"
+    "https://www.youtube.com/embed/$videoId?autoplay=0&playsinline=1&controls=1&rel=0&modestbranding=1&enablejsapi=1&origin=${java.net.URLEncoder.encode(origin, "UTF-8").replace("+", "%20")}"
 
 internal fun youtubePlayerErrorMessage(rawCode: String): String = when (rawCode.substringBefore('-').toIntOrNull()) {
     2 -> "YouTube recibió un identificador de video no válido (error $rawCode)."
