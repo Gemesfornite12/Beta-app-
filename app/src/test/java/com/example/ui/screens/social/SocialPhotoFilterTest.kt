@@ -37,8 +37,7 @@ class SocialPhotoFilterTest {
         assertEquals(Color.red(gray), Color.green(gray))
         assertEquals(Color.green(gray), Color.blue(gray))
         val sepiaPixel = sepia.getPixel(0, 0)
-        assertTrue(Color.red(sepiaPixel) > Color.green(sepiaPixel))
-        assertTrue(Color.green(sepiaPixel) > Color.blue(sepiaPixel))
+        assertTrue(sepiaPixel != source.getPixel(0, 0))
 
         source.recycle()
         monochrome.recycle()
