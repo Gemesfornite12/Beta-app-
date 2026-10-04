@@ -143,14 +143,14 @@ class RealtimeDatabaseService {
         }
 
     /** Fetch the page immediately older than the active chat's oldest loaded message. */
-    suspend fun getOlderMessages(
+    internal suspend fun getOlderMessages(
         chatId: String,
         before: MessageHistoryCursor,
         pageSize: Int = MessageHistoryPaging.PAGE_SIZE
     ): List<ChatMessage> = withContext(Dispatchers.IO) {
         val query = database.child("chats").child(chatId).child("messages")
             .orderByChild("timestamp")
-            .endBefore(before.timestamp, before.childKey)
+            .endBefore(before.timestamp.toDouble(), before.childKey)
             .limitToLast(pageSize.coerceAtLeast(1))
         val snapshot = query.get().await()
         withContext(Dispatchers.Default) {
