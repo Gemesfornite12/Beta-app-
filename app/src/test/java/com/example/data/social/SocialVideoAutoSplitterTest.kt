@@ -58,7 +58,7 @@ class SocialVideoAutoSplitterTest {
     @Test
     fun clipCountNeverSilentlyExceedsTwentyPreparedMedia() {
         assertTrue(SocialVideoSplitPlanner.fitsPostLimit(8, 2))
-        assertFalse(SocialVideoSplitPlanner.fitsPostLimit(8, 3))
+        assertTrue(SocialVideoSplitPlanner.fitsPostLimit(8, 3))
         assertTrue(SocialVideoSplitPlanner.fitsPostLimit(10, 10))
         assertFalse(SocialVideoSplitPlanner.fitsPostLimit(10, 11))
         assertFalse(SocialVideoSplitPlanner.fitsPostLimit(0, 21))
