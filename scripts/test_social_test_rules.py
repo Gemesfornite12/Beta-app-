@@ -39,11 +39,13 @@ for required in (
     assert required in write, f"comment create rule missing {required}"
 comment_fields = {"authorUid", "authorUsername", "authorDisplayName", "text", "createdAt"}
 validate = comment[".validate"]
-# The Database Emulator rejects \s/\S. The TAB-VT range includes LF without embedding a regex line break.
-whitespace_chars = chr(9) + "-" + chr(11) + chr(12) + chr(13) + " " + "".join(
-    chr(cp) for cp in (133, 160, 5760, *range(8192, 8203), 8232, 8233, 8239, 8287, 12288)
+# The emulator rejects \s/\S and regex line breaks; literal ranges cover whitespace without those escapes.
+excluded_chars = (
+    chr(9) + "-" + chr(32) + chr(0x84) + "-" + chr(0x86) + " "
+    + chr(0xA0) + chr(0x1680) + "".join(chr(cp) for cp in range(0x2000, 0x200B))
+    + chr(0x2027) + "-" + chr(0x202A) + chr(0x202F) + chr(0x205F) + chr(0x3000)
 )
-non_whitespace_match = "newData.child('text').val().matches(/.*[^" + whitespace_chars + "].*/)"
+non_whitespace_match = "newData.child('text').val().matches(/.*[^" + excluded_chars + "].*/)"
 assert "newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName', 'text', 'createdAt'])" in validate
 for required in (
     "newData.child('authorUid').isString()", "newData.child('authorUid').val() == auth.uid",
