@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { recordContainsMediaPath, safePath, type SocialMediaRecord } from "./authorization.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +10,6 @@ const corsHeaders = {
 
 const MEDIA_BUCKET = "social-test-media";
 const MAX_ID_TOKEN_LENGTH = 4096;
-const MAX_PATH_LENGTH = 512;
 const SIGNED_URL_TTL_SECONDS = 600;
 const FIREBASE_RTDB_URL = "https://omnistudio-caaf5-default-rtdb.firebaseio.com";
 
@@ -28,8 +28,6 @@ const supportedTypes: Record<string, { extension: string; kind: "image" | "video
 };
 
 type IdentityLookupResponse = { users?: Array<{ localId?: string }> };
-type SocialMediaRecord = { ownerUid?: string; mediaPath?: string; expiresAt?: number };
-
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
@@ -54,26 +52,6 @@ async function verifyFirebaseIdToken(token: string, webApiKey: string): Promise<
   return uid && uid.length > 0 ? uid : null;
 }
 
-function safePath(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_PATH_LENGTH) return null;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-  if (decoded !== value || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return null;
-  const parts = value.split("/");
-  if (
-    parts.length !== 4 ||
-    parts[0] !== "social_test" ||
-    !/^[A-Za-z0-9_-]{1,128}$/.test(parts[1]) ||
-    (parts[2] !== "posts" && parts[2] !== "stories") ||
-    !/^[A-Za-z0-9_-]{1,100}\.(jpg|png|webp|gif|heic|heif|mp4|mov|webm|3gp|m4v)$/.test(parts[3])
-  ) return null;
-  return value;
-}
-
 async function visibleRecord(
   idToken: string,
   entityType: "post" | "story",
@@ -86,7 +64,7 @@ async function visibleRecord(
   const response = await fetch(url);
   if (!response.ok) return null;
   const record = (await response.json()) as SocialMediaRecord | null;
-  if (!record || record.ownerUid !== ownerUid || typeof record.mediaPath !== "string") return null;
+  if (!record || record.ownerUid !== ownerUid) return null;
   if (entityType === "story" && (typeof record.expiresAt !== "number" || record.expiresAt <= Date.now())) return null;
   return record;
 }
@@ -157,7 +135,9 @@ Deno.serve(async (request) => {
     } catch {
       return jsonResponse({ error: "Could not verify social media access" }, 502);
     }
-    if (!record || record.mediaPath !== storagePath) return jsonResponse({ error: "Media is unavailable or private" }, 403);
+    if (!record || !recordContainsMediaPath(record, storagePath)) {
+      return jsonResponse({ error: "Media is unavailable or private" }, 403);
+    }
 
     const { data, error } = await storage.createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
     if (error || !data?.signedUrl) {

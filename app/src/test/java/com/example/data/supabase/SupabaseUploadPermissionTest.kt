@@ -12,7 +12,7 @@ class SupabaseUploadPermissionTest {
     private val mime = "image/jpeg"
     private val project = "https://ovttmxwtljfqizcetoxk.supabase.co"
     private val path = "users/$uid/media/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001.jpg"
-    private val relativeSignedUrl = "/object/upload/sign/chat-media/$uid/media/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001.jpg?token=temporary-upload-token"
+    private val relativeSignedUrl = "/object/upload/sign/chat-media/$path?token=temporary-upload-token"
 
     @Test
     fun acceptsFreshUploadPermissionAndNormalizesRelativeUrl() {

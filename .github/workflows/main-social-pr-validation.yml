@@ -1,0 +1,106 @@
+name: Main Social integration validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/build.gradle.kts"
+      - "app/src/main/java/com/example/data/firebase/FirebaseCrashlyticsManager.kt"
+      - "app/src/main/java/com/example/data/social/**"
+      - "app/src/main/java/com/example/ui/screens/social/**"
+      - "app/src/test/java/com/example/data/firebase/FirebaseCrashlyticsManagerTest.kt"
+      - "app/src/test/java/com/example/data/social/**"
+      - "app/src/test/java/com/example/ui/screens/social/**"
+      - "database.rules.json"
+      - "gradle/libs.versions.toml"
+      - "scripts/test_crashlytics_privacy.py"
+      - "scripts/test_social_test_rules.py"
+      - "supabase/functions/social-media-access/**"
+      - ".github/workflows/main-social-pr-validation.yml"
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v4.0.4
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: Install Android SDK 36
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Create disposable Firebase config for compile/tests only
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "123456789012",
+              "project_id": "omnistudio-validation-only",
+              "storage_bucket": "omnistudio-validation-only.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef0123456789",
+                  "android_client_info": {"package_name": "com.aistudio.omnistudio.wkspea"}
+                },
+                "api_key": [{"current_key": "AIzaSyVALIDATIONONLYNOTAREALKEY0000000000000"}]
+              },
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef0123456788",
+                  "android_client_info": {"package_name": "com.aistudio.omnistudio.wkspea.test"}
+                },
+                "api_key": [{"current_key": "AIzaSyVALIDATIONONLYNOTAREALKEY0000000000000"}]
+              }
+            ]
+          }
+          JSON
+      - name: Compile Principal and test variants; run unit tests
+        run: gradle compileDebugKotlin compileReleaseKotlin testDebugUnitTest --stacktrace
+      - name: Check no Crashlytics custom user/content data is set
+        run: python3 scripts/test_crashlytics_privacy.py
+      - name: Remove disposable config
+        if: always()
+        run: rm -f app/google-services.json
+  shared-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Firebase CLI for isolated emulator rule compilation
+        run: npm install --global firebase-tools
+      - name: Validate RTDB rules in static checks and local emulator only
+        run: python3 scripts/test_social_test_rules.py
+      - name: Validate Crashlytics source privacy
+        run: python3 scripts/test_crashlytics_privacy.py
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check and test the additive Social media authorization helper
+        run: |
+          deno fmt --check supabase/functions/social-media-access/authorization.ts supabase/functions/social-media-access/authorization_test.ts
+          deno test supabase/functions/social-media-access/authorization_test.ts
+          deno check supabase/functions/social-media-access/index.ts

@@ -2,7 +2,6 @@ package com.example.data.social
 
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import com.example.BuildConfig
 import com.example.data.firebase.FirebaseAppProvider
 import com.google.firebase.auth.FirebaseAuth
@@ -39,18 +38,26 @@ class SupabaseSocialMediaService(context: Context) {
 
     suspend fun upload(uri: Uri, entityType: String, mimeType: String): String = withContext(Dispatchers.IO) {
         require(entityType == "post" || entityType == "story") { "Tipo de publicación no válido." }
-        require(mimeType.startsWith("image/") || mimeType.startsWith("video/")) { "Solo se aceptan fotos y videos." }
+        val normalizedMimeType = mimeType.substringBefore(';').trim().lowercase()
+        require(supportedSocialMediaType(normalizedMimeType) != null) { "El formato no está permitido para publicaciones de Social." }
         val user = auth.currentUser ?: error("Inicia sesión para subir contenido.")
         val idToken = user.getIdToken(false).await().token ?: error("No se pudo verificar la sesión.")
-        val tempFile = copyToTempFile(uri)
+        val fileInfo = SocialMediaFileInspector.inspect(appContext, uri)
+        if (fileInfo.sizeBytes <= 0L) throw IOException("${fileInfo.displayName} está vacío.")
+        if (fileInfo.sizeBytes > MAX_FILE_SIZE_BYTES) {
+            throw IOException("${fileInfo.displayName} pesa ${formatMiB(fileInfo.sizeBytes)}; el máximo por archivo es 50 MiB.")
+        }
+        val tempFile = copyToTempFile(uri, fileInfo.displayName)
         try {
-            require(tempFile.length() > 0L && tempFile.length() <= MAX_FILE_SIZE_BYTES) { "El archivo debe pesar como máximo 50 MB." }
+            require(tempFile.length() in 1L..MAX_FILE_SIZE_BYTES) {
+                "${fileInfo.displayName} cambió de tamaño; cada archivo debe pesar como máximo 50 MiB."
+            }
             val prepared = invokeFunction(
                 idToken,
                 JSONObject()
                     .put("action", "create-upload")
                     .put("entityType", entityType)
-                    .put("mimeType", mimeType.lowercase())
+                    .put("mimeType", normalizedMimeType)
             )
             val signedUrl = normalizeUrl(prepared.optString("signedUrl"))
             val storagePath = prepared.optString("storagePath")
@@ -59,8 +66,8 @@ class SupabaseSocialMediaService(context: Context) {
             val uploadRequest = Request.Builder()
                 .url(signedUrl)
                 .header("apikey", PUBLISHABLE_KEY)
-                .header("Content-Type", mimeType)
-                .put(tempFile.asRequestBody(mimeType.toMediaTypeOrNull()))
+                .header("Content-Type", normalizedMimeType)
+                .put(tempFile.asRequestBody(normalizedMimeType.toMediaTypeOrNull()))
                 .build()
             http.newCall(uploadRequest).execute().use { response ->
                 if (!response.isSuccessful) {
@@ -123,26 +130,34 @@ class SupabaseSocialMediaService(context: Context) {
         return ""
     }
 
-    private fun copyToTempFile(uri: Uri): File {
-        val name = appContext.contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)) else null
-        }
-        val suffix = name?.substringAfterLast('.', "")?.takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }?.let { ".$it" } ?: ".media"
+    private fun copyToTempFile(uri: Uri, name: String): File {
+        val suffix = name.substringAfterLast('.', "")
+            .takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }?.let { ".$it" } ?: ".media"
         val file = File.createTempFile("social-upload-", suffix, appContext.cacheDir)
         try {
             val input = appContext.contentResolver.openInputStream(uri)
-                ?: throw IOException("No se pudo abrir el archivo seleccionado.")
-            input.use { source -> file.outputStream().use { output -> source.copyTo(output, 64 * 1024) } }
+                ?: throw IOException("No se pudo abrir $name.")
+            input.use { source ->
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        if (total + read > MAX_FILE_SIZE_BYTES) {
+                            throw IOException("$name cambió de tamaño; cada archivo debe pesar como máximo 50 MiB.")
+                        }
+                        output.write(buffer, 0, read)
+                        total += read
+                    }
+                }
+            }
             return file
         } catch (error: Exception) {
             file.delete()
             throw error
         }
     }
+
+    private fun formatMiB(bytes: Long): String = String.format(java.util.Locale.ROOT, "%.1f MiB", bytes.toDouble() / (1024.0 * 1024.0))
 }
