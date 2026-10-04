@@ -35,7 +35,7 @@ jobs:
 
       - name: Restore production Firebase config and upload key
         env:
-          PRODUCTION_GOOGLE_SERVICES_JSON_B64: ${{ secrets.PRODUCTION_GOOGLE_SERVICES_JSON_B64 || secrets.TEST_GOOGLE_SERVICES_JSON_B64 }}
+          PRODUCTION_GOOGLE_SERVICES_JSON_B64: ${{ secrets.PRODUCTION_GOOGLE_SERVICES_JSON_B64 }}
           PRODUCTION_KEYSTORE_B64: ${{ secrets.PRODUCTION_KEYSTORE_B64 }}
           STORE_PASSWORD: ${{ secrets.PRODUCTION_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.PRODUCTION_KEY_PASSWORD }}
@@ -53,13 +53,17 @@ jobs:
           import json
           with open("app/google-services.json", encoding="utf-8") as f:
               config = json.load(f)
-          packages = {
-              client.get("client_info", {}).get("android_client_info", {}).get("package_name")
-              for client in config.get("client", [])
-          }
-          if "com.aistudio.omnistudio.wkspea" not in packages:
-              raise SystemExit("Firebase config does not contain the production Android package")
-          print("Production Firebase package configuration verified")
+          project_info = config.get("project_info", {})
+          if project_info.get("project_id") != "omnistudio-caaf5" or project_info.get("project_number") != "611449222458":
+              raise SystemExit("Firebase config is not the production OmniStudio project")
+          expected_app_id = "1:611449222458:android:dce2d1586b029281794c03"
+          production_client = next((
+              client for client in config.get("client", [])
+              if client.get("client_info", {}).get("android_client_info", {}).get("package_name") == "com.aistudio.omnistudio.wkspea"
+          ), None)
+          if not production_client or production_client.get("client_info", {}).get("mobilesdk_app_id") != expected_app_id:
+              raise SystemExit("Firebase config does not contain the registered production Android app")
+          print("Production Firebase project and Android app configuration verified")
           PY
 
       - name: Detect original production signing alias
