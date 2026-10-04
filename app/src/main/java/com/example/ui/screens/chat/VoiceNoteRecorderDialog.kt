@@ -58,6 +58,15 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.sqrt
 
+internal enum class VoiceNoteDialogAction { START, STOP, CANCEL, PLAY_PREVIEW, DISCARD, SEND, CLOSE }
+
+/** The dialog uses this single state mapping to keep finish, preview, discard, and send explicit. */
+internal fun voiceNoteDialogActions(isRecording: Boolean, hasCapturedRecording: Boolean): Set<VoiceNoteDialogAction> = when {
+    isRecording -> setOf(VoiceNoteDialogAction.STOP, VoiceNoteDialogAction.CANCEL)
+    hasCapturedRecording -> setOf(VoiceNoteDialogAction.PLAY_PREVIEW, VoiceNoteDialogAction.DISCARD, VoiceNoteDialogAction.SEND)
+    else -> setOf(VoiceNoteDialogAction.START, VoiceNoteDialogAction.CLOSE)
+}
+
 @Composable
 internal fun VoiceNoteRecorderDialog(
     onDismiss: () -> Unit,
@@ -73,6 +82,9 @@ internal fun VoiceNoteRecorderDialog(
     var captured by remember { mutableStateOf<CompletedVoiceRecording?>(null) }
     val amplitudeSamples = remember { mutableStateListOf<Int>() }
     val lockedState = rememberUpdatedState(isLocked)
+    val actions = remember(isRecording, captured != null) {
+        voiceNoteDialogActions(isRecording, captured != null)
+    }
 
     fun beginRecording() {
         if (isRecording || captured != null) return
@@ -151,12 +163,16 @@ internal fun VoiceNoteRecorderDialog(
                         Spacer(Modifier.height(12.dp))
                         VoiceWaveform(amplitudeSamples.toList(), Modifier.fillMaxWidth().height(54.dp))
                         Spacer(Modifier.height(12.dp))
-                        if (!isLocked) Text("Desliza hacia arriba para bloquear · hacia la izquierda para cancelar", color = Color(0xFFCBD5E1), fontSize = 11.sp)
-                        else {
-                            Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { discardRecording(); errorText = "Grabación descartada." }, modifier = Modifier.testTag("voice_note_cancel_locked")) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (VoiceNoteDialogAction.CANCEL in actions) {
+                                IconButton(
+                                    onClick = { discardRecording(); errorText = "Grabación descartada." },
+                                    modifier = Modifier.testTag("voice_note_cancel_recording")
+                                ) {
                                     Icon(Icons.Default.Cancel, "Cancelar grabación", tint = Color(0xFFF87171))
                                 }
+                            }
+                            if (VoiceNoteDialogAction.STOP in actions) {
                                 Button(
                                     onClick = { finishRecording() },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
@@ -164,17 +180,22 @@ internal fun VoiceNoteRecorderDialog(
                                 ) {
                                     Icon(Icons.Default.Stop, null)
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Detener")
+                                    Text("Detener y revisar")
                                 }
                             }
                         }
+                        Text(
+                            if (isLocked) "Toca Detener y revisar cuando termines"
+                            else "Suelta para terminar · desliza a la izquierda para cancelar o arriba para bloquear",
+                            color = Color(0xFFCBD5E1), fontSize = 11.sp
+                        )
                     }
                     captured != null -> {
                         Text("Vista previa", color = Color(0xFFCBD5E1), fontSize = 13.sp)
                         Spacer(Modifier.height(6.dp))
                         Text("${captured!!.format.label} · ${formatVoiceDuration(elapsedMillis)}", color = Color.White, fontSize = 12.sp)
                         Spacer(Modifier.height(10.dp))
-                        VoiceNotePreviewPlayer(captured!!.uri)
+                        if (VoiceNoteDialogAction.PLAY_PREVIEW in actions) VoiceNotePreviewPlayer(captured!!.uri)
                         VoiceWaveform(amplitudeSamples.toList(), Modifier.fillMaxWidth().height(54.dp))
                     }
                     else -> {
@@ -198,7 +219,7 @@ internal fun VoiceNoteRecorderDialog(
             }
         },
         confirmButton = {
-            if (captured != null) {
+            if (VoiceNoteDialogAction.SEND in actions) {
                 Button(
                     onClick = {
                         val ready = captured ?: return@Button
@@ -212,14 +233,14 @@ internal fun VoiceNoteRecorderDialog(
                 ) {
                     Icon(Icons.Default.Send, null)
                     Spacer(Modifier.width(6.dp))
-                    Text("Enviar")
+                    Text("Enviar nota de voz")
                 }
-            } else {
-                TextButton(onClick = onDismiss, enabled = !isRecording) { Text("Cerrar", color = Color(0xFFCBD5E1)) }
+            } else if (VoiceNoteDialogAction.CLOSE in actions) {
+                TextButton(onClick = onDismiss) { Text("Cerrar", color = Color(0xFFCBD5E1)) }
             }
         },
         dismissButton = {
-            if (captured != null) {
+            if (VoiceNoteDialogAction.DISCARD in actions) {
                 TextButton(onClick = { discardRecording(); errorText = null }) {
                     Icon(Icons.Default.Delete, null, tint = Color(0xFFF87171))
                     Spacer(Modifier.width(4.dp))

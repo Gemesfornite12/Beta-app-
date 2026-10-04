@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -67,11 +68,11 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
 
-private enum class SocialPhotoFilter(val label: String) {
+internal enum class SocialPhotoFilter(val label: String) {
     ORIGINAL("Original"), MONOCHROME("B/N"), SEPIA("Sepia")
 }
 
-private fun matrixFor(filter: SocialPhotoFilter): FloatArray? = when (filter) {
+internal fun matrixFor(filter: SocialPhotoFilter): FloatArray? = when (filter) {
     SocialPhotoFilter.ORIGINAL -> null
     SocialPhotoFilter.MONOCHROME -> floatArrayOf(
         0.213f, 0.715f, 0.072f, 0f, 0f,
@@ -90,22 +91,35 @@ private fun matrixFor(filter: SocialPhotoFilter): FloatArray? = when (filter) {
 private fun composeColorFilter(filter: SocialPhotoFilter): ColorFilter? =
     matrixFor(filter)?.let { ColorFilter.colorMatrix(ColorMatrix(it)) }
 
-/** Applies a real still-photo filter to the saved image without cropping or changing its aspect ratio. */
-private fun applyStillPhotoFilter(context: Context, uri: Uri, filter: SocialPhotoFilter): Uri {
-    val values = matrixFor(filter) ?: return uri
-    val source = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-        ?: error("No se pudo abrir la foto capturada.")
+/** Applies a pixel filter into an identically-sized bitmap; the photo bounds and aspect ratio stay unchanged. */
+internal fun applyPhotoFilterToBitmap(source: Bitmap, filter: SocialPhotoFilter): Bitmap {
+    val values = matrixFor(filter) ?: return source
     val filtered = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(values))
     }
     Canvas(filtered).drawBitmap(source, Rect(0, 0, source.width, source.height), Rect(0, 0, filtered.width, filtered.height), paint)
-    source.recycle()
+    return filtered
+}
+
+/** Applies a real still-photo filter to the saved image without cropping or changing its aspect ratio. */
+private fun applyStillPhotoFilter(context: Context, uri: Uri, filter: SocialPhotoFilter): Uri {
+    if (filter == SocialPhotoFilter.ORIGINAL) return uri
+    val source = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        ?: error("No se pudo abrir la foto capturada.")
+    val filtered = applyPhotoFilterToBitmap(source, filter)
     val output = File(context.cacheDir, "social-filter-${UUID.randomUUID()}.jpg")
-    output.outputStream().use { stream ->
-        check(filtered.compress(Bitmap.CompressFormat.JPEG, 94, stream)) { "No se pudo guardar la foto editada." }
+    try {
+        output.outputStream().use { stream ->
+            check(filtered.compress(Bitmap.CompressFormat.JPEG, 94, stream)) { "No se pudo guardar la foto editada." }
+        }
+    } catch (error: Exception) {
+        output.delete()
+        throw error
+    } finally {
+        if (filtered !== source) filtered.recycle()
+        source.recycle()
     }
-    filtered.recycle()
     return Uri.fromFile(output)
 }
 
@@ -197,17 +211,9 @@ internal fun SocialCameraDialog(
                 }
 
                 if (capturedPhoto != null) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
-                        SocialPhotoFilter.entries.forEach { filter ->
-                            Button(
-                                onClick = { photoFilter = filter },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (photoFilter == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
-                                )
-                            ) { Text(filter.label, color = Color.White) }
-                        }
-                    }
-                    Text("Filtro aplicado a la foto · conserva su proporción", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
+                    Text("Vista previa del filtro · se aplicará al archivo sin recortar la foto", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(onClick = { capturedPhoto = null; photoFilter = SocialPhotoFilter.ORIGINAL }) { Text("Repetir") }
                         Button(
@@ -228,6 +234,12 @@ internal fun SocialCameraDialog(
                         ) { Text("Usar foto") }
                     }
                 } else {
+                    if (!videoMode) {
+                        SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
+                        Text("El filtro seleccionado se aplicará a la foto capturada.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    } else {
+                        Text("Los filtros solo se aplican a fotos; el video se graba sin filtro.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(
                             onClick = {
@@ -236,7 +248,8 @@ internal fun SocialCameraDialog(
                                 controller.cameraControl?.enableTorch(flashEnabled)
                             },
                             enabled = flashAvailable && !isCapturing,
-                            colors = ButtonDefaults.buttonColors(containerColor = if (flashEnabled) Color(0xFFE1306C) else Color(0xFF202A3A))
+                            colors = ButtonDefaults.buttonColors(containerColor = if (flashEnabled) Color(0xFFE1306C) else Color(0xFF202A3A)),
+                            modifier = Modifier.testTag("social_camera_flash_toggle")
                         ) { Text(if (flashEnabled) "Flash encendido" else "Flash apagado") }
                         IconButton(
                             onClick = {
@@ -306,6 +319,28 @@ internal fun SocialCameraDialog(
                     }
                 }
                 message?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp) }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SocialPhotoFilterPicker(
+    selected: SocialPhotoFilter,
+    onSelect: (SocialPhotoFilter) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Filtros para foto", color = Color.White, fontSize = 13.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SocialPhotoFilter.entries.forEach { filter ->
+                Button(
+                    onClick = { onSelect(filter) },
+                    modifier = Modifier.weight(1f).testTag("social_photo_filter_${filter.name.lowercase()}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
+                    )
+                ) { Text(filter.label, color = Color.White, fontSize = 12.sp) }
             }
         }
     }
