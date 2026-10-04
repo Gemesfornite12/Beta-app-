@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      release_tag:
+        description: New unique public prerelease tag for this test APK
+        required: true
+        type: string
+        default: zapia-r8-beta-20261003
 
 permissions:
   contents: read
@@ -133,18 +138,41 @@ jobs:
           name: omnistudio-real-oauth-test-apk
           path: release_asset
 
+      - name: Refuse to modify an existing release tag
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            if (!tag || !/^[A-Za-z0-9._/-]+$/.test(tag)) {
+              core.setFailed('Invalid release tag.');
+              return;
+            }
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+              core.setFailed(`Tag ${tag} already exists; refusing to publish.`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.info(`Tag ${tag} does not exist; safe to create a separate prerelease.`);
+            }
+
       - name: Publish a separate test-only prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: zapia-social-test-20261001
-          name: OmniStudio Social .test APK (2026-10-01)
+          tag_name: ${{ inputs.release_tag }}
+          name: OmniStudio Beta R8 .test APK (${{ inputs.release_tag }})
           body: |-
-            Temporary direct-download APK to test OmniStudio Social features from the isolated .test branch.
+            Temporary direct-download APK built from the isolated Beta .test branch with R8 optimization enabled.
             This is not the production APK or a Play Store release.
           target_commitish: zapia/test-newrepo-real-oauth-20260930
           prerelease: true
           draft: false
           files: release_asset/app-debug.apk
           fail_on_unmatched_files: true
-          overwrite_files: true
+          overwrite_files: false
           token: ${{ secrets.GITHUB_TOKEN }}
