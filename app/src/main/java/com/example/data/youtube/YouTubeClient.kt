@@ -56,6 +56,21 @@ object YouTubeClient {
         return null
     }
 
+    fun buildVideoUrl(videoId: String): String {
+        val normalized = videoId.trim()
+        return if (normalized.isEmpty()) {
+            "https://www.youtube.com/watch?v="
+        } else {
+            "https://www.youtube.com/watch?v=$normalized"
+        }
+    }
+
+    fun buildEmbedUrl(videoId: String): String {
+        val normalized = videoId.trim()
+        require(normalized.isNotEmpty()) { "videoId must not be blank" }
+        return "https://www.youtube.com/embed/$normalized?autoplay=1&playsinline=1&fs=1&rel=0&modestbranding=1&enablejsapi=1"
+    }
+
     /**
      * Curated videos database for immediate instant discovery & offline/fallback availability
      */
