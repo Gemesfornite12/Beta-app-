@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Static, read-only checks for the isolated Social .test RTDB rule subtree."""
+"""Static checks and optional local-emulator compilation for Social .test RTDB rules."""
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-rules = json.loads((ROOT / "database.rules.json").read_text())["rules"]
+RULES_PATH = ROOT / "database.rules.json"
+rules = json.loads(RULES_PATH.read_text())["rules"]
 social = rules["social_test"]
 
 expected_root_keys = {
@@ -32,17 +37,20 @@ for required in (
     "root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted'",
 ):
     assert required in write, f"comment create rule missing {required}"
+comment_fields = {"authorUid", "authorUsername", "authorDisplayName", "text", "createdAt"}
 validate = comment[".validate"]
+assert "newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName', 'text', 'createdAt'])" in validate
 for required in (
-    "newData.numChildren() == 5", "newData.child('authorUid').val() == auth.uid",
-    "newData.child('text').isString()", "newData.child('text').val().matches(/.*\\S.*/) ",
+    "newData.child('authorUid').isString()", "newData.child('authorUid').val() == auth.uid",
+    "newData.child('authorUsername').isString()", "newData.child('authorDisplayName').isString()",
+    "newData.child('text').isString()", "newData.child('text').val().matches(/.*\\S.*/)" ,
     "newData.child('text').val().length <= 1000", "newData.child('createdAt').isNumber()",
 ):
-    # Regex whitespace is normalized independently below.
-    if required.endswith(" "):
-        assert required.rstrip() in validate
-    else:
-        assert required in validate, f"comment validation missing {required}"
+    assert required in validate, f"comment validation missing {required}"
+assert "numChildren" not in validate, "unsupported numChildren() call remains"
+assert set(comment) - {".write", ".validate"} == comment_fields | {"$other"}, "comment schema must reject unknown fields"
+assert comment["$other"][".validate"] is False, "unexpected comment fields must be rejected"
+assert all(comment[field][".validate"] is True for field in comment_fields), "declare allowed comment fields for $other exclusion"
 
 saved_uid = social["savedPosts"]["$uid"]
 assert saved_uid[".read"] == "auth != null && auth.uid == $uid"
@@ -54,12 +62,19 @@ assert "root.child('social_test').child('postsByUser').child($ownerUid).child($p
 assert "child('mediaType').val() == 'video'" in saved_write
 assert "profiles').child($ownerUid).child('visibility').val() == 'public'" in saved_write
 assert "followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted'" in saved_write
+saved_fields = {"ownerUid", "postId", "savedAt"}
 saved_validate = saved[".validate"]
+assert "newData.hasChildren(['ownerUid', 'postId', 'savedAt'])" in saved_validate
 for required in (
-    "newData.numChildren() == 3", "newData.child('ownerUid').val() == $ownerUid",
-    "newData.child('postId').val() == $postId", "newData.child('savedAt').isNumber()",
+    "newData.child('ownerUid').isString()", "newData.child('ownerUid').val() == $ownerUid",
+    "newData.child('postId').isString()", "newData.child('postId').val() == $postId",
+    "newData.child('savedAt').isNumber()",
 ):
     assert required in saved_validate, f"savedPosts validation missing {required}"
+assert "numChildren" not in saved_validate, "unsupported numChildren() call remains"
+assert set(saved) - {".write", ".validate"} == saved_fields | {"$other"}, "savedPosts schema must reject unknown fields"
+assert saved["$other"][".validate"] is False, "unexpected savedPosts fields must be rejected"
+assert all(saved[field][".validate"] is True for field in saved_fields), "declare allowed savedPosts fields for $other exclusion"
 
 # The existing likes layout and per-user leaf remain present and unchanged in behavior.
 assert social["likes"]["$ownerUid"]["$postId"]["$likerUid"][".write"] == (
@@ -69,3 +84,34 @@ assert social["likes"]["$ownerUid"]["$postId"]["$likerUid"][".write"] == (
 )
 assert social["likes"]["$ownerUid"]["$postId"]["$likerUid"][".validate"] == "!newData.exists() || newData.val() == true"
 print("Social .test RTDB rules scope and interaction constraints passed (static/read-only).")
+
+# If the Firebase CLI is installed, start only a local Database Emulator with these rules.
+# The temporary project/config and emulator are isolated; this never contacts live RTDB.
+firebase = shutil.which("firebase")
+if not firebase:
+    print("RTDB emulator compiler check skipped: Firebase CLI is not installed.")
+else:
+    with tempfile.TemporaryDirectory(prefix="social-test-rtdb-") as temp_dir:
+        temp = Path(temp_dir)
+        shutil.copy2(RULES_PATH, temp / "database.rules.json")
+        config = {
+            "database": {"rules": "database.rules.json"},
+            "emulators": {"database": {"host": "127.0.0.1", "port": 9001}},
+        }
+        (temp / "firebase.json").write_text(json.dumps(config))
+        env = os.environ.copy()
+        env["CI"] = "1"
+        try:
+            result = subprocess.run(
+                [firebase, "emulators:exec", "--project", "demo-social-test", "--only", "database",
+                 "--config", str(temp / "firebase.json"), "--non-interactive", "true"],
+                cwd=temp, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=240, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError("RTDB emulator compiler check timed out") from exc
+        output = result.stdout or ""
+        compiler_errors = ("no such method/property", "rules syntax error", "rules compilation error", "error loading database rules")
+        if result.returncode != 0 or any(marker in output.lower() for marker in compiler_errors):
+            raise AssertionError("RTDB emulator rules compilation failed:\n" + output[-12000:])
+        print("RTDB Database Emulator started and accepted the rules (compiler check passed).")
