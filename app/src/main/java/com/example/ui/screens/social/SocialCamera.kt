@@ -2,19 +2,25 @@ package com.example.ui.screens.social
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.ExifInterface
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Size
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.view.TransformExperimental
+import androidx.camera.view.transform.OutputTransform
 import androidx.camera.media3.effect.Media3Effect
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
@@ -81,6 +87,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 internal enum class SocialPhotoFilter(val label: String) {
     ORIGINAL("Original"), MONOCHROME("B/N"), SEPIA("Sepia")
@@ -107,6 +115,10 @@ private fun composeColorFilter(filter: SocialPhotoFilter): ColorFilter? =
 
 internal enum class SocialVideoFilter(val label: String) {
     ORIGINAL("Original"), MONOCHROME("B/N"), SEPIA("Sepia")
+}
+
+private enum class SocialCameraToolTab(val label: String) {
+    EFFECTS("Efectos"), FILTERS("Filtros"), BACKGROUNDS("Fondos")
 }
 
 /** Column-major RGB transforms used by CameraX's Media3 GPU effect pipeline (linear RGB). */
@@ -152,34 +164,51 @@ internal fun applyPhotoFilterToBitmap(source: Bitmap, filter: SocialPhotoFilter)
 
 private data class StillPhotoFilterResult(val uri: Uri, val detectedFaceCount: Int)
 
+@OptIn(TransformExperimental::class)
+internal data class SocialPreviewSegmentationFrame(
+    val mask: PersonSegmentationMask,
+    val sourceTransform: OutputTransform,
+    val width: Int,
+    val height: Int,
+    val rotationDegrees: Int
+)
+
 /** Applies color and face stickers to a still photo without cropping or changing its aspect ratio. */
 private fun applyStillPhotoFilter(
     context: Context,
     uri: Uri,
     filter: SocialPhotoFilter,
-    faceFilter: SocialFaceFilter
+    faceFilter: SocialFaceFilter,
+    background: SocialBackgroundPreset
 ): StillPhotoFilterResult {
-    if (filter == SocialPhotoFilter.ORIGINAL && faceFilter == SocialFaceFilter.NONE) {
+    if (filter == SocialPhotoFilter.ORIGINAL && faceFilter == SocialFaceFilter.NONE && background == SocialBackgroundPreset.ORIGINAL) {
         return StillPhotoFilterResult(uri, 0)
     }
-    val source = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-        ?: error("No se pudo abrir la foto capturada.")
+    val source = decodeSocialPhotoUpright(context, uri)
+    var backgroundFiltered: Bitmap? = null
     var colorFiltered: Bitmap? = null
     var faceFiltered: Bitmap? = null
     var output: File? = null
     try {
         var baseBitmap = source
+        if (background != SocialBackgroundPreset.ORIGINAL) {
+            val personMask = segmentSocialPhoto(context, source)
+            val replacement = applySocialBackgroundToBitmap(source, personMask, background)
+            backgroundFiltered = replacement
+            baseBitmap = replacement
+        }
         matrixFor(filter)?.let { values ->
-            val colorBitmap = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+            val colorBitmap = Bitmap.createBitmap(baseBitmap.width, baseBitmap.height, Bitmap.Config.ARGB_8888)
             colorFiltered = colorBitmap
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                 colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(values))
             }
-            Canvas(colorBitmap).drawBitmap(source, Rect(0, 0, source.width, source.height), Rect(0, 0, colorBitmap.width, colorBitmap.height), paint)
+            Canvas(colorBitmap).drawBitmap(baseBitmap, Rect(0, 0, baseBitmap.width, baseBitmap.height), Rect(0, 0, colorBitmap.width, colorBitmap.height), paint)
             baseBitmap = colorBitmap
         }
 
         val faceResult = applySocialFaceFilterToBitmap(
+            context,
             baseBitmap,
             faceFilter,
             allowInPlace = baseBitmap !== source
@@ -200,7 +229,27 @@ private fun applyStillPhotoFilter(
     } finally {
         faceFiltered?.recycle()
         colorFiltered?.takeIf { it !== faceFiltered }?.recycle()
+        backgroundFiltered?.takeIf { it !== colorFiltered && it !== faceFiltered }?.recycle()
         source.recycle()
+    }
+}
+
+private fun decodeSocialPhotoUpright(context: Context, uri: Uri): Bitmap {
+    val orientation = context.contentResolver.openInputStream(uri)?.use { stream ->
+        ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    } ?: ExifInterface.ORIENTATION_NORMAL
+    val rotation = when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+        else -> 0f
+    }
+    val decoded = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        ?: error("No se pudo abrir la foto capturada.")
+    if (rotation == 0f) return decoded
+    val matrix = Matrix().apply { postRotate(rotation) }
+    return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true).also { upright ->
+        if (upright !== decoded) decoded.recycle()
     }
 }
 
@@ -214,7 +263,7 @@ private fun deleteSocialTempUri(context: Context, uri: Uri) {
     }
 }
 
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, TransformExperimental::class)
 @Composable
 internal fun SocialCameraDialog(
     enableAudio: Boolean,
@@ -230,11 +279,15 @@ internal fun SocialCameraDialog(
         LifecycleCameraController(context).apply {
             cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.VIDEO_CAPTURE)
+            imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+            imageAnalysisTargetSize = CameraController.OutputSize(Size(1280, 720))
             imageCaptureFlashMode = ImageCapture.FLASH_MODE_OFF
         }
     }
     var flashEnabled by remember { mutableStateOf(false) }
     var videoMode by remember { mutableStateOf(false) }
+    var frontCameraSelected by remember { mutableStateOf(false) }
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var recording by remember { mutableStateOf(false) }
     var activeRecording by remember { mutableStateOf<androidx.camera.video.Recording?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
@@ -243,11 +296,44 @@ internal fun SocialCameraDialog(
     var photoAccepted by remember { mutableStateOf(false) }
     var photoFilter by remember { mutableStateOf(SocialPhotoFilter.ORIGINAL) }
     var faceFilter by remember { mutableStateOf(SocialFaceFilter.NONE) }
+    var activeCameraToolTab by remember { mutableStateOf(SocialCameraToolTab.EFFECTS) }
+    var toolsPanelOpen by remember { mutableStateOf(false) }
+    var selectedBackground by remember { mutableStateOf(SocialBackgroundPreset.ORIGINAL) }
     var videoFilter by remember { mutableStateOf(SocialVideoFilter.ORIGINAL) }
     var faceFilterMessage by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    var previewFaceResult by remember { mutableStateOf<SocialFaceResult>(emptyList()) }
+    var latestPreviewSegmentationFrame by remember { mutableStateOf<SocialPreviewSegmentationFrame?>(null) }
     val latestRecording by rememberUpdatedState(activeRecording)
     val cameraExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    val faceAnalysisExecutor = remember(context) { Executors.newSingleThreadExecutor() }
+    val faceResultsCallback = rememberUpdatedState<(SocialFaceResult, PersonSegmentationMask?, OutputTransform, Int, Int, Int) -> Unit> { result, mask, source, width, height, rotation ->
+        val preview = previewViewRef
+        previewFaceResult = mapSocialFacesToPreview(
+            result,
+            source,
+            preview?.outputTransform,
+            width,
+            height,
+            rotation,
+            preview?.width ?: 0,
+            preview?.height ?: 0
+        )
+        latestPreviewSegmentationFrame = mask?.let { SocialPreviewSegmentationFrame(it, source, width, height, rotation) }
+    }
+    val faceErrorCallback = rememberUpdatedState<(String) -> Unit> { error -> message = error }
+    val faceAnalyzerCreation = remember(context) {
+        runCatching {
+            SocialFaceImageAnalyzer(
+                context,
+                onResults = { result, mask, source, width, height, rotation ->
+                    cameraExecutor.execute { faceResultsCallback.value(result, mask, source, width, height, rotation) }
+                },
+                onError = { error -> cameraExecutor.execute { faceErrorCallback.value(error) } }
+            )
+        }
+    }
+    val faceAnalyzer = faceAnalyzerCreation.getOrNull()
     val videoEffect = remember(context) {
         Media3Effect(
             context,
@@ -261,7 +347,30 @@ internal fun SocialCameraDialog(
         videoEffect.setEffects(effects)
     }
 
-    LaunchedEffect(capturedPhoto, photoFilter, faceFilter) {
+    LaunchedEffect(controller, videoMode, capturedPhoto, faceAnalyzer, faceFilter, selectedBackground) {
+        val faceEffectsActive = faceFilter != SocialFaceFilter.NONE
+        val backgroundReplacementActive = selectedBackground != SocialBackgroundPreset.ORIGINAL
+        faceAnalyzer?.setRequestedEffects(faceEffectsActive, backgroundReplacementActive)
+        val analysisActive = !videoMode && capturedPhoto == null && faceAnalyzer != null &&
+            (faceEffectsActive || backgroundReplacementActive)
+        if (analysisActive) {
+            controller.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+            controller.setEnabledUseCases(
+                CameraController.IMAGE_CAPTURE or CameraController.VIDEO_CAPTURE or CameraController.IMAGE_ANALYSIS
+            )
+            controller.setImageAnalysisAnalyzer(faceAnalysisExecutor, requireNotNull(faceAnalyzer))
+        } else {
+            controller.clearImageAnalysisAnalyzer()
+            controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.VIDEO_CAPTURE)
+            previewFaceResult = emptyList()
+            latestPreviewSegmentationFrame = null
+        }
+        if (faceAnalyzerCreation.isFailure) {
+            message = "No se pudo iniciar el filtro local. Las fotos y videos siguen disponibles."
+        }
+    }
+
+    LaunchedEffect(capturedPhoto, photoFilter, faceFilter, selectedBackground) {
         val sourcePhoto = capturedPhoto
         if (sourcePhoto == null) {
             val previous = processedPhoto
@@ -279,7 +388,7 @@ internal fun SocialCameraDialog(
             // written cache URI is always available for cleanup rather than becoming orphaned.
             val rendered = withContext(NonCancellable) {
                 withContext(Dispatchers.IO) {
-                    applyStillPhotoFilter(context, sourcePhoto, photoFilter, faceFilter)
+                    applyStillPhotoFilter(context, sourcePhoto, photoFilter, faceFilter, selectedBackground)
                 }
             }
             if (!currentCoroutineContext().isActive) {
@@ -306,7 +415,12 @@ internal fun SocialCameraDialog(
             currentCoroutineContext().ensureActive()
             processedPhoto = sourcePhoto
             faceFilterMessage = null
-            message = error.message ?: "No se pudo procesar el filtro de rostro."
+            message = if (selectedBackground != SocialBackgroundPreset.ORIGINAL) {
+                selectedBackground = SocialBackgroundPreset.ORIGINAL
+                error.message ?: "No se pudo reemplazar el fondo; se conservó la foto original."
+            } else {
+                error.message ?: "No se pudo procesar el filtro local."
+            }
             val previous = previousProcessedPhoto
             if (previous != null && previous != sourcePhoto) {
                 withContext(NonCancellable + Dispatchers.IO) { deleteSocialTempUri(context, previous) }
@@ -320,12 +434,21 @@ internal fun SocialCameraDialog(
     val latestProcessedPhoto by rememberUpdatedState(processedPhoto)
     val latestPhotoAccepted by rememberUpdatedState(photoAccepted)
 
-    DisposableEffect(controller, lifecycleOwner, videoEffect) {
+    DisposableEffect(controller, lifecycleOwner, videoEffect, faceAnalyzer) {
+        controller.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+        controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.VIDEO_CAPTURE)
         controller.bindToLifecycle(lifecycleOwner)
         controller.setEffects(setOf(videoEffect))
         controllerRef = controller
         onDispose {
             latestRecording?.stop()
+            controller.clearImageAnalysisAnalyzer()
+            controller.unbind()
+            faceAnalysisExecutor.shutdown()
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                faceAnalysisExecutor.awaitTermination(2, TimeUnit.SECONDS)
+                faceAnalyzer?.close()
+            }
             if (!latestPhotoAccepted) {
                 val temporaryPhotos = listOfNotNull(latestProcessedPhoto, latestCapturedPhoto).distinct()
                 if (temporaryPhotos.isNotEmpty()) {
@@ -334,13 +457,32 @@ internal fun SocialCameraDialog(
                     }
                 }
             }
-            controller.unbind()
             videoEffect.close()
             controllerRef = null
         }
     }
 
     val flashAvailable = controllerRef?.cameraInfo?.hasFlashUnit() == true
+    val toggleFlash = {
+        val enabled = !flashEnabled
+        flashEnabled = enabled
+        controller.imageCaptureFlashMode = if (enabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
+        controller.cameraControl?.enableTorch(enabled)
+        Unit
+    }
+    val toggleCameraLens = {
+        val nextIsFront = !frontCameraSelected
+        val nextSelector = if (nextIsFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+        runCatching { controller.cameraSelector = nextSelector }
+            .onSuccess {
+                frontCameraSelected = nextIsFront
+                flashEnabled = false
+                controller.cameraControl?.enableTorch(false)
+                previewFaceResult = emptyList()
+            }
+            .onFailure { message = "No se pudo cambiar de cámara en este dispositivo." }
+        Unit
+    }
     Dialog(
         onDismissRequest = { if (!recording) latestDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -380,23 +522,103 @@ internal fun SocialCameraDialog(
                             factory = { viewContext ->
                                 PreviewView(viewContext).also { previewView ->
                                     previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
+                                    previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                                     previewView.controller = controller
+                                    previewViewRef = previewView
                                 }
                             },
-                            update = { it.controller = controller }
+                            update = { previewView ->
+                                previewViewRef = previewView
+                                previewView.controller = controller
+                            }
                         )
+                        if (!videoMode) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
+                                factory = { viewContext -> SocialFaceOverlayView(viewContext) },
+                                update = { overlay ->
+                                    overlay.update(
+                                        faceFilter,
+                                        previewFaceResult,
+                                        selectedBackground,
+                                        latestPreviewSegmentationFrame,
+                                        previewViewRef?.outputTransform
+                                    )
+                                }
+                            )
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { if (!recording) latestDismiss() },
+                                enabled = !recording,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0x9905070D))
+                            ) { Text("×", color = Color.White, fontSize = 20.sp) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Button(
+                                    onClick = { toolsPanelOpen = !toolsPanelOpen },
+                                    enabled = !recording,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x9905070D)),
+                                    modifier = Modifier.testTag("social_camera_tools_toggle")
+                                ) { Text(if (toolsPanelOpen) "Ocultar" else if (videoMode) "Filtros" else "Efectos", color = Color.White, fontSize = 11.sp) }
+                                Button(
+                                    onClick = toggleCameraLens,
+                                    enabled = !recording,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x9905070D))
+                                ) { Text(if (frontCameraSelected) "Trasera" else "Frontal", color = Color.White, fontSize = 11.sp) }
+                                Button(
+                                    onClick = toggleFlash,
+                                    enabled = flashAvailable && !isCapturing,
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (flashEnabled) Color(0xFFE1306C) else Color(0x9905070D))
+                                ) { Text(if (flashEnabled) "⚡" else "Flash", color = Color.White, fontSize = 11.sp) }
+                            }
+                        }
+                        if (!videoMode) {
+                            val faceStatus = if (previewFaceResult.isNotEmpty()) "Rostro detectado" else if (faceFilter != SocialFaceFilter.NONE) "Centra tu rostro" else null
+                            faceStatus?.let {
+                                Text(
+                                    it,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 52.dp)
+                                        .background(Color(0x9905070D), RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
                         if (recording) {
-                            Text("● REC", color = Color.Red, modifier = Modifier.align(Alignment.TopStart).padding(14.dp))
+                            Text("● REC", color = Color.Red, modifier = Modifier.align(Alignment.BottomStart).padding(14.dp))
                         }
                         if (isCapturing) CircularProgressIndicator(color = Color(0xFFF472B6))
                     }
                 }
 
                 if (capturedPhoto != null) {
-                    SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
-                    SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
-                    Text("Los filtros se aplican a la foto; la detección de rostro funciona en el dispositivo.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
-                    faceFilterMessage?.let { Text(it, color = Color(0xFFFDE68A), fontSize = 11.sp) }
+                    Button(
+                        onClick = { toolsPanelOpen = !toolsPanelOpen },
+                        modifier = Modifier.fillMaxWidth().testTag("social_camera_tools_toggle")
+                    ) { Text(if (toolsPanelOpen) "Ocultar efectos y fondos" else "Efectos, filtros y fondos") }
+                    if (toolsPanelOpen) {
+                        SocialCameraToolTabs(selected = activeCameraToolTab, onSelect = { activeCameraToolTab = it })
+                        when (activeCameraToolTab) {
+                            SocialCameraToolTab.EFFECTS -> SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
+                            SocialCameraToolTab.FILTERS -> SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
+                            SocialCameraToolTab.BACKGROUNDS -> SocialBackgroundPicker(selected = selectedBackground, onSelect = { selectedBackground = it })
+                        }
+                        Text(
+                            when (activeCameraToolTab) {
+                                SocialCameraToolTab.EFFECTS -> "El efecto se aplica de inmediato y queda en la foto guardada. Análisis local."
+                                SocialCameraToolTab.FILTERS -> "El filtro de color queda en la foto guardada."
+                                SocialCameraToolTab.BACKGROUNDS -> "El fondo seleccionado reemplaza el fondo de la foto en el dispositivo."
+                            },
+                            color = Color(0xFFCBD5E1), fontSize = 11.sp
+                        )
+                        if (activeCameraToolTab == SocialCameraToolTab.EFFECTS) {
+                            faceFilterMessage?.let { Text(it, color = Color(0xFFFDE68A), fontSize = 11.sp) }
+                        }
+                    }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(
@@ -405,6 +627,7 @@ internal fun SocialCameraDialog(
                                 capturedPhoto = null
                                 photoFilter = SocialPhotoFilter.ORIGINAL
                                 faceFilter = SocialFaceFilter.NONE
+                                selectedBackground = SocialBackgroundPreset.ORIGINAL
                                 faceFilterMessage = null
                                 message = null
                                 if (discardedSource != null) {
@@ -432,13 +655,24 @@ internal fun SocialCameraDialog(
                         ) { Text("Usar foto") }
                     }
                 } else {
-                    if (!videoMode) {
-                        SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
-                        SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
-                        Text("El filtro de cara se aplica a la foto capturada, sin subir la imagen para analizarla.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
-                    } else {
-                        SocialVideoFilterPicker(selected = videoFilter, onSelect = { videoFilter = it })
-                        Text("El efecto GPU se muestra en la vista previa y queda aplicado al video grabado, sin cambiar el encuadre. Los filtros de cara aún son solo para fotos.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    if (toolsPanelOpen && !videoMode) {
+                        SocialCameraToolTabs(selected = activeCameraToolTab, onSelect = { activeCameraToolTab = it })
+                        when (activeCameraToolTab) {
+                            SocialCameraToolTab.EFFECTS -> SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
+                            SocialCameraToolTab.FILTERS -> SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
+                            SocialCameraToolTab.BACKGROUNDS -> SocialBackgroundPicker(selected = selectedBackground, onSelect = { selectedBackground = it })
+                        }
+                        Text(
+                            when (activeCameraToolTab) {
+                                SocialCameraToolTab.EFFECTS -> "Los efectos se aplican de inmediato y quedan en la foto guardada. Análisis local."
+                                SocialCameraToolTab.FILTERS -> "Los filtros de color se conservan en la foto capturada."
+                                SocialCameraToolTab.BACKGROUNDS -> "El fondo seleccionado reemplaza el fondo en la vista previa y en la foto guardada."
+                            },
+                            color = Color(0xFFCBD5E1), fontSize = 11.sp
+                        )
+                    } else if (videoMode) {
+                        if (toolsPanelOpen) SocialVideoFilterPicker(selected = videoFilter, onSelect = { videoFilter = it })
+                        Text("El video incluye filtros de color. Los stickers y el reemplazo de fondo no se aplican a videos grabados.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(
@@ -495,6 +729,7 @@ internal fun SocialCameraDialog(
                                     controller.takePicture(options, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
                                         override fun onImageSaved(result: ImageCapture.OutputFileResults) {
                                             isCapturing = false
+                                            toolsPanelOpen = true
                                             capturedPhoto = Uri.fromFile(photoFile)
                                         }
                                         override fun onError(error: ImageCaptureException) {
@@ -553,19 +788,86 @@ private fun SocialFaceFilterPicker(
     onSelect: (SocialFaceFilter) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Filtros de cara · foto", color = Color.White, fontSize = 13.sp)
+        Text("Efectos de rostro", color = Color.White, fontSize = 13.sp)
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SocialFaceFilter.entries.forEach { filter ->
                 Button(
                     onClick = { onSelect(filter) },
-                    modifier = Modifier.testTag("social_face_filter_${filter.name.lowercase()}"),
+                    modifier = Modifier.size(width = 84.dp, height = 68.dp).testTag("social_face_filter_${filter.name.lowercase()}"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (selected == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
                     )
-                ) { Text(filter.label, color = Color.White, fontSize = 12.sp, maxLines = 1) }
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Text(
+                            when (filter) {
+                                SocialFaceFilter.NONE -> "○"
+                                SocialFaceFilter.DOG_EARS -> "🐶"
+                                SocialFaceFilter.GLASSES -> "👓"
+                                SocialFaceFilter.CROWN -> "👑"
+                            },
+                            color = Color.White, fontSize = 20.sp
+                        )
+                        Text(filter.label, color = Color.White, fontSize = 10.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SocialCameraToolTabs(
+    selected: SocialCameraToolTab,
+    onSelect: (SocialCameraToolTab) -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        SocialCameraToolTab.entries.forEach { tab ->
+            Button(
+                onClick = { onSelect(tab) },
+                modifier = Modifier.weight(1f).testTag("social_camera_tab_${tab.name.lowercase()}"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (selected == tab) Color(0xFFE1306C) else Color(0xFF202A3A)
+                )
+            ) { Text(tab.label, color = Color.White, fontSize = 11.sp, maxLines = 1) }
+        }
+    }
+}
+
+@Composable
+private fun SocialBackgroundPicker(
+    selected: SocialBackgroundPreset,
+    onSelect: (SocialBackgroundPreset) -> Unit
+) {
+    val backgrounds = listOf(
+        SocialBackgroundPreset.ORIGINAL to Color(0xFF334155),
+        SocialBackgroundPreset.SKY to Color(0xFF60A5FA),
+        SocialBackgroundPreset.SUNSET to Color(0xFFF97316),
+        SocialBackgroundPreset.LAVENDER to Color(0xFFA78BFA)
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Fondos", color = Color.White, fontSize = 13.sp)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            backgrounds.forEach { (preset, swatch) ->
+                Button(
+                    onClick = { onSelect(preset) },
+                    modifier = Modifier.size(width = 82.dp, height = 68.dp)
+                        .testTag("social_background_${preset.name.lowercase()}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected == preset) Color(0xFFE1306C) else Color(0xFF202A3A)
+                    )
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Box(Modifier.size(38.dp, 24.dp).background(swatch, RoundedCornerShape(6.dp)))
+                        Text(preset.label, color = Color.White, fontSize = 10.sp, maxLines = 1)
+                    }
+                }
             }
         }
     }
