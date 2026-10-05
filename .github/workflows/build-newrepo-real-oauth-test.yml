@@ -56,9 +56,10 @@ jobs:
         uses: android-actions/setup-android@v4.0.4
         with:
           accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
