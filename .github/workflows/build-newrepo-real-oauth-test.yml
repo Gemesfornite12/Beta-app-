@@ -55,6 +55,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4.0.4
 
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses
+
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
