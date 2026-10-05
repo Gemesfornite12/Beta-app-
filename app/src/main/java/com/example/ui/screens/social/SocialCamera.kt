@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
@@ -331,6 +332,9 @@ internal fun SocialCameraDialog(
                 },
                 onError = { error -> cameraExecutor.execute { faceErrorCallback.value(error) } }
             )
+        }.onFailure { failure ->
+            // Initialization diagnostics contain exception details only; no image, landmark, or identity data is logged.
+            Log.e("SocialCamera", "Could not construct the local MediaPipe analyzer.", failure)
         }
     }
     val faceAnalyzer = faceAnalyzerCreation.getOrNull()
@@ -351,8 +355,8 @@ internal fun SocialCameraDialog(
         val faceEffectsActive = faceFilter != SocialFaceFilter.NONE
         val backgroundReplacementActive = selectedBackground != SocialBackgroundPreset.ORIGINAL
         faceAnalyzer?.setRequestedEffects(faceEffectsActive, backgroundReplacementActive)
-        val analysisActive = !videoMode && capturedPhoto == null && faceAnalyzer != null &&
-            (faceEffectsActive || backgroundReplacementActive)
+        val analysisActive = !videoMode && capturedPhoto == null &&
+            faceAnalyzer?.hasActiveLocalEffects() == true
         if (analysisActive) {
             controller.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
             controller.setEnabledUseCases(
@@ -365,8 +369,9 @@ internal fun SocialCameraDialog(
             previewFaceResult = emptyList()
             latestPreviewSegmentationFrame = null
         }
-        if (faceAnalyzerCreation.isFailure) {
-            message = "No se pudo iniciar el filtro local. Las fotos y videos siguen disponibles."
+        faceAnalyzerCreation.exceptionOrNull()?.let { failure ->
+            val failureType = failure.javaClass.simpleName.ifBlank { "error" }
+            message = "No se pudo iniciar el filtro local ($failureType). Las fotos y videos siguen disponibles."
         }
     }
 
