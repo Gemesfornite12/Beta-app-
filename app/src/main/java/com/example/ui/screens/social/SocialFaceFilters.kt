@@ -695,8 +695,11 @@ internal class SocialFaceOverlayView(context: Context) : View(context) {
     private var sourceToPreview = Matrix()
     private var maskToBuffer = Matrix()
     private var maskBitmap: Bitmap? = null
+    private var backgroundBitmap: Bitmap? = null
+    private var backgroundCanvas: Canvas? = null
     private var maskPixels = IntArray(0)
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val backgroundBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val maskCutoutPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     }
@@ -712,15 +715,18 @@ internal class SocialFaceOverlayView(context: Context) : View(context) {
         selectedFilter = filter
         faces = results
         selectedBackground = background
-        segmentationFrame = newSegmentationFrame
         val frame = newSegmentationFrame
         if (background != SocialBackgroundPreset.ORIGINAL && frame != null && targetTransform != null) {
+            segmentationFrame = frame
             updateMask(frame.mask)
             sourceToPreview = cameraBufferToPreviewMatrix(
                 frame.sourceTransform, targetTransform, frame.width, frame.height
             )
             maskToBuffer = maskToImageBufferMatrix(frame.mask, frame.width, frame.height, frame.rotationDegrees)
             updateBackgroundShader(frame.width, frame.height, background)
+            updateBackgroundLayer(frame)
+        } else {
+            segmentationFrame = null
         }
         invalidate()
     }
@@ -746,19 +752,33 @@ internal class SocialFaceOverlayView(context: Context) : View(context) {
         gradientKey = key
     }
 
+    private fun updateBackgroundLayer(frame: SocialPreviewSegmentationFrame) {
+        val current = backgroundBitmap
+        val bitmap = current?.takeIf {
+            !it.isRecycled && it.width == frame.width && it.height == frame.height
+        } ?: Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888).also {
+            current?.takeIf { old -> !old.isRecycled }?.recycle()
+            backgroundBitmap = it
+            backgroundCanvas = Canvas(it)
+        }
+        val target = backgroundCanvas ?: Canvas(bitmap).also { backgroundCanvas = it }
+        val bounds = RectF(0f, 0f, frame.width.toFloat(), frame.height.toFloat())
+        target.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        target.drawRect(bounds, backgroundPaint)
+        maskBitmap?.let { mask -> target.drawBitmap(mask, maskToBuffer, maskCutoutPaint) }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (width == 0 || height == 0) return
         val frame = segmentationFrame
-        val mask = maskBitmap
-        if (selectedBackground != SocialBackgroundPreset.ORIGINAL && frame != null && mask != null && !mask.isRecycled) {
-            val bounds = RectF(0f, 0f, frame.width.toFloat(), frame.height.toFloat())
+        val backgroundLayer = backgroundBitmap
+        if (selectedBackground != SocialBackgroundPreset.ORIGINAL && frame != null &&
+            backgroundLayer != null && !backgroundLayer.isRecycled
+        ) {
             canvas.save()
             canvas.concat(sourceToPreview)
-            val layer = canvas.saveLayer(bounds, null)
-            canvas.drawRect(bounds, backgroundPaint)
-            canvas.drawBitmap(mask, maskToBuffer, maskCutoutPaint)
-            canvas.restoreToCount(layer)
+            canvas.drawBitmap(backgroundLayer, 0f, 0f, backgroundBitmapPaint)
             canvas.restore()
         }
         faces.forEach { face -> drawSocialFaceSticker(canvas, width.toFloat(), height.toFloat(), face, selectedFilter) }
@@ -768,6 +788,9 @@ internal class SocialFaceOverlayView(context: Context) : View(context) {
         super.onDetachedFromWindow()
         maskBitmap?.takeIf { !it.isRecycled }?.recycle()
         maskBitmap = null
+        backgroundBitmap?.takeIf { !it.isRecycled }?.recycle()
+        backgroundBitmap = null
+        backgroundCanvas = null
         maskPixels = IntArray(0)
         segmentationFrame = null
     }

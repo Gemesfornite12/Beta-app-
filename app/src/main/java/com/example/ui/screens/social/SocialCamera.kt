@@ -468,6 +468,7 @@ internal fun SocialCameraDialog(
         flashEnabled = enabled
         controller.imageCaptureFlashMode = if (enabled) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
         controller.cameraControl?.enableTorch(enabled)
+        Unit
     }
     val toggleCameraLens = {
         val nextIsFront = !frontCameraSelected
@@ -480,6 +481,7 @@ internal fun SocialCameraDialog(
                 previewFaceResult = emptyList()
             }
             .onFailure { message = "No se pudo cambiar de cámara en este dispositivo." }
+        Unit
     }
     Dialog(
         onDismissRequest = { if (!recording) latestDismiss() },
