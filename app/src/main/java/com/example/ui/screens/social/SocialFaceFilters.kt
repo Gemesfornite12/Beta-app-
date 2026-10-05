@@ -138,11 +138,42 @@ internal fun applySocialBackgroundToBitmap(
     preset: SocialBackgroundPreset
 ): Bitmap {
     if (preset == SocialBackgroundPreset.ORIGINAL) return source
-    val overlay = createSocialBackgroundOverlay(mask, preset, source.width, source.height, 0)
+
+    val background = createSocialBackgroundOverlay(mask, preset, source.width, source.height, 0)
         ?: error("No se pudo aplicar el fondo seleccionado.")
-    val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
-    Canvas(output).drawBitmap(overlay, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
-    overlay.recycle()
+
+    val personMaskBitmap = Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888)
+    personMaskBitmap.setPixels(
+        IntArray(mask.width * mask.height) { index ->
+            val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
+            Color.argb(alpha, 255, 255, 255)
+        },
+        0,
+        mask.width,
+        0,
+        0,
+        mask.width,
+        mask.height
+    )
+
+    val scaledMask = Bitmap.createScaledBitmap(personMaskBitmap, source.width, source.height, true)
+    val maskedPerson = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val maskedPersonCanvas = Canvas(maskedPerson)
+    maskedPersonCanvas.drawBitmap(source, 0f, 0f, null)
+    val preservePersonPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+    }
+    maskedPersonCanvas.drawBitmap(scaledMask, 0f, 0f, preservePersonPaint)
+
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val outputCanvas = Canvas(output)
+    outputCanvas.drawBitmap(background, 0f, 0f, null)
+    outputCanvas.drawBitmap(maskedPerson, 0f, 0f, null)
+
+    personMaskBitmap.recycle()
+    scaledMask.recycle()
+    maskedPerson.recycle()
+    background.recycle()
     return output
 }
 
