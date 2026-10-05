@@ -138,51 +138,62 @@ internal fun applySocialBackgroundToBitmap(
     preset: SocialBackgroundPreset
 ): Bitmap {
     if (preset == SocialBackgroundPreset.ORIGINAL) return source
-    val overlay = createSocialBackgroundOverlay(mask, preset, source.width, source.height, 0)
-        ?: error("No se pudo aplicar el fondo seleccionado.")
-    val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
-    val pixelCount = source.width * source.height
-    val outputPixels = IntArray(pixelCount)
-    val overlayPixels = IntArray(pixelCount)
-    source.getPixels(outputPixels, 0, source.width, 0, 0, source.width, source.height)
-    overlay.getPixels(overlayPixels, 0, source.width, 0, 0, source.width, source.height)
+    if (source.width <= 0 || source.height <= 0 || mask.width <= 0 || mask.height <= 0 ||
+        mask.personConfidence.size < mask.width * mask.height
+    ) error("No se pudo aplicar el fondo seleccionado.")
 
-    // Composite the same-size layer per pixel. Bitmap filtering can sample a neighboring
-    // backdrop pixel into a fully confident person pixel, so transparent mask pixels must
-    // leave the original pixel untouched rather than going through a filtered drawBitmap.
-    for (index in 0 until pixelCount) {
-        val backgroundPixel = overlayPixels[index]
-        val backgroundAlpha = Color.alpha(backgroundPixel)
-        if (backgroundAlpha == 0) continue
-        if (backgroundAlpha == 255) {
-            outputPixels[index] = backgroundPixel
-            continue
-        }
-
-        val sourcePixel = outputPixels[index]
-        val inverseBackgroundAlpha = 255 - backgroundAlpha
-        val sourceAlpha = Color.alpha(sourcePixel)
-        val sourceWeight = sourceAlpha * inverseBackgroundAlpha / 255f
-        val outputAlpha = backgroundAlpha + sourceWeight
-        if (outputAlpha <= 0f) {
-            outputPixels[index] = Color.TRANSPARENT
-            continue
-        }
-
-        fun compositeChannel(background: Int, foreground: Int): Int =
-            ((background * backgroundAlpha + foreground * sourceWeight) / outputAlpha + 0.5f)
-                .toInt()
-                .coerceIn(0, 255)
-
-        outputPixels[index] = Color.argb(
-            (outputAlpha + 0.5f).toInt().coerceIn(0, 255),
-            compositeChannel(Color.red(backgroundPixel), Color.red(sourcePixel)),
-            compositeChannel(Color.green(backgroundPixel), Color.green(sourcePixel)),
-            compositeChannel(Color.blue(backgroundPixel), Color.blue(sourcePixel))
-        )
+    // Build the person coverage in photo coordinates, then blend against an opaque gradient.
+    // Avoid drawing a masked transparent bitmap over the photo: that can alter pixels whose
+    // segmentation confidence is exactly 1.0 through bitmap compositing/filtering.
+    val confidencePixels = IntArray(mask.width * mask.height) { index ->
+        val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
+        Color.argb(alpha, 255, 255, 255)
     }
-    output.setPixels(outputPixels, 0, source.width, 0, 0, source.width, source.height)
-    overlay.recycle()
+    var personMask = Bitmap.createBitmap(confidencePixels, mask.width, mask.height, Bitmap.Config.ARGB_8888)
+    if (personMask.width != source.width || personMask.height != source.height) {
+        val scaled = Bitmap.createScaledBitmap(personMask, source.width, source.height, true)
+        if (scaled !== personMask) personMask.recycle()
+        personMask = scaled
+    }
+
+    val background = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(0f, 0f, 0f, source.height.toFloat(), preset.topColor, preset.bottomColor, Shader.TileMode.CLAMP)
+    }
+    Canvas(background).drawRect(0f, 0f, source.width.toFloat(), source.height.toFloat(), backgroundPaint)
+
+    val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
+    // Reuse scanline buffers rather than allocating full-photo pixel arrays.
+    val sourceRow = IntArray(source.width)
+    val backgroundRow = IntArray(source.width)
+    val personRow = IntArray(source.width)
+    val outputRow = IntArray(source.width)
+    for (y in 0 until source.height) {
+        source.getPixels(sourceRow, 0, source.width, 0, y, source.width, 1)
+        background.getPixels(backgroundRow, 0, source.width, 0, y, source.width, 1)
+        personMask.getPixels(personRow, 0, source.width, 0, y, source.width, 1)
+        for (x in 0 until source.width) {
+            val confidence = Color.alpha(personRow[x])
+            val sourcePixel = sourceRow[x]
+            outputRow[x] = when (confidence) {
+                255 -> sourcePixel // A fully confident person pixel is preserved exactly.
+                0 -> backgroundRow[x]
+                else -> {
+                    val sourceWeight = confidence / 255f * (Color.alpha(sourcePixel) / 255f)
+                    val backgroundWeight = 1f - sourceWeight
+                    Color.argb(
+                        255,
+                        (Color.red(sourcePixel) * sourceWeight + Color.red(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                        (Color.green(sourcePixel) * sourceWeight + Color.green(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                        (Color.blue(sourcePixel) * sourceWeight + Color.blue(backgroundRow[x]) * backgroundWeight + 0.5f).toInt()
+                    )
+                }
+            }
+        }
+        output.setPixels(outputRow, 0, source.width, 0, y, source.width, 1)
+    }
+    personMask.recycle()
+    background.recycle()
     return output
 }
 
