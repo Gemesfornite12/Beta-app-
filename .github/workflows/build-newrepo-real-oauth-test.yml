@@ -114,8 +114,8 @@ jobs:
           test "$APK_SHA256" = "$KEY_SHA256"
           echo "Verified Beta package and registered signer match"
 
-      - name: Run connector and media-routing tests
-        run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --tests com.example.data.firebase.MessageHistoryPagingTest --tests com.example.ui.components.ChatYouTubeViewerTest --tests com.example.data.social.SocialVideoAutoSplitterTest --tests com.example.data.social.SocialInteractionModelTest --tests com.example.data.social.SocialVideoAutoSplitterTest --tests com.example.ui.screens.social.SocialVideoFeedLogicTest --tests com.example.ui.screens.chat.ChatMediaSelectionTest --tests com.example.ui.screens.chat.VoiceRecordingFormatTest --tests com.example.ui.screens.chat.VoiceNoteDialogActionsTest --tests com.example.ui.screens.chat.VoiceNoteAudioEffectsTest --tests com.example.ui.screens.social.SocialPhotoFilterTest --tests com.example.ui.screens.social.SocialVideoFilterTest --stacktrace
+      - name: Run debug Kotlin compilation and unit tests
+        run: gradle compileDebugKotlin testDebugUnitTest --stacktrace
 
       - name: Verify Crashlytics privacy boundaries
         run: python3 scripts/test_crashlytics_privacy.py
