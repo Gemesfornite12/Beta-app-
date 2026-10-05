@@ -141,7 +141,47 @@ internal fun applySocialBackgroundToBitmap(
     val overlay = createSocialBackgroundOverlay(mask, preset, source.width, source.height, 0)
         ?: error("No se pudo aplicar el fondo seleccionado.")
     val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
-    Canvas(output).drawBitmap(overlay, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+    val pixelCount = source.width * source.height
+    val outputPixels = IntArray(pixelCount)
+    val overlayPixels = IntArray(pixelCount)
+    source.getPixels(outputPixels, 0, source.width, 0, 0, source.width, source.height)
+    overlay.getPixels(overlayPixels, 0, source.width, 0, 0, source.width, source.height)
+
+    // Composite the same-size layer per pixel. Bitmap filtering can sample a neighboring
+    // backdrop pixel into a fully confident person pixel, so transparent mask pixels must
+    // leave the original pixel untouched rather than going through a filtered drawBitmap.
+    for (index in 0 until pixelCount) {
+        val backgroundPixel = overlayPixels[index]
+        val backgroundAlpha = Color.alpha(backgroundPixel)
+        if (backgroundAlpha == 0) continue
+        if (backgroundAlpha == 255) {
+            outputPixels[index] = backgroundPixel
+            continue
+        }
+
+        val sourcePixel = outputPixels[index]
+        val inverseBackgroundAlpha = 255 - backgroundAlpha
+        val sourceAlpha = Color.alpha(sourcePixel)
+        val sourceWeight = sourceAlpha * inverseBackgroundAlpha / 255f
+        val outputAlpha = backgroundAlpha + sourceWeight
+        if (outputAlpha <= 0f) {
+            outputPixels[index] = Color.TRANSPARENT
+            continue
+        }
+
+        fun compositeChannel(background: Int, foreground: Int): Int =
+            ((background * backgroundAlpha + foreground * sourceWeight) / outputAlpha + 0.5f)
+                .toInt()
+                .coerceIn(0, 255)
+
+        outputPixels[index] = Color.argb(
+            (outputAlpha + 0.5f).toInt().coerceIn(0, 255),
+            compositeChannel(Color.red(backgroundPixel), Color.red(sourcePixel)),
+            compositeChannel(Color.green(backgroundPixel), Color.green(sourcePixel)),
+            compositeChannel(Color.blue(backgroundPixel), Color.blue(sourcePixel))
+        )
+    }
+    output.setPixels(outputPixels, 0, source.width, 0, 0, source.width, source.height)
     overlay.recycle()
     return output
 }
