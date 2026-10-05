@@ -23,6 +23,8 @@ import androidx.camera.view.video.AudioConfig
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.VideoRecordEvent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,7 +72,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -142,25 +150,68 @@ internal fun applyPhotoFilterToBitmap(source: Bitmap, filter: SocialPhotoFilter)
     return filtered
 }
 
-/** Applies a real still-photo filter to the saved image without cropping or changing its aspect ratio. */
-private fun applyStillPhotoFilter(context: Context, uri: Uri, filter: SocialPhotoFilter): Uri {
-    if (filter == SocialPhotoFilter.ORIGINAL) return uri
+private data class StillPhotoFilterResult(val uri: Uri, val detectedFaceCount: Int)
+
+/** Applies color and face stickers to a still photo without cropping or changing its aspect ratio. */
+private fun applyStillPhotoFilter(
+    context: Context,
+    uri: Uri,
+    filter: SocialPhotoFilter,
+    faceFilter: SocialFaceFilter
+): StillPhotoFilterResult {
+    if (filter == SocialPhotoFilter.ORIGINAL && faceFilter == SocialFaceFilter.NONE) {
+        return StillPhotoFilterResult(uri, 0)
+    }
     val source = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
         ?: error("No se pudo abrir la foto capturada.")
-    val filtered = applyPhotoFilterToBitmap(source, filter)
-    val output = File(context.cacheDir, "social-filter-${UUID.randomUUID()}.jpg")
+    var colorFiltered: Bitmap? = null
+    var faceFiltered: Bitmap? = null
+    var output: File? = null
     try {
-        output.outputStream().use { stream ->
-            check(filtered.compress(Bitmap.CompressFormat.JPEG, 94, stream)) { "No se pudo guardar la foto editada." }
+        var baseBitmap = source
+        matrixFor(filter)?.let { values ->
+            val colorBitmap = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+            colorFiltered = colorBitmap
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(values))
+            }
+            Canvas(colorBitmap).drawBitmap(source, Rect(0, 0, source.width, source.height), Rect(0, 0, colorBitmap.width, colorBitmap.height), paint)
+            baseBitmap = colorBitmap
         }
+
+        val faceResult = applySocialFaceFilterToBitmap(
+            baseBitmap,
+            faceFilter,
+            allowInPlace = baseBitmap !== source
+        )
+        if (faceResult.bitmap !== baseBitmap) faceFiltered = faceResult.bitmap
+        val finalBitmap = faceResult.bitmap
+        if (finalBitmap === source) return StillPhotoFilterResult(uri, faceResult.detectedFaceCount)
+
+        val outputFile = File(context.cacheDir, "social-filter-${UUID.randomUUID()}.jpg")
+        output = outputFile
+        outputFile.outputStream().use { stream ->
+            check(finalBitmap.compress(Bitmap.CompressFormat.JPEG, 94, stream)) { "No se pudo guardar la foto editada." }
+        }
+        return StillPhotoFilterResult(Uri.fromFile(outputFile), faceResult.detectedFaceCount)
     } catch (error: Exception) {
-        output.delete()
+        output?.delete()
         throw error
     } finally {
-        if (filtered !== source) filtered.recycle()
+        faceFiltered?.recycle()
+        colorFiltered?.takeIf { it !== faceFiltered }?.recycle()
         source.recycle()
     }
-    return Uri.fromFile(output)
+}
+
+private fun deleteSocialTempUri(context: Context, uri: Uri) {
+    if (uri.scheme != "file") return
+    runCatching {
+        val path = uri.path ?: return@runCatching
+        val root = context.cacheDir.canonicalPath + File.separator
+        val file = File(path)
+        if (file.canonicalPath.startsWith(root)) file.delete()
+    }
 }
 
 @OptIn(UnstableApi::class)
@@ -188,8 +239,12 @@ internal fun SocialCameraDialog(
     var activeRecording by remember { mutableStateOf<androidx.camera.video.Recording?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     var capturedPhoto by remember { mutableStateOf<Uri?>(null) }
+    var processedPhoto by remember { mutableStateOf<Uri?>(null) }
+    var photoAccepted by remember { mutableStateOf(false) }
     var photoFilter by remember { mutableStateOf(SocialPhotoFilter.ORIGINAL) }
+    var faceFilter by remember { mutableStateOf(SocialFaceFilter.NONE) }
     var videoFilter by remember { mutableStateOf(SocialVideoFilter.ORIGINAL) }
+    var faceFilterMessage by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     val latestRecording by rememberUpdatedState(activeRecording)
     val cameraExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
@@ -206,12 +261,79 @@ internal fun SocialCameraDialog(
         videoEffect.setEffects(effects)
     }
 
+    LaunchedEffect(capturedPhoto, photoFilter, faceFilter) {
+        val sourcePhoto = capturedPhoto
+        if (sourcePhoto == null) {
+            val previous = processedPhoto
+            processedPhoto = null
+            faceFilterMessage = null
+            if (previous != null) {
+                withContext(NonCancellable + Dispatchers.IO) { deleteSocialTempUri(context, previous) }
+            }
+            return@LaunchedEffect
+        }
+        isCapturing = true
+        val previousProcessedPhoto = processedPhoto
+        try {
+            // Let the bounded bitmap operation finish even if the effect is replaced, so a newly
+            // written cache URI is always available for cleanup rather than becoming orphaned.
+            val rendered = withContext(NonCancellable) {
+                withContext(Dispatchers.IO) {
+                    applyStillPhotoFilter(context, sourcePhoto, photoFilter, faceFilter)
+                }
+            }
+            if (!currentCoroutineContext().isActive) {
+                if (rendered.uri != sourcePhoto) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        deleteSocialTempUri(context, rendered.uri)
+                    }
+                }
+                return@LaunchedEffect
+            }
+            val previous = processedPhoto
+            processedPhoto = rendered.uri
+            faceFilterMessage = if (faceFilter != SocialFaceFilter.NONE && rendered.detectedFaceCount == 0) {
+                "No se detectó un rostro; prueba con mejor luz y de frente."
+            } else {
+                null
+            }
+            if (previous != null && previous != sourcePhoto && previous != rendered.uri) {
+                withContext(NonCancellable + Dispatchers.IO) { deleteSocialTempUri(context, previous) }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            currentCoroutineContext().ensureActive()
+            processedPhoto = sourcePhoto
+            faceFilterMessage = null
+            message = error.message ?: "No se pudo procesar el filtro de rostro."
+            val previous = previousProcessedPhoto
+            if (previous != null && previous != sourcePhoto) {
+                withContext(NonCancellable + Dispatchers.IO) { deleteSocialTempUri(context, previous) }
+            }
+        } finally {
+            isCapturing = false
+        }
+    }
+
+    val latestCapturedPhoto by rememberUpdatedState(capturedPhoto)
+    val latestProcessedPhoto by rememberUpdatedState(processedPhoto)
+    val latestPhotoAccepted by rememberUpdatedState(photoAccepted)
+
     DisposableEffect(controller, lifecycleOwner, videoEffect) {
         controller.bindToLifecycle(lifecycleOwner)
         controller.setEffects(setOf(videoEffect))
         controllerRef = controller
         onDispose {
             latestRecording?.stop()
+            if (!latestPhotoAccepted) {
+                val temporaryPhotos = listOfNotNull(latestProcessedPhoto, latestCapturedPhoto).distinct()
+                if (temporaryPhotos.isNotEmpty()) {
+                    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                        temporaryPhotos.forEach { deleteSocialTempUri(context, it) }
+                    }
+                }
+            }
             controller.unbind()
             videoEffect.close()
             controllerRef = null
@@ -242,11 +364,15 @@ internal fun SocialCameraDialog(
                     val photo = capturedPhoto
                     if (photo != null) {
                         AsyncImage(
-                            model = photo,
-                            contentDescription = "Vista previa de la foto",
+                            model = processedPhoto ?: photo,
+                            contentDescription = "Vista previa de la foto con sus filtros",
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit,
-                            colorFilter = composeColorFilter(photoFilter)
+                            colorFilter = if (processedPhoto == null) composeColorFilter(photoFilter) else null
+                        )
+                        if (isCapturing) CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center),
+                            color = Color(0xFFF472B6)
                         )
                     } else {
                         AndroidView(
@@ -268,21 +394,37 @@ internal fun SocialCameraDialog(
 
                 if (capturedPhoto != null) {
                     SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
-                    Text("Vista previa del filtro · se aplicará al archivo sin recortar la foto", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
+                    Text("Los filtros se aplican a la foto; la detección de rostro funciona en el dispositivo.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                    faceFilterMessage?.let { Text(it, color = Color(0xFFFDE68A), fontSize = 11.sp) }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Button(onClick = { capturedPhoto = null; photoFilter = SocialPhotoFilter.ORIGINAL }) { Text("Repetir") }
                         Button(
-                            enabled = !isCapturing,
                             onClick = {
-                                val source = capturedPhoto ?: return@Button
-                                isCapturing = true
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    val output = runCatching { applyStillPhotoFilter(context, source, photoFilter) }
-                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                        isCapturing = false
-                                        output.onSuccess { onCapture(it, "image/jpeg") }
-                                            .onFailure { message = it.message ?: "No se pudo aplicar el filtro." }
+                                val discardedSource = capturedPhoto
+                                capturedPhoto = null
+                                photoFilter = SocialPhotoFilter.ORIGINAL
+                                faceFilter = SocialFaceFilter.NONE
+                                faceFilterMessage = null
+                                message = null
+                                if (discardedSource != null) {
+                                    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                                        deleteSocialTempUri(context, discardedSource)
+                                    }
+                                }
+                            },
+                            enabled = !isCapturing
+                        ) { Text("Repetir") }
+                        Button(
+                            enabled = !isCapturing && processedPhoto != null,
+                            onClick = {
+                                val result = processedPhoto ?: return@Button
+                                val source = capturedPhoto
+                                photoAccepted = true
+                                onCapture(result, "image/jpeg")
+                                if (source != null && source != result) {
+                                    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                                        deleteSocialTempUri(context, source)
                                     }
                                 }
                             },
@@ -292,10 +434,11 @@ internal fun SocialCameraDialog(
                 } else {
                     if (!videoMode) {
                         SocialPhotoFilterPicker(selected = photoFilter, onSelect = { photoFilter = it })
-                        Text("El filtro seleccionado se aplicará a la foto capturada.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        SocialFaceFilterPicker(selected = faceFilter, onSelect = { faceFilter = it })
+                        Text("El filtro de cara se aplica a la foto capturada, sin subir la imagen para analizarla.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                     } else {
                         SocialVideoFilterPicker(selected = videoFilter, onSelect = { videoFilter = it })
-                        Text("El efecto GPU se muestra en la vista previa y queda aplicado al video grabado, sin cambiar el encuadre.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                        Text("El efecto GPU se muestra en la vista previa y queda aplicado al video grabado, sin cambiar el encuadre. Los filtros de cara aún son solo para fotos.", color = Color(0xFFCBD5E1), fontSize = 11.sp)
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Button(
@@ -403,6 +546,30 @@ private fun SocialPhotoFilterPicker(
     }
 }
 
+
+@Composable
+private fun SocialFaceFilterPicker(
+    selected: SocialFaceFilter,
+    onSelect: (SocialFaceFilter) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Filtros de cara · foto", color = Color.White, fontSize = 13.sp)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            SocialFaceFilter.entries.forEach { filter ->
+                Button(
+                    onClick = { onSelect(filter) },
+                    modifier = Modifier.testTag("social_face_filter_${filter.name.lowercase()}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selected == filter) Color(0xFFE1306C) else Color(0xFF202A3A)
+                    )
+                ) { Text(filter.label, color = Color.White, fontSize = 12.sp, maxLines = 1) }
+            }
+        }
+    }
+}
 
 @Composable
 private fun SocialVideoFilterPicker(
