@@ -13,6 +13,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
 import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import androidx.camera.core.ImageProxy
 import androidx.camera.view.TransformExperimental
@@ -337,7 +338,29 @@ internal fun applySocialFaceFilterToBitmap(
     return FaceFilterBitmapResult(output, landmarks.size)
 }
 
-/** Holds CameraX's media image until both MediaPipe live tasks complete or fail. */
+private const val SOCIAL_FACE_ANALYZER_TAG = "SocialFaceAnalyzer"
+
+private data class SocialModelInitialization<T>(val instance: T?, val failure: Throwable?)
+
+/** Keep independent effects isolated: a broken segmenter must not disable face landmarks, or vice versa. */
+private inline fun <T> initializeSocialModel(
+    taskName: String,
+    assetName: String,
+    create: () -> T
+): SocialModelInitialization<T> = try {
+    SocialModelInitialization(create(), null)
+} catch (failure: Exception) {
+    Log.e(SOCIAL_FACE_ANALYZER_TAG, "$taskName failed to initialize from bundled asset '$assetName'.", failure)
+    SocialModelInitialization(null, failure)
+} catch (failure: LinkageError) {
+    Log.e(SOCIAL_FACE_ANALYZER_TAG, "$taskName native runtime failed to initialize for asset '$assetName'.", failure)
+    SocialModelInitialization(null, failure)
+}
+
+private fun modelInitializationMessage(taskName: String, failure: Throwable?): String =
+    "No se pudo iniciar el filtro local de $taskName (${failure?.javaClass?.simpleName ?: "error"}). Las fotos y videos siguen disponibles."
+
+/** Holds CameraX's media image until both available MediaPipe live tasks complete or fail. */
 @OptIn(TransformExperimental::class)
 internal class SocialFaceImageAnalyzer(
     context: Context,
@@ -361,8 +384,8 @@ internal class SocialFaceImageAnalyzer(
         val failed = AtomicBoolean(false)
     }
 
-    @Volatile private var faceEffectsEnabled = true
-    @Volatile private var backgroundReplacementEnabled = true
+    @Volatile private var faceEffectsEnabled = false
+    @Volatile private var backgroundReplacementEnabled = false
     @Volatile private var lastAcceptedFrameMs = 0L
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private val frameInFlight = AtomicBoolean(false)
@@ -376,22 +399,43 @@ internal class SocialFaceImageAnalyzer(
     @Volatile private var closed = false
 
     fun setRequestedEffects(faceEffects: Boolean, backgroundReplacement: Boolean) {
-        faceEffectsEnabled = faceEffects
-        backgroundReplacementEnabled = backgroundReplacement
+        faceEffectsEnabled = faceEffects && landmarker != null
+        backgroundReplacementEnabled = backgroundReplacement && segmenter != null
+        if (faceEffects && landmarker == null) {
+            onError(modelInitializationMessage("FaceLandmarker", faceInitialization.failure))
+        }
+        if (backgroundReplacement && segmenter == null) {
+            onError(modelInitializationMessage("ImageSegmenter", segmentationInitialization.failure))
+        }
     }
 
-    private val landmarker = createSocialFaceLandmarker(
-        context,
-        RunningMode.LIVE_STREAM,
-        resultListener = { result, input -> handleFaceResult(result, input) },
-        errorListener = { handleFaceError() }
-    )
-    private val segmenter = createSocialImageSegmenter(
-        context,
-        RunningMode.LIVE_STREAM,
-        resultListener = { result, input -> handleSegmentationResult(result, input) },
-        errorListener = { handleSegmentationError() }
-    )
+    fun hasActiveLocalEffects(): Boolean = faceEffectsEnabled || backgroundReplacementEnabled
+
+    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL) {
+        createSocialFaceLandmarker(
+            context,
+            RunningMode.LIVE_STREAM,
+            resultListener = { result, input -> handleFaceResult(result, input) },
+            errorListener = { error ->
+                Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker live inference failed.", error)
+                handleFaceError()
+            }
+        )
+    }
+    private val landmarker = faceInitialization.instance
+
+    private val segmentationInitialization = initializeSocialModel("ImageSegmenter", SELFIE_SEGMENTER_MODEL) {
+        createSocialImageSegmenter(
+            context,
+            RunningMode.LIVE_STREAM,
+            resultListener = { result, input -> handleSegmentationResult(result, input) },
+            errorListener = { error ->
+                Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter live inference failed.", error)
+                handleSegmentationError()
+            }
+        )
+    }
+    private val segmenter = segmentationInitialization.instance
 
     override fun analyze(imageProxy: ImageProxy) {
         val now = SystemClock.uptimeMillis()
@@ -429,19 +473,22 @@ internal class SocialFaceImageAnalyzer(
                 .build()
             pending.faceImage?.let { input ->
                 try {
-                    landmarker.detectAsync(input, options, timestamp)
-                } catch (_: Exception) {
+                    checkNotNull(landmarker).detectAsync(input, options, timestamp)
+                } catch (failure: Exception) {
+                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
                     finishFace(pending, null)
                 }
             }
             pending.segmentationImage?.let { input ->
                 try {
-                    segmenter.segmentAsync(input, options, timestamp)
-                } catch (_: Exception) {
+                    checkNotNull(segmenter).segmentAsync(input, options, timestamp)
+                } catch (failure: Exception) {
+                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter rejected a live camera frame.", failure)
                     finishSegmentation(pending, null)
                 }
             }
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "Failed to prepare a local camera frame for MediaPipe.", failure)
             val submitted = frame
             if (submitted != null) {
                 if (pendingFrame.compareAndSet(submitted, null)) release(submitted)
@@ -520,8 +567,8 @@ internal class SocialFaceImageAnalyzer(
     override fun close() {
         if (closed) return
         closed = true
-        landmarker.close()
-        segmenter.close()
+        landmarker?.close()
+        segmenter?.close()
         pendingFrame.getAndSet(null)?.let(::release)
         frameInFlight.set(false)
     }
