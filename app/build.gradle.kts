@@ -118,6 +118,8 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
+  // MediaPipe Face Landmarker runs locally with the bundled face_landmarker.task model.
+  implementation(libs.mediapipe.tasks.vision)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.coil.gif)

@@ -10,6 +10,7 @@ on:
       - 'app/src/main/**'
       - 'app/src/test/**'
       - 'gradle/libs.versions.toml'
+      - 'scripts/test_crashlytics_privacy.py'
   workflow_dispatch:
     inputs:
       publish_direct_apk:
@@ -28,17 +29,21 @@ permissions:
 
 jobs:
   build-test-apk:
+    # Keep this privileged workflow limited to the isolated test branch and this fixed review branch.
+    if: |
+      github.ref_name == 'zapia/test-newrepo-real-oauth-20260930' ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == 'zapia/social-face-stickers-beta-20261005')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
       run:
         working-directory: source
     steps:
-      - name: Checkout the isolated OmniStudio test branch
+      - name: Checkout the isolated Beta test ref
         uses: actions/checkout@v4
         with:
           repository: Gemesfornite12/Beta-app-
-          ref: zapia/test-newrepo-real-oauth-20260930
+          ref: ${{ github.ref_name }}
           path: source
 
       - name: Set up Java 17
@@ -111,6 +116,9 @@ jobs:
 
       - name: Run connector and media-routing tests
         run: gradle testDebugUnitTest --tests com.example.data.api.GroqWorkspaceConnectorTest --tests com.example.ui.viewmodel.GroqMediaRoutingTest --tests com.example.data.api.GoogleWorkspaceActionsApiTest --tests com.example.ui.screens.ai.GoogleWorkspaceCommandParserTest --tests com.example.data.supabase.SupabaseUploadPermissionTest --tests com.example.data.firebase.MessageHistoryPagingTest --tests com.example.ui.components.ChatYouTubeViewerTest --tests com.example.data.social.SocialVideoAutoSplitterTest --tests com.example.data.social.SocialInteractionModelTest --tests com.example.data.social.SocialVideoAutoSplitterTest --tests com.example.ui.screens.social.SocialVideoFeedLogicTest --tests com.example.ui.screens.chat.ChatMediaSelectionTest --tests com.example.ui.screens.chat.VoiceRecordingFormatTest --tests com.example.ui.screens.chat.VoiceNoteDialogActionsTest --tests com.example.ui.screens.chat.VoiceNoteAudioEffectsTest --tests com.example.ui.screens.social.SocialPhotoFilterTest --tests com.example.ui.screens.social.SocialVideoFilterTest --stacktrace
+
+      - name: Verify Crashlytics privacy boundaries
+        run: python3 scripts/test_crashlytics_privacy.py
 
       - name: Verify Social .test database rule scope and constraints
         run: python3 scripts/test_social_test_rules.py
