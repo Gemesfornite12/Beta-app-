@@ -54,4 +54,37 @@ class SocialPhotoFilterTest {
         assertEquals(Color.MAGENTA, result.getPixel(0, 0))
         source.recycle()
     }
+
+    @Test
+    fun selectedBackgroundPreservesThePersonAndReplacesTheBackdrop() {
+        val source = Bitmap.createBitmap(2, 1, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.MAGENTA)
+        }
+        val mask = PersonSegmentationMask(2, 1, floatArrayOf(1f, 0f))
+
+        val result = applySocialBackgroundToBitmap(source, mask, SocialBackgroundPreset.SKY)
+
+        assertNotSame(source, result)
+        assertEquals(source.width, result.width)
+        assertEquals(source.height, result.height)
+        assertEquals(Color.MAGENTA, result.getPixel(0, 0))
+        assertTrue(result.getPixel(1, 0) != Color.MAGENTA)
+        source.recycle()
+        result.recycle()
+    }
+
+    @Test
+    fun originalBackgroundPresetDoesNotReplacePixels() {
+        val source = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.MAGENTA)
+        }
+        val result = applySocialBackgroundToBitmap(
+            source,
+            PersonSegmentationMask(1, 1, floatArrayOf(0f)),
+            SocialBackgroundPreset.ORIGINAL
+        )
+        assertSame(source, result)
+        assertEquals(Color.MAGENTA, result.getPixel(0, 0))
+        source.recycle()
+    }
 }

@@ -118,8 +118,8 @@ dependencies {
   implementation(libs.firebase.ai)
   implementation(libs.firebase.analytics)
   implementation(libs.firebase.crashlytics)
-  // Google ML Kit runs face detection locally; bundled model works without a model download.
-  implementation(libs.mlkit.face.detection)
+  // MediaPipe Face Landmarker runs locally with the bundled face_landmarker.task model.
+  implementation(libs.mediapipe.tasks.vision)
   // Google ML Kit on-device Language Identification & Translation
   implementation("com.google.mlkit:language-id:17.0.6")
   implementation("com.google.mlkit:translate:17.0.3")
