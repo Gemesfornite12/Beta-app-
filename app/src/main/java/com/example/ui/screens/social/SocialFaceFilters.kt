@@ -138,43 +138,78 @@ internal fun applySocialBackgroundToBitmap(
     preset: SocialBackgroundPreset
 ): Bitmap {
     if (preset == SocialBackgroundPreset.ORIGINAL) return source
+    if (source.width <= 0 || source.height <= 0 || mask.width <= 0 || mask.height <= 0 ||
+        mask.personConfidence.size < mask.width * mask.height
+    ) error("No se pudo aplicar el fondo seleccionado.")
 
-    val background = createSocialBackgroundOverlay(mask, preset, source.width, source.height, 0)
-        ?: error("No se pudo aplicar el fondo seleccionado.")
-
-    val personMaskBitmap = Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888)
-    personMaskBitmap.setPixels(
+    // Build the person coverage in photo coordinates, then composite a single masked-source
+    // cutout (equivalent to DST_IN/SRC_IN) over the opaque replacement. Applying coverage
+    // once avoids clearing the replacement backdrop twice and preserves soft mask edges.
+    var personMask = Bitmap.createBitmap(
         IntArray(mask.width * mask.height) { index ->
             val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
             Color.argb(alpha, 255, 255, 255)
         },
-        0,
         mask.width,
-        0,
-        0,
-        mask.width,
-        mask.height
+        mask.height,
+        Bitmap.Config.ARGB_8888
     )
+    try {
+        if (personMask.width != source.width || personMask.height != source.height) {
+            val scaled = Bitmap.createScaledBitmap(personMask, source.width, source.height, true)
+            if (scaled !== personMask) personMask.recycle()
+            personMask = scaled
+        }
 
-    val scaledMask = Bitmap.createScaledBitmap(personMaskBitmap, source.width, source.height, true)
-    val maskedPerson = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-    val maskedPersonCanvas = Canvas(maskedPerson)
-    maskedPersonCanvas.drawBitmap(source, 0f, 0f, null)
-    val preservePersonPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+        val background = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        try {
+            val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(0f, 0f, 0f, source.height.toFloat(), preset.topColor, preset.bottomColor, Shader.TileMode.CLAMP)
+            }
+            Canvas(background).drawRect(0f, 0f, source.width.toFloat(), source.height.toFloat(), backgroundPaint)
+
+            val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
+            try {
+                // Reuse scanline buffers rather than allocating full-photo pixel arrays.
+                val sourceRow = IntArray(source.width)
+                val backgroundRow = IntArray(source.width)
+                val personRow = IntArray(source.width)
+                val outputRow = IntArray(source.width)
+                for (y in 0 until source.height) {
+                    source.getPixels(sourceRow, 0, source.width, 0, y, source.width, 1)
+                    background.getPixels(backgroundRow, 0, source.width, 0, y, source.width, 1)
+                    personMask.getPixels(personRow, 0, source.width, 0, y, source.width, 1)
+                    for (x in 0 until source.width) {
+                        val confidence = Color.alpha(personRow[x])
+                        val sourcePixel = sourceRow[x]
+                        outputRow[x] = when (confidence) {
+                            255 -> sourcePixel // Preserve fully confident person pixels exactly.
+                            0 -> backgroundRow[x] // Keep the replacement fully visible off-person.
+                            else -> {
+                                val sourceWeight = confidence / 255f * (Color.alpha(sourcePixel) / 255f)
+                                val backgroundWeight = 1f - sourceWeight
+                                Color.argb(
+                                    255,
+                                    (Color.red(sourcePixel) * sourceWeight + Color.red(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                                    (Color.green(sourcePixel) * sourceWeight + Color.green(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                                    (Color.blue(sourcePixel) * sourceWeight + Color.blue(backgroundRow[x]) * backgroundWeight + 0.5f).toInt()
+                                )
+                            }
+                        }
+                    }
+                    output.setPixels(outputRow, 0, source.width, 0, y, source.width, 1)
+                }
+                return output
+            } catch (failure: Throwable) {
+                output.recycle()
+                throw failure
+            }
+        } finally {
+            background.recycle()
+        }
+    } finally {
+        personMask.recycle()
     }
-    maskedPersonCanvas.drawBitmap(scaledMask, 0f, 0f, preservePersonPaint)
-
-    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-    val outputCanvas = Canvas(output)
-    outputCanvas.drawBitmap(background, 0f, 0f, null)
-    outputCanvas.drawBitmap(maskedPerson, 0f, 0f, null)
-
-    personMaskBitmap.recycle()
-    scaledMask.recycle()
-    maskedPerson.recycle()
-    background.recycle()
-    return output
 }
 
 private const val FACE_LANDMARKER_MODEL = "face_landmarker.task"
