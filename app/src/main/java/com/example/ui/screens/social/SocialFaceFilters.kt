@@ -12,6 +12,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
@@ -339,21 +340,61 @@ internal fun applySocialFaceFilterToBitmap(
 }
 
 private const val SOCIAL_FACE_ANALYZER_TAG = "SocialFaceAnalyzer"
+private const val MEDIAPIPE_TASKS_VISION_VERSION = "1.0.0"
+private val diagnosticAbsolutePath = Regex("""(?i)(?:[a-z]:)?[/\\](?:[^\s:/\\]+[/\\])+[^\s:/\\]*""")
+private val diagnosticControlChars = Regex("""\p{Cntrl}+""")
 
 private data class SocialModelInitialization<T>(val instance: T?, val failure: Throwable?)
+
+/** Removes control characters and local filesystem paths before a diagnostic string reaches Logcat. */
+private fun sanitizeSocialModelDiagnostic(value: String): String = value
+    .replace(diagnosticControlChars, " ")
+    .replace(diagnosticAbsolutePath, "<path>")
+    .take(512)
+
+/** Logs only initialization metadata and exception diagnostics, before camera frames are processed. */
+private fun logSocialModelInitializationFailure(
+    taskName: String,
+    assetName: String,
+    runningMode: RunningMode,
+    failure: Throwable
+) {
+    val deviceContext = "task=$taskName asset=$assetName mode=$runningMode sdk=${Build.VERSION.SDK_INT}" +
+        " abis=${Build.SUPPORTED_ABIS.joinToString(",")} tasksVision=$MEDIAPIPE_TASKS_VISION_VERSION"
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    var cause: Throwable? = failure
+    var causeIndex = 0
+    while (cause != null && causeIndex < 8 && seen.put(cause, true) == null) {
+        val message = sanitizeSocialModelDiagnostic(cause.message ?: "<no message>")
+        Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init failure $deviceContext cause[$causeIndex]=${cause.javaClass.name}: $message")
+        val frames = cause.stackTrace
+        frames.take(24).forEachIndexed { frameIndex, frame ->
+            val fileName = frame.fileName?.substringAfterLast('/')?.substringAfterLast('\\') ?: "Unknown Source"
+            val location = if (frame.lineNumber >= 0) "$fileName:${frame.lineNumber}" else fileName
+            val frameText = sanitizeSocialModelDiagnostic("${frame.className}.${frame.methodName}($location)")
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init stack cause[$causeIndex][$frameIndex] $frameText")
+        }
+        if (frames.size > 24) {
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init stack cause[$causeIndex] truncated=${frames.size - 24}")
+        }
+        cause = cause.cause
+        causeIndex++
+    }
+}
 
 /** Keep independent effects isolated: a broken segmenter must not disable face landmarks, or vice versa. */
 private inline fun <T> initializeSocialModel(
     taskName: String,
     assetName: String,
+    runningMode: RunningMode,
     create: () -> T
 ): SocialModelInitialization<T> = try {
     SocialModelInitialization(create(), null)
 } catch (failure: Exception) {
-    Log.e(SOCIAL_FACE_ANALYZER_TAG, "$taskName failed to initialize from bundled asset '$assetName'.", failure)
+    runCatching { logSocialModelInitializationFailure(taskName, assetName, runningMode, failure) }
     SocialModelInitialization(null, failure)
 } catch (failure: LinkageError) {
-    Log.e(SOCIAL_FACE_ANALYZER_TAG, "$taskName native runtime failed to initialize for asset '$assetName'.", failure)
+    runCatching { logSocialModelInitializationFailure(taskName, assetName, runningMode, failure) }
     SocialModelInitialization(null, failure)
 }
 
@@ -411,7 +452,7 @@ internal class SocialFaceImageAnalyzer(
 
     fun hasActiveLocalEffects(): Boolean = faceEffectsEnabled || backgroundReplacementEnabled
 
-    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL) {
+    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL, RunningMode.LIVE_STREAM) {
         createSocialFaceLandmarker(
             context,
             RunningMode.LIVE_STREAM,
@@ -424,7 +465,7 @@ internal class SocialFaceImageAnalyzer(
     }
     private val landmarker = faceInitialization.instance
 
-    private val segmentationInitialization = initializeSocialModel("ImageSegmenter", SELFIE_SEGMENTER_MODEL) {
+    private val segmentationInitialization = initializeSocialModel("ImageSegmenter", SELFIE_SEGMENTER_MODEL, RunningMode.LIVE_STREAM) {
         createSocialImageSegmenter(
             context,
             RunningMode.LIVE_STREAM,
