@@ -20,6 +20,7 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
-# Keep MediaPipe Tasks classes and vision APIs used through native/JNI code.
--keep class com.google.mediapipe.** { *; }
+# Keep the MediaPipe vision task APIs used by Social face filters.
+# Do not keep all of com.google.mediapipe: tasks-core 1.0.0 contains optional GraphProfiler/Graph references
+# to generated CalculatorProfileProto and GraphTemplateProto classes that are not shipped in its AAR.
 -keep class com.google.mediapipe.tasks.vision.** { *; }
