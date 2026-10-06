@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Keep MediaPipe Tasks classes and vision APIs used through native/JNI code.
+-keep class com.google.mediapipe.** { *; }
+-keep class com.google.mediapipe.tasks.vision.** { *; }
