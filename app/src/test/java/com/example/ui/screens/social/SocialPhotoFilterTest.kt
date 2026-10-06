@@ -15,6 +15,20 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class SocialPhotoFilterTest {
     @Test
+    fun modelInitializationDiagnosticShowsMissingClassWithoutRawExceptionText() {
+        val missingClass = "com.google.mediapipe.framework.internal.MissingRuntimeType"
+        val failure = IllegalStateException(
+            "private/path/not-for-display",
+            NoClassDefFoundError("Failed resolution of: L${missingClass.replace('.', '/')};")
+        )
+
+        assertEquals(missingClass, missingClassNameForDiagnostic(failure))
+        val message = modelInitializationMessage("FaceLandmarker", failure)
+        assertTrue(message.contains("IllegalStateException → NoClassDefFoundError: $missingClass"))
+        assertTrue(!message.contains("private/path/not-for-display"))
+    }
+
+    @Test
     fun chooserOffersOriginalMonochromeAndSepia() {
         assertEquals(listOf("Original", "B/N", "Sepia"), SocialPhotoFilter.entries.map { it.label })
     }

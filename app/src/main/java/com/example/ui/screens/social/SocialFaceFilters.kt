@@ -398,8 +398,43 @@ private inline fun <T> initializeSocialModel(
     SocialModelInitialization(null, failure)
 }
 
-private fun modelInitializationMessage(taskName: String, failure: Throwable?): String =
-    "No se pudo iniciar el filtro local de $taskName (${failure?.javaClass?.simpleName ?: "error"}). Las fotos y videos siguen disponibles."
+/** Extract only JVM class identifiers from standard class-linkage errors; never surface arbitrary exception text. */
+internal fun missingClassNameForDiagnostic(failure: Throwable?): String? {
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    var current = failure
+    var depth = 0
+    while (current != null && depth < 8 && seen.put(current, true) == null) {
+        if (current is NoClassDefFoundError || current is ClassNotFoundException) {
+            val raw = current.message?.trim().orEmpty()
+            val token = when {
+                raw.startsWith("Failed resolution of:") -> raw.substringAfter(':').trim().substringBefore(' ')
+                raw.startsWith("Could not find class ") -> raw.substringAfter("Could not find class ").trim().trim('"', '\'')
+                else -> raw
+            }
+            val className = token.removePrefix("L").removeSuffix(";").replace('/', '.')
+            if (className.contains('.') && className.matches(Regex("[A-Za-z_$][A-Za-z0-9_$.]*"))) return className
+        }
+        current = current.cause
+        depth++
+    }
+    return null
+}
+
+internal fun modelInitializationMessage(taskName: String, failure: Throwable?): String {
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    val types = mutableListOf<String>()
+    var current = failure
+    while (current != null && types.size < 4 && seen.put(current, true) == null) {
+        types += current.javaClass.simpleName.ifBlank { "error" }
+        current = current.cause
+    }
+    val missingClass = missingClassNameForDiagnostic(failure)
+    val detail = buildString {
+        append(types.joinToString(" → ").ifBlank { "error" })
+        if (missingClass != null) append(": ").append(missingClass)
+    }
+    return "No se pudo iniciar el filtro local de $taskName ($detail). Las fotos y videos siguen disponibles."
+}
 
 /** Holds CameraX's media image until both available MediaPipe live tasks complete or fail. */
 @OptIn(TransformExperimental::class)
