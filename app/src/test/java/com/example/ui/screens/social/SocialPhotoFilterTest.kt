@@ -127,7 +127,7 @@ class SocialPhotoFilterTest {
         assertTrue(diagnostic.contains("Model: selfie_segmenter.tflite"))
         assertTrue(diagnostic.contains("Android SDK/API: 35"))
         assertTrue(diagnostic.contains("Supported ABIs: arm64-v8a, armeabi-v7a"))
-        assertTrue(diagnostic.contains("MediaPipe Tasks Vision: 1.0.1"))
+        assertTrue(diagnostic.contains("MediaPipe Tasks Vision: 1.0.0"))
         assertTrue(diagnostic.contains("Build variant: beta"))
         assertTrue(diagnostic.contains("ExceptionInInitializerError"))
         assertTrue(diagnostic.contains("IllegalStateException"))

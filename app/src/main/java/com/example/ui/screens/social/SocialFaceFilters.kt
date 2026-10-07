@@ -340,7 +340,7 @@ internal fun applySocialFaceFilterToBitmap(
 }
 
 private const val SOCIAL_FACE_ANALYZER_TAG = "SocialFaceAnalyzer"
-private const val MEDIAPIPE_TASKS_VISION_VERSION = "1.0.1"
+private const val MEDIAPIPE_TASKS_VISION_VERSION = "1.0.0"
 private val diagnosticAbsolutePath = Regex("""(?i)(?:[a-z]:)?[/\\][^\s:/\\]+(?:[/\\][^\s:/\\]+)*""")
 private val diagnosticControlChars = Regex("""\p{Cntrl}+""")
 private val diagnosticClassDescriptor = Regex("""\bL([A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)+);""")
