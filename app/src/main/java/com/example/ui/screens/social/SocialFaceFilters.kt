@@ -347,7 +347,7 @@ private val diagnosticClassDescriptor = Regex("""\bL([A-Za-z_$][A-Za-z0-9_$]*(?:
 private val diagnosticUrl = Regex("""(?i)\b(?:https?|ftp|file)://[^\s)\]}>;,]+|\bwww\.[^\s)\]}>;,]+""")
 private val diagnosticEmail = Regex("""(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""")
 private val diagnosticSecretAssignment = Regex(
-    """(?i)\b(password|passwd|token|secret|api[ _-]?key|access[_ -]?token|authorization|cookie|email|e-mail|phone|account(?:[_ -]?id)?|user(?:name|[_ -]?id)?|uid|customer(?:[_ -]?id)?)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"""
+    """(?i)\b(password|passwd|token|secret|api[ _-]?key|access[_ -]?token|authorization|cookie|phone|account(?:[_ -]?id)?|user(?:name|[_ -]?id)?|uid|customer(?:[_ -]?id)?)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"""
 )
 private val diagnosticBearer = Regex("""(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}""")
 private val diagnosticJwt = Regex("""\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
