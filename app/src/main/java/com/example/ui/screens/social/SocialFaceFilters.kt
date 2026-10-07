@@ -405,7 +405,7 @@ internal fun buildSocialModelInitializationDiagnostic(
             frames.take(takeCount).forEach { frame ->
                 val className = sanitizeSocialModelDiagnostic(frame.className)
                 val methodName = sanitizeSocialModelDiagnostic(frame.methodName)
-                val fileName = frame.fileName?.substringAfterLast('/').substringAfterLast('\\') ?: "Unknown Source"
+                val fileName = frame.fileName?.let { it.substringAfterLast('/').substringAfterLast('\\') } ?: "Unknown Source"
                 val location = if (frame.lineNumber >= 0) "$fileName:${frame.lineNumber}" else fileName
                 appendLine("  at $className.$methodName(${sanitizeSocialModelDiagnostic(location)})")
             }
