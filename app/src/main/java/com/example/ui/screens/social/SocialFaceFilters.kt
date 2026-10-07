@@ -367,8 +367,8 @@ internal fun sanitizeSocialModelDiagnostic(value: String): String = value
     .replace(diagnosticControlChars, " ")
     .replace(diagnosticUrl, "<url>")
     .replace(diagnosticClassDescriptor) { match -> match.groupValues[1].replace('/', '.') }
-    .replace(diagnosticSecretAssignment) { match -> match.groupValues[1] + "=<redacted>" }
     .replace(diagnosticBearer, "Bearer <redacted>")
+    .replace(diagnosticSecretAssignment) { match -> match.groupValues[1] + "=<redacted>" }
     .replace(diagnosticJwt, "<redacted-token>")
     .replace(diagnosticEmail, "<redacted-email>")
     .replace(diagnosticAbsolutePath, "<path>")

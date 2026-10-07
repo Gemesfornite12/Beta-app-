@@ -146,12 +146,13 @@ class SocialPhotoFilterTest {
     @Test
     fun diagnosticSanitizerRedactsUrlsCredentialsAndAccountIdentifiers() {
         val sanitized = sanitizeSocialModelDiagnostic(
-            "url=https://example.test/path?auth=abc email=person@example.test password: secret-value uid=123456789"
+            "url=https://example.test/path?auth=abc email=person@example.test password: secret-value uid=123456789 authorization: Bearer secret-auth-token-123456789"
         )
         assertFalse(sanitized.contains("example.test"))
         assertFalse(sanitized.contains("person@example.test"))
         assertFalse(sanitized.contains("secret-value"))
         assertFalse(sanitized.contains("123456789"))
+        assertFalse(sanitized.contains("secret-auth-token-123456789"))
         assertTrue(sanitized.contains("<url>"))
         assertTrue(sanitized.contains("<redacted-email>"))
         assertTrue(sanitized.contains("password=<redacted>"))
