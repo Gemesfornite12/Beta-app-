@@ -820,15 +820,20 @@ internal fun drawSocialFaceSticker(
         0f
     }
 
-    canvas.save()
-    canvas.rotate(eyeAngle, bounds.centerX(), bounds.centerY())
-    when (filter) {
-        SocialFaceFilter.NONE -> Unit
-        SocialFaceFilter.DOG_EARS -> drawDogEars(canvas, bounds)
-        SocialFaceFilter.GLASSES -> drawGlasses(canvas, bounds, leftEye, rightEye)
-        SocialFaceFilter.CROWN -> drawCrown(canvas, bounds)
+    val saveCount = canvas.save()
+    try {
+        // Keep the face-roll alignment local to this sticker so drawing multiple faces cannot
+        // leak a transform into the next overlay or into the caller's preview/photo canvas.
+        canvas.rotate(eyeAngle, bounds.centerX(), bounds.centerY())
+        when (filter) {
+            SocialFaceFilter.NONE -> Unit
+            SocialFaceFilter.DOG_EARS -> drawDogEars(canvas, bounds)
+            SocialFaceFilter.GLASSES -> drawGlasses(canvas, bounds, leftEye, rightEye)
+            SocialFaceFilter.CROWN -> drawCrown(canvas, bounds)
+        }
+    } finally {
+        canvas.restoreToCount(saveCount)
     }
-    canvas.restore()
 }
 
 private fun midpoint(first: SocialFacePoint, second: SocialFacePoint, width: Float, height: Float): Pair<Float, Float> =
