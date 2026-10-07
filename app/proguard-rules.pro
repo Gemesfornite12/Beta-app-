@@ -24,3 +24,6 @@
 # Do not keep all of com.google.mediapipe: tasks-core 1.0.0 contains optional GraphProfiler/Graph references
 # to generated CalculatorProfileProto and GraphTemplateProto classes that are not shipped in its AAR.
 -keep class com.google.mediapipe.tasks.vision.** { *; }
+
+# MediaPipe Graph initialization relies on Flogger caller-stack detection; keep it from R8 renaming.
+-keep class com.google.common.flogger.** { *; }
