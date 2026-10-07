@@ -218,6 +218,10 @@ private const val FACE_LANDMARKER_MODEL = "face_landmarker.task"
 private const val SELFIE_SEGMENTER_MODEL = "selfie_segmenter.tflite"
 private const val MIN_ANALYSIS_INTERVAL_MS = 33L
 
+/** LIVE_STREAM callbacks are correlated by their documented timestamp, not MPImage object identity. */
+internal fun matchesSocialPendingFrame(pendingTimestampMs: Long, callbackTimestampMs: Long): Boolean =
+    pendingTimestampMs == callbackTimestampMs
+
 /** Creates the official on-device MediaPipe Face Landmarker with an already-bundled model. */
 internal fun createSocialFaceLandmarker(
     context: Context,
@@ -521,7 +525,8 @@ internal class SocialFaceImageAnalyzer(
         val sourceTransform: OutputTransform,
         val width: Int,
         val height: Int,
-        val rotationDegrees: Int
+        val rotationDegrees: Int,
+        val timestampMs: Long
     ) {
         val remainingCallbacks = AtomicInteger(listOfNotNull(faceImage, segmentationImage).size)
         val faceCallbackCompleted = AtomicBoolean(faceImage == null)
@@ -610,6 +615,8 @@ internal class SocialFaceImageAnalyzer(
             val mediaImage = imageProxy.image ?: error("CameraX did not provide a media image.")
             if (faceEffectsEnabled) faceImage = MediaImageBuilder(mediaImage).build()
             if (backgroundReplacementEnabled) segmentationImage = MediaImageBuilder(mediaImage).build()
+            val timestamp = max(SystemClock.uptimeMillis(), lastTimestampMs + 1L)
+            lastTimestampMs = timestamp
             val pending = PendingFrame(
                 imageProxy = imageProxy,
                 faceImage = faceImage,
@@ -617,13 +624,12 @@ internal class SocialFaceImageAnalyzer(
                 sourceTransform = transformFactory.getOutputTransform(imageProxy),
                 width = imageProxy.width,
                 height = imageProxy.height,
-                rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                rotationDegrees = imageProxy.imageInfo.rotationDegrees,
+                timestampMs = timestamp
             )
             frame = pending
             check(pending.remainingCallbacks.get() > 0) { "No active local camera effect was requested." }
             check(pendingFrame.compareAndSet(null, pending)) { "A previous MediaPipe camera frame is still pending." }
-            val timestamp = max(SystemClock.uptimeMillis(), lastTimestampMs + 1L)
-            lastTimestampMs = timestamp
             val options = ImageProcessingOptions.builder()
                 .setRotationDegrees(pending.rotationDegrees)
                 .build()
@@ -660,10 +666,13 @@ internal class SocialFaceImageAnalyzer(
 
     private fun handleFaceResult(result: FaceLandmarkerResult, input: MPImage) {
         val frame = pendingFrame.get()
-        if (frame?.faceImage !== input) {
-            runCatching { input.close() }
+        if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
+            if (frame?.faceImage !== input) runCatching { input.close() }
             return
         }
+        // The LIVE_STREAM API associates results with the submitted timestamp; it does not promise
+        // that the callback's MPImage wrapper is the same Kotlin object submitted by analyze().
+        if (frame.faceImage !== input) runCatching { input.close() }
         finishFace(frame, result.toSocialFaceResult())
     }
 
@@ -672,12 +681,14 @@ internal class SocialFaceImageAnalyzer(
     }
 
     private fun handleSegmentationResult(result: ImageSegmenterResult, input: MPImage) {
+        // Extracting also closes MediaPipe's output masks, including for a late/stale callback.
+        val mask = runCatching { personSegmentationMaskFromResult(result) }.getOrNull()
         val frame = pendingFrame.get()
-        if (frame?.segmentationImage !== input) {
-            runCatching { input.close() }
+        if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
+            if (frame?.segmentationImage !== input) runCatching { input.close() }
             return
         }
-        val mask = runCatching { personSegmentationMaskFromResult(result) }.getOrNull()
+        if (frame.segmentationImage !== input) runCatching { input.close() }
         finishSegmentation(frame, mask)
     }
 
