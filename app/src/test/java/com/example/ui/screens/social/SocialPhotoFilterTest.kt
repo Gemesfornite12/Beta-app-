@@ -155,7 +155,7 @@ class SocialPhotoFilterTest {
         assertFalse(sanitized.contains("secret-auth-token-123456789"))
         assertFalse(sanitized.contains("Cristopher"))
         assertTrue(sanitized.contains("<url>"))
-        assertTrue(sanitized.contains("<redacted-email>"))
+        assertTrue(sanitized.contains("email=<redacted-email>"))
         assertTrue(sanitized.contains("password=<redacted>"))
     }
 
