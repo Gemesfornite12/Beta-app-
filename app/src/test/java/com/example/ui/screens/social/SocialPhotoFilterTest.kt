@@ -3,6 +3,7 @@ package com.example.ui.screens.social
 import android.graphics.Bitmap
 import android.graphics.Color
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -101,4 +102,76 @@ class SocialPhotoFilterTest {
         assertEquals(Color.MAGENTA, result.getPixel(0, 0))
         source.recycle()
     }
+    @Test
+    fun initializationReportIncludesTechnicalContextAndRedactsPrivateData() {
+        val missingClass = "com.google.mediapipe.framework.Graph"
+        val failure = ExceptionInInitializerError(
+            IllegalStateException(
+                "init failed /data/user/0/private/app/files/cache.bin email=cris@example.com token=very-secret-token account_id=83016886 " +
+                    "see https://private.example/path?key=hidden",
+                NoClassDefFoundError(missingClass)
+            )
+        ).apply {
+            stackTrace = Array(40) { index ->
+                StackTraceElement("example.Initializer", "frame$index", "/private/source/User.kt", 100 + index)
+            }
+        }
+        val diagnostic = buildSocialModelInitializationDiagnostic(
+            failures = listOf(SocialModelInitializationDiagnostic("ImageSegmenter", "selfie_segmenter.tflite", failure)),
+            sdkApi = 35,
+            supportedAbis = listOf("arm64-v8a", "armeabi-v7a"),
+            buildVariant = "beta"
+        )
+
+        assertTrue(diagnostic.contains("Task: ImageSegmenter"))
+        assertTrue(diagnostic.contains("Model: selfie_segmenter.tflite"))
+        assertTrue(diagnostic.contains("Android SDK/API: 35"))
+        assertTrue(diagnostic.contains("Supported ABIs: arm64-v8a, armeabi-v7a"))
+        assertTrue(diagnostic.contains("MediaPipe Tasks Vision: 1.0.1"))
+        assertTrue(diagnostic.contains("Build variant: beta"))
+        assertTrue(diagnostic.contains("ExceptionInInitializerError"))
+        assertTrue(diagnostic.contains("IllegalStateException"))
+        assertTrue(diagnostic.contains("NoClassDefFoundError: $missingClass"))
+        assertTrue(diagnostic.contains("init failed"))
+        assertFalse(diagnostic.contains("/data/user/0"))
+        assertFalse(diagnostic.contains("cris@example.com"))
+        assertFalse(diagnostic.contains("very-secret-token"))
+        assertFalse(diagnostic.contains("83016886"))
+        assertFalse(diagnostic.contains("private.example"))
+        assertFalse(diagnostic.contains("/private/source"))
+        assertTrue(diagnostic.lines().count { it.startsWith("  at ") } <= 24)
+        assertTrue(diagnostic.contains("stack frames truncated"))
+    }
+
+    @Test
+    fun diagnosticSanitizerRedactsUrlsCredentialsAndAccountIdentifiers() {
+        val sanitized = sanitizeSocialModelDiagnostic(
+            "url=https://example.test/path?auth=abc email=person@example.test password: secret-value uid=123456789" 
+        )
+        assertFalse(sanitized.contains("example.test"))
+        assertFalse(sanitized.contains("person@example.test"))
+        assertFalse(sanitized.contains("secret-value"))
+        assertFalse(sanitized.contains("123456789"))
+        assertTrue(sanitized.contains("<url>"))
+        assertTrue(sanitized.contains("<redacted-email>"))
+        assertTrue(sanitized.contains("password=<redacted>"))
+    }
+
+    @Test
+    fun initializationReportPreservesSeparateFaceAndBackgroundFailures() {
+        val report = buildSocialModelInitializationDiagnostic(
+            failures = listOf(
+                SocialModelInitializationDiagnostic("FaceLandmarker", "face_landmarker.task", ExceptionInInitializerError("first")),
+                SocialModelInitializationDiagnostic("ImageSegmenter", "selfie_segmenter.tflite", NoClassDefFoundError("com.google.mediapipe.framework.Graph"))
+            ),
+            sdkApi = 36,
+            supportedAbis = listOf("x86_64"),
+            buildVariant = "beta"
+        )
+        assertTrue(report.contains("Task: FaceLandmarker"))
+        assertTrue(report.contains("Model: face_landmarker.task"))
+        assertTrue(report.contains("Task: ImageSegmenter"))
+        assertTrue(report.contains("Model: selfie_segmenter.tflite"))
+    }
+
 }

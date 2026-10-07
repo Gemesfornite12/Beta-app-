@@ -1,5 +1,7 @@
 package com.example.ui.screens.social
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.media.ExifInterface
@@ -15,6 +17,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.widget.Toast
 import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -72,6 +75,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import com.example.BuildConfig
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.RgbFilter
 import androidx.media3.effect.RgbMatrix
@@ -338,6 +342,7 @@ internal fun SocialCameraDialog(
         }
     }
     val faceAnalyzer = faceAnalyzerCreation.getOrNull()
+    val initializationDiagnostics = faceAnalyzer?.initializationDiagnostics().orEmpty()
     val videoEffect = remember(context) {
         Media3Effect(
             context,
@@ -759,6 +764,29 @@ internal fun SocialCameraDialog(
                     }
                 }
                 message?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp) }
+                if (initializationDiagnostics.isNotEmpty()) {
+                    Button(
+                        onClick = {
+                            val report = buildSocialModelInitializationDiagnostic(
+                                failures = initializationDiagnostics,
+                                sdkApi = Build.VERSION.SDK_INT,
+                                supportedAbis = Build.SUPPORTED_ABIS.toList(),
+                                buildVariant = BuildConfig.BUILD_TYPE
+                            )
+                            val copied = runCatching {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    ?: error("Clipboard unavailable")
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Diagnóstico MediaPipe", report))
+                            }.isSuccess
+                            Toast.makeText(
+                                context,
+                                if (copied) "Diagnóstico copiado" else "No se pudo copiar el diagnóstico",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("social_camera_copy_diagnostic")
+                    ) { Text("Copiar diagnóstico") }
+                }
             }
         }
     }
