@@ -9,9 +9,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class SocialStickerRendererTest {
     private val sampleFace = SocialFace(
         sideA = SocialFacePoint(0.30f, 0.50f),
