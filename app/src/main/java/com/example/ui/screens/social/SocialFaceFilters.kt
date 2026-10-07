@@ -347,7 +347,7 @@ private val diagnosticClassDescriptor = Regex("""\bL([A-Za-z_$][A-Za-z0-9_$]*(?:
 private val diagnosticUrl = Regex("""(?i)\b(?:https?|ftp|file)://[^\s)\]}>;,]+|\bwww\.[^\s)\]}>;,]+""")
 private val diagnosticEmail = Regex("""(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""")
 private val diagnosticSecretAssignment = Regex(
-    """(?i)\b(password|passwd|token|secret|api[_-]?key|authorization|cookie|email|e-mail|phone|account(?:[_ -]?id)?|user(?:name|[_ -]?id)?|uid|customer(?:[_ -]?id)?)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"""
+    """(?i)\b(password|passwd|token|secret|api[ _-]?key|access[_ -]?token|authorization|cookie|email|e-mail|phone|account(?:[_ -]?id)?|user(?:name|[_ -]?id)?|uid|customer(?:[_ -]?id)?)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"""
 )
 private val diagnosticBearer = Regex("""(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}""")
 private val diagnosticJwt = Regex("""\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
@@ -374,7 +374,7 @@ internal fun sanitizeSocialModelDiagnostic(value: String): String = value
     .replace(diagnosticAbsolutePath, "<path>")
     .replace(diagnosticPhoneOrAccountNumber, "<redacted-number>")
     .replace(diagnosticLongHex, "<redacted-token>")
-    .take(512)
+    .take(2_048)
 
 /** Builds a shareable initialization-only report; it has no access to camera images or inference results. */
 internal fun buildSocialModelInitializationDiagnostic(
@@ -397,7 +397,7 @@ internal fun buildSocialModelInitializationDiagnostic(
         var cause: Throwable? = diagnostic.failure
         var causeIndex = 0
         while (cause != null && causeIndex < 16 && seen.put(cause, true) == null) {
-            val type = cause.javaClass.name.takeIf { it.matches(Regex("[A-Za-z_$][A-Za-z0-9_$.]*")) } ?: "Throwable"
+            val type = cause.javaClass.name.takeIf { it.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$.]*""")) } ?: "Throwable"
             val message = sanitizeSocialModelDiagnostic(cause.message ?: "<no message>")
             appendLine("Cause[$causeIndex]: $type: $message")
             val frames = cause.stackTrace
@@ -418,7 +418,7 @@ internal fun buildSocialModelInitializationDiagnostic(
         if (remainingFrames == 0 && failureIndex < failures.lastIndex) appendLine("  remaining stack frames omitted")
     }
     if (failures.isEmpty()) appendLine("No failed local model initialization was recorded.")
-}.take(20_000)
+}.take(50_000)
 
 /** Logs only initialization metadata and exception diagnostics, before camera frames are processed. */
 private fun logSocialModelInitializationFailure(
@@ -480,7 +480,7 @@ internal fun missingClassNameForDiagnostic(failure: Throwable?): String? {
                 else -> raw
             }
             val className = token.removePrefix("L").removeSuffix(";").replace('/', '.')
-            if (className.contains('.') && className.matches(Regex("[A-Za-z_$][A-Za-z0-9_$.]*"))) return className
+            if (className.contains('.') && className.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$.]*"""))) return className
         }
         current = current.cause
         depth++
