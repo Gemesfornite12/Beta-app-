@@ -125,7 +125,7 @@ mediapipe-tasks-vision = { group = "com.google.mediapipe", name = "tasks-vision"
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 google-devtools-ksp = { id = "com.google.devtools.ksp", version.ref = "googleDevtoolsKsp" }
-robarazzi = { id = "io.github.takahirom.roborazzi", version.ref = "robarazzi" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "robarazzi" }
 secrets = { id = "com.google.android.libraries.mapsplatform.secrets-gradle-plugin", version.ref = "secretsGradlePlugin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "firebaseCrashlyticsGradle" }
