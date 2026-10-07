@@ -341,8 +341,9 @@ internal fun applySocialFaceFilterToBitmap(
 
 private const val SOCIAL_FACE_ANALYZER_TAG = "SocialFaceAnalyzer"
 private const val MEDIAPIPE_TASKS_VISION_VERSION = "1.0.1"
-private val diagnosticAbsolutePath = Regex("""(?i)(?:[a-z]:)?[/\\](?:[^\s:/\\]+[/\\])+[^\s:/\\]*""")
+private val diagnosticAbsolutePath = Regex("""(?i)(?:[a-z]:)?[/\\][^\s:/\\]+(?:[/\\][^\s:/\\]+)*""")
 private val diagnosticControlChars = Regex("""\p{Cntrl}+""")
+private val diagnosticClassDescriptor = Regex("""\bL([A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)+);""")
 private val diagnosticUrl = Regex("""(?i)\b(?:https?|ftp|file)://[^\s)\]}>;,]+|\bwww\.[^\s)\]}>;,]+""")
 private val diagnosticEmail = Regex("""(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""")
 private val diagnosticSecretAssignment = Regex(
@@ -365,6 +366,7 @@ internal data class SocialModelInitializationDiagnostic(
 internal fun sanitizeSocialModelDiagnostic(value: String): String = value
     .replace(diagnosticControlChars, " ")
     .replace(diagnosticUrl, "<url>")
+    .replace(diagnosticClassDescriptor) { match -> match.groupValues[1].replace('/', '.') }
     .replace(diagnosticSecretAssignment) { match -> match.groupValues[1] + "=<redacted>" }
     .replace(diagnosticBearer, "Bearer <redacted>")
     .replace(diagnosticJwt, "<redacted-token>")

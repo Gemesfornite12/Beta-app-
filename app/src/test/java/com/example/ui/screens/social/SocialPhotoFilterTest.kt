@@ -146,7 +146,7 @@ class SocialPhotoFilterTest {
     @Test
     fun diagnosticSanitizerRedactsUrlsCredentialsAndAccountIdentifiers() {
         val sanitized = sanitizeSocialModelDiagnostic(
-            "url=https://example.test/path?auth=abc email=person@example.test password: secret-value uid=123456789" 
+            "url=https://example.test/path?auth=abc email=person@example.test password: secret-value uid=123456789"
         )
         assertFalse(sanitized.contains("example.test"))
         assertFalse(sanitized.contains("person@example.test"))
@@ -155,6 +155,16 @@ class SocialPhotoFilterTest {
         assertTrue(sanitized.contains("<url>"))
         assertTrue(sanitized.contains("<redacted-email>"))
         assertTrue(sanitized.contains("password=<redacted>"))
+    }
+
+    @Test
+    fun classLinkageMessagesKeepTechnicalClassNamesWhileLocalPathsAreRedacted() {
+        val sanitized = sanitizeSocialModelDiagnostic(
+            "Failed resolution of: Lcom/google/mediapipe/framework/Graph; /data/user/0/app/cache/model.task"
+        )
+        assertTrue(sanitized.contains("com.google.mediapipe.framework.Graph"))
+        assertFalse(sanitized.contains("/data/user/0"))
+        assertTrue(sanitized.contains("<path>"))
     }
 
     @Test
