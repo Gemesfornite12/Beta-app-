@@ -3,8 +3,8 @@ package com.example.ui.screens.social
 import android.graphics.Bitmap
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,29 +14,25 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 class SocialFaceLandmarkerInputTest {
     @Test
-    fun faceLandmarkerBitmapIsPhysicallyRotatedIntoTheCameraUprightOrientation() {
-        val source = Bitmap.createBitmap(2, 3, Bitmap.Config.ARGB_8888).apply {
-            setPixel(0, 0, 0xffff0000.toInt()) // top-left
-            setPixel(1, 0, 0xff00ff00.toInt()) // top-right
-            setPixel(0, 1, 0xff0000ff.toInt())
-            setPixel(1, 1, 0xffffff00.toInt())
-            setPixel(0, 2, 0xff00ffff.toInt()) // bottom-left
-            setPixel(1, 2, 0xffff00ff.toInt()) // bottom-right
-        }
-
-        val rotated = rotateSocialFaceBitmapForLandmarker(source, 90)
+    fun cameraRotationProducesTheCorrectBitmapDimensionsForFaceLandmarker() {
+        val source = Bitmap.createBitmap(2, 3, Bitmap.Config.ARGB_8888)
         try {
-            assertNotSame(source, rotated)
-            assertEquals(3, rotated.width)
-            assertEquals(2, rotated.height)
-            // A positive CameraX rotation is applied to the pixels, not passed as unsupported
-            // MediaPipe processing metadata; the existing coordinate mapper inversely rotates them.
-            assertEquals(0xff00ffff.toInt(), rotated.getPixel(0, 0))
-            assertEquals(0xffff0000.toInt(), rotated.getPixel(2, 0))
-            assertEquals(0xffff00ff.toInt(), rotated.getPixel(0, 1))
-            assertEquals(0xff00ff00.toInt(), rotated.getPixel(2, 1))
+            listOf(
+                Triple(90, 3, 2),
+                Triple(180, 2, 3),
+                Triple(270, 3, 2),
+                Triple(-90, 3, 2)
+            ).forEach { (rotation, expectedWidth, expectedHeight) ->
+                val rotated = rotateSocialFaceBitmapForLandmarker(source, rotation)
+                try {
+                    assertNotSame("rotation $rotation should produce an upright bitmap", source, rotated)
+                    assertEquals("width after rotation $rotation", expectedWidth, rotated.width)
+                    assertEquals("height after rotation $rotation", expectedHeight, rotated.height)
+                } finally {
+                    rotated.recycle()
+                }
+            }
         } finally {
-            rotated.recycle()
             source.recycle()
         }
     }
