@@ -37,6 +37,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -518,7 +519,7 @@ internal fun SocialCameraDialog(
                 }
 
                 Box(
-                    Modifier.weight(1f).fillMaxWidth().background(Color.Black, RoundedCornerShape(16.dp)),
+                    Modifier.weight(1f).fillMaxWidth().background(Color.Black, RoundedCornerShape(16.dp)).testTag("social_camera_preview"),
                     contentAlignment = Alignment.Center
                 ) {
                     val photo = capturedPhoto
@@ -606,6 +607,35 @@ internal fun SocialCameraDialog(
                                 )
                             }
                         }
+                        SocialFaceDiagnosticButton(
+                    faceEffectSelected = faceFilter != SocialFaceFilter.NONE,
+                    initializationFailure = initializationDiagnostics.isNotEmpty(),
+                    analyzerCreationFailure = faceAnalyzerCreation.isFailure
+                ) {
+                    if (latestTransformReady != null && latestMappedFaceCount != null) {
+                        faceAnalyzer?.recordPreviewMapping(latestTransformReady == true, latestMappedFaceCount ?: 0)
+                    }
+                    val snapshot = faceAnalyzer?.liveDiagnosticSnapshot() ?: SocialFaceLiveDiagnosticSnapshot(
+                        analyzerAvailable = false,
+                        faceEffectRequested = faceFilter != SocialFaceFilter.NONE,
+                        lastErrorType = faceAnalyzerCreation.exceptionOrNull()?.javaClass?.simpleName?.take(64)
+                    )
+                    val report = buildSocialFaceLiveDiagnosticReport(
+                        snapshot = snapshot,
+                        sdkApi = Build.VERSION.SDK_INT,
+                        buildVariant = BuildConfig.BUILD_TYPE
+                    )
+                    val copied = runCatching {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            ?: error("Clipboard unavailable")
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Diagnóstico MediaPipe", report))
+                    }.isSuccess
+                    Toast.makeText(
+                        context,
+                        if (copied) "Diagnóstico copiado" else "No se pudo copiar el diagnóstico",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
                         if (recording) {
                             Text("● REC", color = Color.Red, modifier = Modifier.align(Alignment.BottomStart).padding(14.dp))
                         }
@@ -772,45 +802,33 @@ internal fun SocialCameraDialog(
                     }
                 }
                 message?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp) }
-                if (shouldShowSocialFaceDiagnostic(
-                        faceEffectSelected = faceFilter != SocialFaceFilter.NONE,
-                        initializationFailure = initializationDiagnostics.isNotEmpty(),
-                        analyzerCreationFailure = faceAnalyzerCreation.isFailure
-                    )) {
-                    Button(
-                        onClick = {
-                            if (latestTransformReady != null && latestMappedFaceCount != null) {
-                                faceAnalyzer?.recordPreviewMapping(latestTransformReady == true, latestMappedFaceCount ?: 0)
-                            }
-                            val snapshot = faceAnalyzer?.liveDiagnosticSnapshot() ?: SocialFaceLiveDiagnosticSnapshot(
-                                analyzerAvailable = false,
-                                faceEffectRequested = faceFilter != SocialFaceFilter.NONE,
-                                lastErrorType = faceAnalyzerCreation.exceptionOrNull()?.javaClass?.simpleName?.take(64)
-                            )
-                            val report = buildSocialFaceLiveDiagnosticReport(
-                                snapshot = snapshot,
-                                sdkApi = Build.VERSION.SDK_INT,
-                                buildVariant = BuildConfig.BUILD_TYPE
-                            )
-                            val copied = runCatching {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    ?: error("Clipboard unavailable")
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Diagnóstico MediaPipe", report))
-                            }.isSuccess
-                            Toast.makeText(
-                                context,
-                                if (copied) "Diagnóstico copiado" else "No se pudo copiar el diagnóstico",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("social_camera_copy_diagnostic")
-                    ) { Text("Copiar diagnóstico en vivo") }
-                }
+
             }
         }
     }
 }
 
+
+@Composable
+internal fun BoxScope.SocialFaceDiagnosticButton(
+    faceEffectSelected: Boolean,
+    initializationFailure: Boolean,
+    analyzerCreationFailure: Boolean,
+    onClick: () -> Unit
+) {
+    if (shouldShowSocialFaceDiagnostic(
+            faceEffectSelected = faceEffectSelected,
+            initializationFailure = initializationFailure,
+            analyzerCreationFailure = analyzerCreationFailure
+        )) {
+        Button(
+            onClick = onClick,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).testTag("social_camera_copy_diagnostic"),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xCC05070D))
+        ) { Text("Copiar diagnóstico", fontSize = 11.sp, color = Color.White) }
+    }
+}
 
 @Composable
 private fun SocialPhotoFilterPicker(
