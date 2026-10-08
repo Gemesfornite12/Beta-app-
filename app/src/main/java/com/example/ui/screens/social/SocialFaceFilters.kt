@@ -518,6 +518,15 @@ internal fun shouldShowSocialFaceDiagnostic(
     analyzerCreationFailure: Boolean
 ): Boolean = faceEffectSelected || initializationFailure || analyzerCreationFailure
 
+internal enum class SocialFaceLiveErrorStage {
+    MODEL_INITIALIZATION,
+    FRAME_PREPARATION,
+    FACE_DETECT_ASYNC_SUBMIT,
+    FACE_ASYNC_LISTENER,
+    SEGMENTER_SUBMIT,
+    SEGMENTER_ASYNC_LISTENER
+}
+
 internal data class SocialFaceLiveDiagnosticSnapshot(
     val analyzerAvailable: Boolean = false,
     val faceEffectRequested: Boolean = false,
@@ -529,7 +538,8 @@ internal data class SocialFaceLiveDiagnosticSnapshot(
     val lastRawDetectedFaceCount: Int? = null,
     val transformReady: Boolean? = null,
     val mappedFaceCount: Int? = null,
-    val lastErrorType: String? = null
+    val lastErrorType: String? = null,
+    val lastErrorStage: SocialFaceLiveErrorStage? = null
 )
 
 /** Thread-safe, content-free counters for diagnosing the live local face pipeline. */
@@ -543,6 +553,7 @@ internal class SocialFaceLiveDiagnosticRecorder {
     private var transformReady: Boolean? = null
     private var mappedFaceCount: Int? = null
     private var lastErrorType: String? = null
+    private var lastErrorStage: SocialFaceLiveErrorStage? = null
 
     @Synchronized fun recordAnalyzerFrame() { analyzerFramesReceived++ }
     @Synchronized fun recordFaceFrameSubmission() { faceFrameSubmissions++ }
@@ -557,9 +568,10 @@ internal class SocialFaceLiveDiagnosticRecorder {
         transformReady = ready
         mappedFaceCount = mappedCount.coerceAtLeast(0)
     }
-    @Synchronized fun recordError(failure: Throwable?) {
+    @Synchronized fun recordError(stage: SocialFaceLiveErrorStage, failure: Throwable?) {
         val type = failure?.javaClass?.simpleName.orEmpty()
         lastErrorType = type.takeIf { it.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$]{0,63}""")) } ?: "UnknownError"
+        lastErrorStage = stage
     }
     @Synchronized fun snapshot(analyzerAvailable: Boolean, faceEffectRequested: Boolean) =
         SocialFaceLiveDiagnosticSnapshot(
@@ -573,7 +585,8 @@ internal class SocialFaceLiveDiagnosticRecorder {
             lastRawDetectedFaceCount = lastRawDetectedFaceCount,
             transformReady = transformReady,
             mappedFaceCount = mappedFaceCount,
-            lastErrorType = lastErrorType
+            lastErrorType = lastErrorType,
+            lastErrorStage = lastErrorStage
         )
 }
 
@@ -596,6 +609,7 @@ internal fun buildSocialFaceLiveDiagnosticReport(
     appendLine("Preview transform ready: ${snapshot.transformReady?.toString() ?: "not checked"}")
     appendLine("Mapped faces on last callback: ${snapshot.mappedFaceCount ?: "not checked"}")
     appendLine("Last error type: ${snapshot.lastErrorType ?: "none"}")
+    appendLine("Last error stage: ${snapshot.lastErrorStage?.name ?: "none"}")
     val clue = when {
         !snapshot.analyzerAvailable -> "Analyzer could not be created."
         !snapshot.faceEffectRequested -> "Face effect is not currently requested."
@@ -660,7 +674,7 @@ internal class SocialFaceImageAnalyzer(
 
     fun setRequestedEffects(faceEffects: Boolean, backgroundReplacement: Boolean) {
         faceEffectsEnabled = faceEffects && landmarker != null
-        if (faceEffects && landmarker == null) liveDiagnostics.recordError(faceInitialization.failure)
+        if (faceEffects && landmarker == null) liveDiagnostics.recordError(SocialFaceLiveErrorStage.MODEL_INITIALIZATION, faceInitialization.failure)
         backgroundReplacementEnabled = backgroundReplacement && segmenter != null
         if (faceEffects && landmarker == null) {
             onError(modelInitializationMessage("FaceLandmarker", faceInitialization.failure))
@@ -678,7 +692,7 @@ internal class SocialFaceImageAnalyzer(
             RunningMode.LIVE_STREAM,
             resultListener = { result, input -> handleFaceResult(result, input) },
             errorListener = { error ->
-                liveDiagnostics.recordError(error)
+                liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_ASYNC_LISTENER, error)
                 Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker live inference failed.", error)
                 handleFaceError()
             }
@@ -692,6 +706,7 @@ internal class SocialFaceImageAnalyzer(
             RunningMode.LIVE_STREAM,
             resultListener = { result, input -> handleSegmentationResult(result, input) },
             errorListener = { error ->
+                liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_ASYNC_LISTENER, error)
                 Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter live inference failed.", error)
                 handleSegmentationError()
             }
@@ -749,7 +764,7 @@ internal class SocialFaceImageAnalyzer(
                     liveDiagnostics.recordFaceFrameSubmission()
                     checkNotNull(landmarker).detectAsync(input, options, timestamp)
                 } catch (failure: Exception) {
-                    liveDiagnostics.recordError(failure)
+                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT, failure)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
                     finishFace(pending, null)
                 }
@@ -758,12 +773,13 @@ internal class SocialFaceImageAnalyzer(
                 try {
                     checkNotNull(segmenter).segmentAsync(input, options, timestamp)
                 } catch (failure: Exception) {
+                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_SUBMIT, failure)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter rejected a live camera frame.", failure)
                     finishSegmentation(pending, null)
                 }
             }
         } catch (failure: Exception) {
-            liveDiagnostics.recordError(failure)
+            liveDiagnostics.recordError(SocialFaceLiveErrorStage.FRAME_PREPARATION, failure)
             Log.e(SOCIAL_FACE_ANALYZER_TAG, "Failed to prepare a local camera frame for MediaPipe.", failure)
             val submitted = frame
             if (submitted != null) {

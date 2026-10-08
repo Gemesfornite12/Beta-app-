@@ -186,4 +186,42 @@ class SocialPhotoFilterTest {
         assertTrue(report.contains("Model: selfie_segmenter.tflite"))
     }
 
+    @Test
+    fun liveDiagnosticReportsOnlyAllowlistedErrorStageAndType() {
+        val recorder = SocialFaceLiveDiagnosticRecorder()
+        recorder.recordError(
+            SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT,
+            UnsupportedOperationException("private/path photo=/data/user/0/app/private.jpg user=private@example.test")
+        )
+
+        val report = buildSocialFaceLiveDiagnosticReport(
+            recorder.snapshot(analyzerAvailable = true, faceEffectRequested = true),
+            sdkApi = 36,
+            buildVariant = "beta"
+        )
+
+        assertTrue(report.contains("Last error type: UnsupportedOperationException"))
+        assertTrue(report.contains("Last error stage: FACE_DETECT_ASYNC_SUBMIT"))
+        assertFalse(report.contains("private/path"))
+        assertFalse(report.contains("/data/user/0"))
+        assertFalse(report.contains("private@example.test"))
+        assertFalse(report.contains("photo="))
+        assertFalse(report.contains("UnsupportedOperationException("))
+    }
+
+    @Test
+    fun liveErrorStageIsAClosedSafeEnum() {
+        assertEquals(
+            setOf(
+                "MODEL_INITIALIZATION",
+                "FRAME_PREPARATION",
+                "FACE_DETECT_ASYNC_SUBMIT",
+                "FACE_ASYNC_LISTENER",
+                "SEGMENTER_SUBMIT",
+                "SEGMENTER_ASYNC_LISTENER"
+            ),
+            SocialFaceLiveErrorStage.entries.map { it.name }.toSet()
+        )
+    }
+
 }
