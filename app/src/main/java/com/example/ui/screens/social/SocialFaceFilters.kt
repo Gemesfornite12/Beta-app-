@@ -222,6 +222,17 @@ private const val MIN_ANALYSIS_INTERVAL_MS = 33L
 internal fun matchesSocialPendingFrame(pendingTimestampMs: Long, callbackTimestampMs: Long): Boolean =
     pendingTimestampMs == callbackTimestampMs
 
+/** Rotates a camera-buffer bitmap into the orientation MediaPipe expects for ARGB_8888 input. */
+internal fun rotateSocialFaceBitmapForLandmarker(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+    val rotation = normalizeSocialFaceRotationDegrees(rotationDegrees)
+    if (rotation == 0) return bitmap
+    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+}
+
+internal fun normalizeSocialFaceRotationDegrees(rotationDegrees: Int): Int =
+    ((rotationDegrees % 360) + 360) % 360
+
 /** Creates the official on-device MediaPipe Face Landmarker with an already-bundled model. */
 internal fun createSocialFaceLandmarker(
     context: Context,
@@ -636,6 +647,7 @@ internal class SocialFaceImageAnalyzer(
     private data class PendingFrame(
         val imageProxy: ImageProxy,
         val faceImage: MPImage?,
+        val faceBitmap: Bitmap?,
         val segmentationImage: MPImage?,
         val sourceTransform: OutputTransform,
         val width: Int,
@@ -735,17 +747,29 @@ internal class SocialFaceImageAnalyzer(
         }
         lastAcceptedFrameMs = now
         var faceImage: MPImage? = null
+        var faceBitmap: Bitmap? = null
         var segmentationImage: MPImage? = null
         var frame: PendingFrame? = null
         try {
             val mediaImage = imageProxy.image ?: error("CameraX did not provide a media image.")
-            if (faceEffectsEnabled) faceImage = MediaImageBuilder(mediaImage).build()
+            if (faceEffectsEnabled) {
+                val cameraBitmap = imageProxy.toBitmap()
+                faceBitmap = try {
+                    rotateSocialFaceBitmapForLandmarker(cameraBitmap, imageProxy.imageInfo.rotationDegrees)
+                } catch (failure: Exception) {
+                    cameraBitmap.recycle()
+                    throw failure
+                }
+                if (faceBitmap !== cameraBitmap) cameraBitmap.recycle()
+                faceImage = BitmapImageBuilder(checkNotNull(faceBitmap)).build()
+            }
             if (backgroundReplacementEnabled) segmentationImage = MediaImageBuilder(mediaImage).build()
             val timestamp = max(SystemClock.uptimeMillis(), lastTimestampMs + 1L)
             lastTimestampMs = timestamp
             val pending = PendingFrame(
                 imageProxy = imageProxy,
                 faceImage = faceImage,
+                faceBitmap = faceBitmap,
                 segmentationImage = segmentationImage,
                 sourceTransform = transformFactory.getOutputTransform(imageProxy),
                 width = imageProxy.width,
@@ -762,7 +786,9 @@ internal class SocialFaceImageAnalyzer(
             pending.faceImage?.let { input ->
                 try {
                     liveDiagnostics.recordFaceFrameSubmission()
-                    checkNotNull(landmarker).detectAsync(input, options, timestamp)
+                    // FaceLandmarker 1.0.0 documents ARGB_8888 as its supported color space. The
+                    // camera frame is physically rotated above, so use the default-options overload.
+                    checkNotNull(landmarker).detectAsync(input, timestamp)
                 } catch (failure: Exception) {
                     liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT, failure)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
@@ -786,6 +812,7 @@ internal class SocialFaceImageAnalyzer(
                 if (pendingFrame.compareAndSet(submitted, null)) release(submitted)
             } else {
                 runCatching { faceImage?.close() }
+                runCatching { faceBitmap?.recycle() }
                 runCatching { segmentationImage?.close() }
                 imageProxy.close()
             }
@@ -859,6 +886,7 @@ internal class SocialFaceImageAnalyzer(
 
     private fun release(frame: PendingFrame) {
         runCatching { frame.faceImage?.close() }
+        runCatching { frame.faceBitmap?.recycle() }
         runCatching { frame.segmentationImage?.close() }
         runCatching { frame.imageProxy.close() }
     }
@@ -919,13 +947,13 @@ internal fun mapSocialFacesToPreview(
     }
 }
 
-private fun rotatedPointToImageBuffer(
+internal fun rotatedPointToImageBuffer(
     point: SocialFacePoint,
     width: Int,
     height: Int,
     rotationDegrees: Int
 ): Pair<Float, Float> {
-    val rotation = ((rotationDegrees % 360) + 360) % 360
+    val rotation = normalizeSocialFaceRotationDegrees(rotationDegrees)
     val rotatedWidth = if (rotation == 90 || rotation == 270) height.toFloat() else width.toFloat()
     val rotatedHeight = if (rotation == 90 || rotation == 270) width.toFloat() else height.toFloat()
     val x = point.x * rotatedWidth
