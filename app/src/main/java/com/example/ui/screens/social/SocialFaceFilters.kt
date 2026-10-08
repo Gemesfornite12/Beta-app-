@@ -511,6 +511,107 @@ internal fun modelInitializationMessage(taskName: String, failure: Throwable?): 
     return "No se pudo iniciar el filtro local de $taskName ($detail). Las fotos y videos siguen disponibles."
 }
 
+
+internal fun shouldShowSocialFaceDiagnostic(
+    faceEffectSelected: Boolean,
+    initializationFailure: Boolean,
+    analyzerCreationFailure: Boolean
+): Boolean = faceEffectSelected || initializationFailure || analyzerCreationFailure
+
+internal data class SocialFaceLiveDiagnosticSnapshot(
+    val analyzerAvailable: Boolean = false,
+    val faceEffectRequested: Boolean = false,
+    val analyzerFramesReceived: Long = 0,
+    val faceFrameSubmissions: Long = 0,
+    val callbacksAccepted: Long = 0,
+    val callbacksStale: Long = 0,
+    val rawDetectedFaceTotal: Long = 0,
+    val lastRawDetectedFaceCount: Int? = null,
+    val transformReady: Boolean? = null,
+    val mappedFaceCount: Int? = null,
+    val lastErrorType: String? = null
+)
+
+/** Thread-safe, content-free counters for diagnosing the live local face pipeline. */
+internal class SocialFaceLiveDiagnosticRecorder {
+    private var analyzerFramesReceived = 0L
+    private var faceFrameSubmissions = 0L
+    private var callbacksAccepted = 0L
+    private var callbacksStale = 0L
+    private var rawDetectedFaceTotal = 0L
+    private var lastRawDetectedFaceCount: Int? = null
+    private var transformReady: Boolean? = null
+    private var mappedFaceCount: Int? = null
+    private var lastErrorType: String? = null
+
+    @Synchronized fun recordAnalyzerFrame() { analyzerFramesReceived++ }
+    @Synchronized fun recordFaceFrameSubmission() { faceFrameSubmissions++ }
+    @Synchronized fun recordAcceptedCallback(rawFaceCount: Int) {
+        callbacksAccepted++
+        val safeCount = rawFaceCount.coerceAtLeast(0)
+        rawDetectedFaceTotal += safeCount
+        lastRawDetectedFaceCount = safeCount
+    }
+    @Synchronized fun recordStaleCallback() { callbacksStale++ }
+    @Synchronized fun recordPreviewMapping(ready: Boolean, mappedCount: Int) {
+        transformReady = ready
+        mappedFaceCount = mappedCount.coerceAtLeast(0)
+    }
+    @Synchronized fun recordError(failure: Throwable?) {
+        val type = failure?.javaClass?.simpleName.orEmpty()
+        lastErrorType = type.takeIf { it.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$]{0,63}""")) } ?: "UnknownError"
+    }
+    @Synchronized fun snapshot(analyzerAvailable: Boolean, faceEffectRequested: Boolean) =
+        SocialFaceLiveDiagnosticSnapshot(
+            analyzerAvailable = analyzerAvailable,
+            faceEffectRequested = faceEffectRequested,
+            analyzerFramesReceived = analyzerFramesReceived,
+            faceFrameSubmissions = faceFrameSubmissions,
+            callbacksAccepted = callbacksAccepted,
+            callbacksStale = callbacksStale,
+            rawDetectedFaceTotal = rawDetectedFaceTotal,
+            lastRawDetectedFaceCount = lastRawDetectedFaceCount,
+            transformReady = transformReady,
+            mappedFaceCount = mappedFaceCount,
+            lastErrorType = lastErrorType
+        )
+}
+
+internal fun buildSocialFaceLiveDiagnosticReport(
+    snapshot: SocialFaceLiveDiagnosticSnapshot,
+    sdkApi: Int,
+    buildVariant: String
+): String = buildString {
+    appendLine("OmniStudio live face-filter diagnostic (local counters only)")
+    appendLine("Android API: $sdkApi")
+    appendLine("Build variant: ${buildVariant.take(24).filter { it.isLetterOrDigit() || it in "._-" }.ifBlank { "unknown" }}")
+    appendLine("Analyzer available: ${snapshot.analyzerAvailable}")
+    appendLine("Face effect requested: ${snapshot.faceEffectRequested}")
+    appendLine("Analyzer frames received: ${snapshot.analyzerFramesReceived}")
+    appendLine("Face frame submissions: ${snapshot.faceFrameSubmissions}")
+    appendLine("Callbacks accepted: ${snapshot.callbacksAccepted}")
+    appendLine("Callbacks stale: ${snapshot.callbacksStale}")
+    appendLine("Raw detected faces total: ${snapshot.rawDetectedFaceTotal}")
+    appendLine("Raw faces on last accepted callback: ${snapshot.lastRawDetectedFaceCount ?: "not available"}")
+    appendLine("Preview transform ready: ${snapshot.transformReady?.toString() ?: "not checked"}")
+    appendLine("Mapped faces on last callback: ${snapshot.mappedFaceCount ?: "not checked"}")
+    appendLine("Last error type: ${snapshot.lastErrorType ?: "none"}")
+    val clue = when {
+        !snapshot.analyzerAvailable -> "Analyzer could not be created."
+        !snapshot.faceEffectRequested -> "Face effect is not currently requested."
+        snapshot.analyzerFramesReceived == 0L -> "Analyzer has not received a camera frame."
+        snapshot.faceFrameSubmissions == 0L -> "No face frame has been submitted to MediaPipe."
+        snapshot.callbacksAccepted == 0L && snapshot.callbacksStale > 0L -> "Callbacks arrived, but none matched the submitted timestamp."
+        snapshot.callbacksAccepted == 0L -> "No face result callback has been accepted yet."
+        snapshot.lastRawDetectedFaceCount == 0 -> "The last accepted callback detected no faces."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && snapshot.transformReady == false -> "Faces were detected, but the preview transform was not ready."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && snapshot.mappedFaceCount == 0 -> "Faces were detected, but none mapped into preview coordinates."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && (snapshot.mappedFaceCount ?: 0) > 0 -> "Detection and preview mapping both produced faces; inspect the overlay-rendering stage."
+        else -> "More live camera frames are needed to identify the failing stage."
+    }
+    appendLine("Pipeline clue: $clue")
+}
+
 /** Holds CameraX's media image until both available MediaPipe live tasks complete or fail. */
 @OptIn(TransformExperimental::class)
 internal class SocialFaceImageAnalyzer(
@@ -549,9 +650,17 @@ internal class SocialFaceImageAnalyzer(
     }
     private var lastTimestampMs = 0L
     @Volatile private var closed = false
+    private val liveDiagnostics = SocialFaceLiveDiagnosticRecorder()
+
+    fun liveDiagnosticSnapshot(): SocialFaceLiveDiagnosticSnapshot =
+        liveDiagnostics.snapshot(analyzerAvailable = landmarker != null, faceEffectRequested = faceEffectsEnabled)
+
+    fun recordPreviewMapping(transformReady: Boolean, mappedCount: Int) =
+        liveDiagnostics.recordPreviewMapping(transformReady, mappedCount)
 
     fun setRequestedEffects(faceEffects: Boolean, backgroundReplacement: Boolean) {
         faceEffectsEnabled = faceEffects && landmarker != null
+        if (faceEffects && landmarker == null) liveDiagnostics.recordError(faceInitialization.failure)
         backgroundReplacementEnabled = backgroundReplacement && segmenter != null
         if (faceEffects && landmarker == null) {
             onError(modelInitializationMessage("FaceLandmarker", faceInitialization.failure))
@@ -569,6 +678,7 @@ internal class SocialFaceImageAnalyzer(
             RunningMode.LIVE_STREAM,
             resultListener = { result, input -> handleFaceResult(result, input) },
             errorListener = { error ->
+                liveDiagnostics.recordError(error)
                 Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker live inference failed.", error)
                 handleFaceError()
             }
@@ -599,6 +709,7 @@ internal class SocialFaceImageAnalyzer(
     }
 
     override fun analyze(imageProxy: ImageProxy) {
+        liveDiagnostics.recordAnalyzerFrame()
         val now = SystemClock.uptimeMillis()
         if (closed || (!faceEffectsEnabled && !backgroundReplacementEnabled) ||
             now - lastAcceptedFrameMs < MIN_ANALYSIS_INTERVAL_MS ||
@@ -635,8 +746,10 @@ internal class SocialFaceImageAnalyzer(
                 .build()
             pending.faceImage?.let { input ->
                 try {
+                    liveDiagnostics.recordFaceFrameSubmission()
                     checkNotNull(landmarker).detectAsync(input, options, timestamp)
                 } catch (failure: Exception) {
+                    liveDiagnostics.recordError(failure)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
                     finishFace(pending, null)
                 }
@@ -650,6 +763,7 @@ internal class SocialFaceImageAnalyzer(
                 }
             }
         } catch (failure: Exception) {
+            liveDiagnostics.recordError(failure)
             Log.e(SOCIAL_FACE_ANALYZER_TAG, "Failed to prepare a local camera frame for MediaPipe.", failure)
             val submitted = frame
             if (submitted != null) {
@@ -667,9 +781,11 @@ internal class SocialFaceImageAnalyzer(
     private fun handleFaceResult(result: FaceLandmarkerResult, input: MPImage) {
         val frame = pendingFrame.get()
         if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
+            liveDiagnostics.recordStaleCallback()
             if (frame?.faceImage !== input) runCatching { input.close() }
             return
         }
+        liveDiagnostics.recordAcceptedCallback(result.faceLandmarks().size)
         // The LIVE_STREAM API associates results with the submitted timestamp; it does not promise
         // that the callback's MPImage wrapper is the same Kotlin object submitted by analyze().
         if (frame.faceImage !== input) runCatching { input.close() }

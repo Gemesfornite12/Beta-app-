@@ -309,21 +309,29 @@ internal fun SocialCameraDialog(
     var message by remember { mutableStateOf<String?>(null) }
     var previewFaceResult by remember { mutableStateOf<SocialFaceResult>(emptyList()) }
     var latestPreviewSegmentationFrame by remember { mutableStateOf<SocialPreviewSegmentationFrame?>(null) }
+    var latestTransformReady by remember { mutableStateOf<Boolean?>(null) }
+    var latestMappedFaceCount by remember { mutableStateOf<Int?>(null) }
     val latestRecording by rememberUpdatedState(activeRecording)
     val cameraExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val faceAnalysisExecutor = remember(context) { Executors.newSingleThreadExecutor() }
     val faceResultsCallback = rememberUpdatedState<(SocialFaceResult, PersonSegmentationMask?, OutputTransform, Int, Int, Int) -> Unit> { result, mask, source, width, height, rotation ->
         val preview = previewViewRef
-        previewFaceResult = mapSocialFacesToPreview(
+        val targetTransform = preview?.outputTransform
+        val previewWidth = preview?.width ?: 0
+        val previewHeight = preview?.height ?: 0
+        val mappedFaces = mapSocialFacesToPreview(
             result,
             source,
-            preview?.outputTransform,
+            targetTransform,
             width,
             height,
             rotation,
-            preview?.width ?: 0,
-            preview?.height ?: 0
+            previewWidth,
+            previewHeight
         )
+        latestTransformReady = targetTransform != null && width > 0 && height > 0 && previewWidth > 0 && previewHeight > 0
+        latestMappedFaceCount = mappedFaces.size
+        previewFaceResult = mappedFaces
         latestPreviewSegmentationFrame = mask?.let { SocialPreviewSegmentationFrame(it, source, width, height, rotation) }
     }
     val faceErrorCallback = rememberUpdatedState<(String) -> Unit> { error -> message = error }
@@ -764,13 +772,24 @@ internal fun SocialCameraDialog(
                     }
                 }
                 message?.let { Text(it, color = Color(0xFFFCA5A5), fontSize = 12.sp) }
-                if (initializationDiagnostics.isNotEmpty()) {
+                if (shouldShowSocialFaceDiagnostic(
+                        faceEffectSelected = faceFilter != SocialFaceFilter.NONE,
+                        initializationFailure = initializationDiagnostics.isNotEmpty(),
+                        analyzerCreationFailure = faceAnalyzerCreation.isFailure
+                    )) {
                     Button(
                         onClick = {
-                            val report = buildSocialModelInitializationDiagnostic(
-                                failures = initializationDiagnostics,
+                            if (latestTransformReady != null && latestMappedFaceCount != null) {
+                                faceAnalyzer?.recordPreviewMapping(latestTransformReady == true, latestMappedFaceCount ?: 0)
+                            }
+                            val snapshot = faceAnalyzer?.liveDiagnosticSnapshot() ?: SocialFaceLiveDiagnosticSnapshot(
+                                analyzerAvailable = false,
+                                faceEffectRequested = faceFilter != SocialFaceFilter.NONE,
+                                lastErrorType = faceAnalyzerCreation.exceptionOrNull()?.javaClass?.simpleName?.take(64)
+                            )
+                            val report = buildSocialFaceLiveDiagnosticReport(
+                                snapshot = snapshot,
                                 sdkApi = Build.VERSION.SDK_INT,
-                                supportedAbis = Build.SUPPORTED_ABIS.toList(),
                                 buildVariant = BuildConfig.BUILD_TYPE
                             )
                             val copied = runCatching {
@@ -785,7 +804,7 @@ internal fun SocialCameraDialog(
                             ).show()
                         },
                         modifier = Modifier.fillMaxWidth().testTag("social_camera_copy_diagnostic")
-                    ) { Text("Copiar diagnóstico") }
+                    ) { Text("Copiar diagnóstico en vivo") }
                 }
             }
         }
