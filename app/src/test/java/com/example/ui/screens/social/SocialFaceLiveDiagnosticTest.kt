@@ -57,7 +57,7 @@ class SocialFaceLiveDiagnosticTest {
     @Test
     fun reportContainsOnlyErrorTypeAndCountersNotExceptionTextOrPersonalData() {
         val recorder = SocialFaceLiveDiagnosticRecorder()
-        recorder.recordError(IllegalStateException("email=person@example.com account=9876543210 secret=super-private"))
+        recorder.recordError(SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT, IllegalStateException("email=person@example.com account=9876543210 secret=super-private"))
         val report = buildSocialFaceLiveDiagnosticReport(
             recorder.snapshot(analyzerAvailable = true, faceEffectRequested = true),
             sdkApi = 35,
@@ -65,6 +65,7 @@ class SocialFaceLiveDiagnosticTest {
         )
 
         assertTrue(report.contains("Last error type: IllegalStateException"))
+        assertTrue(report.contains("Last error stage: FACE_DETECT_ASYNC_SUBMIT"))
         assertFalse(report.contains("person@example.com"))
         assertFalse(report.contains("9876543210"))
         assertFalse(report.contains("super-private"))
