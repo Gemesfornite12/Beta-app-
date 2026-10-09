@@ -138,7 +138,7 @@ internal object SocialFaceCrashEvidence {
     fun previousReport(context: Context): String? {
         val preferences = preferences(context)
         if (!preferences.contains(PREVIOUS + "state")) return null
-        val record = recordFrom(preferences, PREVIOUS, System.currentTimeMillis())
+        val record = recordFrom(preferences, PREVIOUS, now = System.currentTimeMillis())
         return buildSocialFaceCrashEvidenceReport(record)
     }
 
