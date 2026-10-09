@@ -677,6 +677,18 @@ internal class SocialFaceImageAnalyzer(
     private var lastTimestampMs = 0L
     @Volatile private var closed = false
     private val liveDiagnostics = SocialFaceLiveDiagnosticRecorder()
+    private val crashEvidenceContext = context.applicationContext
+
+    private fun persistCheckpoint(stage: String, pending: Boolean) {
+        runCatching {
+            SocialFaceCrashEvidence.recordCheckpoint(
+                crashEvidenceContext,
+                liveDiagnosticSnapshot(),
+                stage,
+                pending
+            )
+        }
+    }
 
     fun liveDiagnosticSnapshot(): SocialFaceLiveDiagnosticSnapshot =
         liveDiagnostics.snapshot(analyzerAvailable = landmarker != null, faceEffectRequested = faceEffectsEnabled)
@@ -786,11 +798,13 @@ internal class SocialFaceImageAnalyzer(
             pending.faceImage?.let { input ->
                 try {
                     liveDiagnostics.recordFaceFrameSubmission()
+                    persistCheckpoint("FACE_DETECT_ASYNC_SUBMIT", pending = true)
                     // FaceLandmarker 1.0.0 documents ARGB_8888 as its supported color space. The
                     // camera frame is physically rotated above, so use the default-options overload.
                     checkNotNull(landmarker).detectAsync(input, timestamp)
                 } catch (failure: Exception) {
                     liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT, failure)
+                    persistCheckpoint("FACE_DETECT_ASYNC_SUBMIT_ERROR", pending = true)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
                     finishFace(pending, null)
                 }
@@ -806,6 +820,7 @@ internal class SocialFaceImageAnalyzer(
             }
         } catch (failure: Exception) {
             liveDiagnostics.recordError(SocialFaceLiveErrorStage.FRAME_PREPARATION, failure)
+            persistCheckpoint("FRAME_PREPARATION_ERROR", pending = false)
             Log.e(SOCIAL_FACE_ANALYZER_TAG, "Failed to prepare a local camera frame for MediaPipe.", failure)
             val submitted = frame
             if (submitted != null) {
@@ -825,10 +840,12 @@ internal class SocialFaceImageAnalyzer(
         val frame = pendingFrame.get()
         if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
             liveDiagnostics.recordStaleCallback()
+            persistCheckpoint("FACE_RESULT_STALE", pending = frame != null)
             if (frame?.faceImage !== input) runCatching { input.close() }
             return
         }
         liveDiagnostics.recordAcceptedCallback(result.faceLandmarks().size)
+        persistCheckpoint("FACE_RESULT_CALLBACK", pending = true)
         // The LIVE_STREAM API associates results with the submitted timestamp; it does not promise
         // that the callback's MPImage wrapper is the same Kotlin object submitted by analyze().
         if (frame.faceImage !== input) runCatching { input.close() }
@@ -873,6 +890,7 @@ internal class SocialFaceImageAnalyzer(
         release(frame)
         frameInFlight.set(false)
         if (closed) return
+        persistCheckpoint(if (frame.failed.get()) "CALLBACK_COMPLETED_WITH_ERROR" else "CALLBACKS_COMPLETED", pending = false)
         if (frame.failed.get()) onError("No se pudo completar el efecto local de rostro o fondo.")
         onResults(
             frame.faceResult.get(),

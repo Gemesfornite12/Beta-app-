@@ -55,6 +55,7 @@ import com.example.ui.screens.profile.ProfileScreen
 import com.example.ui.screens.ai.AiAssistantScreen
 import com.example.ui.screens.maps.MapsScreen
 import com.example.ui.screens.social.SocialScreen
+import com.example.ui.screens.social.SocialFaceCrashEvidence
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.OmniViewModel
 import coil.Coil
@@ -99,6 +100,7 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     FirebaseAnalyticsManager.initialize(applicationContext)
     FirebaseCrashlyticsManager.initialize(applicationContext)
+    SocialFaceCrashEvidence.onProcessStart(applicationContext)
     
     // Configurar Coil globalmente para soporte nativo de GIFs y Stickers animados
     try {

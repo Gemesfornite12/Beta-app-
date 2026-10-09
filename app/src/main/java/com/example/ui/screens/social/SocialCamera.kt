@@ -454,12 +454,14 @@ internal fun SocialCameraDialog(
     val latestPhotoAccepted by rememberUpdatedState(photoAccepted)
 
     DisposableEffect(controller, lifecycleOwner, videoEffect, faceAnalyzer) {
+        SocialFaceCrashEvidence.beginCameraSession(context)
         controller.imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
         controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.VIDEO_CAPTURE)
         controller.bindToLifecycle(lifecycleOwner)
         controller.setEffects(setOf(videoEffect))
         controllerRef = controller
         onDispose {
+            SocialFaceCrashEvidence.endCameraSession(context)
             latestRecording?.stop()
             controller.clearImageAnalysisAnalyzer()
             controller.unbind()
@@ -620,11 +622,17 @@ internal fun SocialCameraDialog(
                         faceEffectRequested = faceFilter != SocialFaceFilter.NONE,
                         lastErrorType = faceAnalyzerCreation.exceptionOrNull()?.javaClass?.simpleName?.take(64)
                     )
-                    val report = buildSocialFaceLiveDiagnosticReport(
-                        snapshot = snapshot,
-                        sdkApi = Build.VERSION.SDK_INT,
-                        buildVariant = BuildConfig.BUILD_TYPE
-                    )
+                    val report = buildString {
+                        append(buildSocialFaceLiveDiagnosticReport(
+                            snapshot = snapshot,
+                            sdkApi = Build.VERSION.SDK_INT,
+                            buildVariant = BuildConfig.BUILD_TYPE
+                        ))
+                        SocialFaceCrashEvidence.previousReport(context)?.let { previous ->
+                            appendLine()
+                            append(previous)
+                        }
+                    }
                     val copied = runCatching {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             ?: error("Clipboard unavailable")
