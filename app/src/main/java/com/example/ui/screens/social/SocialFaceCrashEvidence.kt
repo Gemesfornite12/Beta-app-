@@ -57,6 +57,7 @@ internal object SocialFaceCrashEvidence {
     /** Install once, wrapping and delegating to the crash handler already registered by the SDK. */
     fun onProcessStart(context: Context) {
         val appContext = context.applicationContext
+        if (!handlerInstalled.compareAndSet(false, true)) return
         val preferences = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (preferences.getString(ACTIVE + "state", null) == SESSION_ACTIVE) {
             val now = System.currentTimeMillis()
@@ -65,7 +66,6 @@ internal object SocialFaceCrashEvidence {
             saveRecord(preferences, PREVIOUS, record, pendingSince)
             preferences.edit().remove(ACTIVE + "state").remove(ACTIVE + "pending_since").commit()
         }
-        if (!handlerInstalled.compareAndSet(false, true)) return
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching { saveUncaughtCameraFailure(appContext, throwable) }
