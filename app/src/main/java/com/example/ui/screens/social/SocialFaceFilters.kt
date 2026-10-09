@@ -33,6 +33,9 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
 import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenterResult
 import java.nio.ByteOrder
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -217,10 +220,17 @@ internal fun applySocialBackgroundToBitmap(
 private const val FACE_LANDMARKER_MODEL = "face_landmarker.task"
 private const val SELFIE_SEGMENTER_MODEL = "selfie_segmenter.tflite"
 private const val MIN_ANALYSIS_INTERVAL_MS = 33L
+internal const val SOCIAL_SEGMENTER_CALLBACK_TIMEOUT_MS = 10_000L
 
-/** LIVE_STREAM callbacks are correlated by their documented timestamp, not MPImage object identity. */
+/** FaceLandmarker VIDEO mode returns each processed frame synchronously on the analyzer executor. */
+internal fun socialFaceLandmarkerRunningMode(): RunningMode = RunningMode.VIDEO
+
+/** ImageSegmenter LIVE_STREAM results are correlated by their documented timestamp. */
 internal fun matchesSocialPendingFrame(pendingTimestampMs: Long, callbackTimestampMs: Long): Boolean =
     pendingTimestampMs == callbackTimestampMs
+
+internal fun shouldExpireSocialSegmentation(isCurrentFrame: Boolean, callbackCompleted: Boolean): Boolean =
+    isCurrentFrame && !callbackCompleted
 
 /** Rotates a camera-buffer bitmap into the orientation MediaPipe expects for ARGB_8888 input. */
 internal fun rotateSocialFaceBitmapForLandmarker(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
@@ -532,10 +542,10 @@ internal fun shouldShowSocialFaceDiagnostic(
 internal enum class SocialFaceLiveErrorStage {
     MODEL_INITIALIZATION,
     FRAME_PREPARATION,
-    FACE_DETECT_ASYNC_SUBMIT,
-    FACE_ASYNC_LISTENER,
+    FACE_DETECT_VIDEO,
     SEGMENTER_SUBMIT,
-    SEGMENTER_ASYNC_LISTENER
+    SEGMENTER_ASYNC_LISTENER,
+    SEGMENTER_TIMEOUT
 }
 
 internal data class SocialFaceLiveDiagnosticSnapshot(
@@ -637,7 +647,7 @@ internal fun buildSocialFaceLiveDiagnosticReport(
     appendLine("Pipeline clue: $clue")
 }
 
-/** Holds CameraX's media image until both available MediaPipe live tasks complete or fail. */
+/** Holds CameraX's frame until synchronous face inference and the optional live segmenter finish or time out. */
 @OptIn(TransformExperimental::class)
 internal class SocialFaceImageAnalyzer(
     context: Context,
@@ -661,6 +671,7 @@ internal class SocialFaceImageAnalyzer(
         val faceResult = AtomicReference<SocialFaceResult>(emptyList())
         val personMask = AtomicReference<PersonSegmentationMask?>(null)
         val failed = AtomicBoolean(false)
+        @Volatile var segmentationTimeout: ScheduledFuture<*>? = null
     }
 
     @Volatile private var faceEffectsEnabled = false
@@ -678,6 +689,9 @@ internal class SocialFaceImageAnalyzer(
     @Volatile private var closed = false
     private val liveDiagnostics = SocialFaceLiveDiagnosticRecorder()
     private val crashEvidenceContext = context.applicationContext
+    private val segmentationTimeoutExecutor = ScheduledThreadPoolExecutor(1) { runnable ->
+        Thread(runnable, "social-segmenter-timeout").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
 
     private fun persistCheckpoint(stage: String, pending: Boolean) {
         runCatching {
@@ -710,17 +724,8 @@ internal class SocialFaceImageAnalyzer(
 
     fun hasActiveLocalEffects(): Boolean = faceEffectsEnabled || backgroundReplacementEnabled
 
-    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL, RunningMode.LIVE_STREAM) {
-        createSocialFaceLandmarker(
-            context,
-            RunningMode.LIVE_STREAM,
-            resultListener = { result, input -> handleFaceResult(result, input) },
-            errorListener = { error ->
-                liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_ASYNC_LISTENER, error)
-                Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker live inference failed.", error)
-                handleFaceError()
-            }
-        )
+    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL, socialFaceLandmarkerRunningMode()) {
+        createSocialFaceLandmarker(context, socialFaceLandmarkerRunningMode())
     }
     private val landmarker = faceInitialization.instance
 
@@ -798,20 +803,24 @@ internal class SocialFaceImageAnalyzer(
             pending.faceImage?.let { input ->
                 try {
                     liveDiagnostics.recordFaceFrameSubmission()
-                    persistCheckpoint("FACE_DETECT_ASYNC_SUBMIT", pending = true)
-                    // FaceLandmarker 1.0.0 documents ARGB_8888 as its supported color space. The
-                    // camera frame is physically rotated above, so use the default-options overload.
-                    checkNotNull(landmarker).detectAsync(input, timestamp)
+                    persistCheckpoint("FACE_DETECT_VIDEO_BEGIN", pending = true)
+                    // FaceLandmarker 1.0.0's VIDEO API is synchronous. The bitmap is physically
+                    // rotated above, so detectForVideo's default-options overload applies no second rotation.
+                    val result = checkNotNull(landmarker).detectForVideo(input, timestamp)
+                    liveDiagnostics.recordAcceptedCallback(result.faceLandmarks().size)
+                    persistCheckpoint("FACE_DETECT_VIDEO_RESULT", pending = true)
+                    finishFace(pending, result.toSocialFaceResult())
                 } catch (failure: Exception) {
-                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT, failure)
-                    persistCheckpoint("FACE_DETECT_ASYNC_SUBMIT_ERROR", pending = true)
-                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker rejected a live camera frame.", failure)
+                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_VIDEO, failure)
+                    persistCheckpoint("FACE_DETECT_VIDEO_ERROR", pending = true)
+                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker video inference failed.", failure)
                     finishFace(pending, null)
                 }
             }
             pending.segmentationImage?.let { input ->
                 try {
                     checkNotNull(segmenter).segmentAsync(input, options, timestamp)
+                    scheduleSegmentationTimeout(pending)
                 } catch (failure: Exception) {
                     liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_SUBMIT, failure)
                     Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter rejected a live camera frame.", failure)
@@ -836,24 +845,23 @@ internal class SocialFaceImageAnalyzer(
         }
     }
 
-    private fun handleFaceResult(result: FaceLandmarkerResult, input: MPImage) {
-        val frame = pendingFrame.get()
-        if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
-            liveDiagnostics.recordStaleCallback()
-            persistCheckpoint("FACE_RESULT_STALE", pending = frame != null)
-            if (frame?.faceImage !== input) runCatching { input.close() }
-            return
-        }
-        liveDiagnostics.recordAcceptedCallback(result.faceLandmarks().size)
-        persistCheckpoint("FACE_RESULT_CALLBACK", pending = true)
-        // The LIVE_STREAM API associates results with the submitted timestamp; it does not promise
-        // that the callback's MPImage wrapper is the same Kotlin object submitted by analyze().
-        if (frame.faceImage !== input) runCatching { input.close() }
-        finishFace(frame, result.toSocialFaceResult())
-    }
-
-    private fun handleFaceError() {
-        pendingFrame.get()?.let { finishFace(it, null) }
+    private fun scheduleSegmentationTimeout(frame: PendingFrame) {
+        val timeout = segmentationTimeoutExecutor.schedule({
+            if (shouldExpireSocialSegmentation(
+                    isCurrentFrame = pendingFrame.get() === frame,
+                    callbackCompleted = frame.segmentationCallbackCompleted.get()
+                )
+            ) {
+                val failure = java.util.concurrent.TimeoutException("ImageSegmenter callback timed out.")
+                liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_TIMEOUT, failure)
+                persistCheckpoint("SEGMENTER_CALLBACK_TIMEOUT", pending = true)
+                Log.w(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter callback timed out; releasing the pending camera frame.")
+                finishSegmentation(frame, null)
+            }
+        }, SOCIAL_SEGMENTER_CALLBACK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        frame.segmentationTimeout = timeout
+        // A fast callback may complete before the scheduled handle is assigned.
+        if (frame.segmentationCallbackCompleted.get() || pendingFrame.get() !== frame) timeout.cancel(false)
     }
 
     private fun handleSegmentationResult(result: ImageSegmenterResult, input: MPImage) {
@@ -903,6 +911,8 @@ internal class SocialFaceImageAnalyzer(
     }
 
     private fun release(frame: PendingFrame) {
+        frame.segmentationTimeout?.cancel(false)
+        frame.segmentationTimeout = null
         runCatching { frame.faceImage?.close() }
         runCatching { frame.faceBitmap?.recycle() }
         runCatching { frame.segmentationImage?.close() }
@@ -912,6 +922,7 @@ internal class SocialFaceImageAnalyzer(
     override fun close() {
         if (closed) return
         closed = true
+        segmentationTimeoutExecutor.shutdownNow()
         landmarker?.close()
         segmenter?.close()
         pendingFrame.getAndSet(null)?.let(::release)

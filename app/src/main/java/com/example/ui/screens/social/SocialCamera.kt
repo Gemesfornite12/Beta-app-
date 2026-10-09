@@ -467,8 +467,25 @@ internal fun SocialCameraDialog(
             controller.unbind()
             faceAnalysisExecutor.shutdown()
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                faceAnalysisExecutor.awaitTermination(2, TimeUnit.SECONDS)
-                faceAnalyzer?.close()
+                val stoppedGracefully = runCatching {
+                    faceAnalysisExecutor.awaitTermination(5, TimeUnit.SECONDS)
+                }.getOrDefault(false)
+                if (stoppedGracefully) {
+                    faceAnalyzer?.close()
+                } else {
+                    // A synchronous native VIDEO inference must not race FaceLandmarker.close().
+                    // Interrupt and wait once more; if native code still has the worker, leave it
+                    // alive rather than closing MediaPipe concurrently with its active call.
+                    faceAnalysisExecutor.shutdownNow()
+                    val stoppedAfterInterrupt = runCatching {
+                        faceAnalysisExecutor.awaitTermination(2, TimeUnit.SECONDS)
+                    }.getOrDefault(false)
+                    if (stoppedAfterInterrupt) {
+                        faceAnalyzer?.close()
+                    } else {
+                        Log.w("SocialCamera", "Face analyzer did not stop; deferring MediaPipe close to avoid racing active inference.")
+                    }
+                }
             }
             if (!latestPhotoAccepted) {
                 val temporaryPhotos = listOfNotNull(latestProcessedPhoto, latestCapturedPhoto).distinct()

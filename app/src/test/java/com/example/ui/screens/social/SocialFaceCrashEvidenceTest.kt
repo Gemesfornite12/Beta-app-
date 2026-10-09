@@ -11,7 +11,7 @@ class SocialFaceCrashEvidenceTest {
         val report = buildSocialFaceCrashEvidenceReport(
             SocialFaceCrashRecord(
                 state = "process-restarted",
-                stage = "FACE_DETECT_ASYNC_SUBMIT",
+                stage = "FACE_DETECT_VIDEO",
                 apiLevel = 36,
                 frames = 1,
                 submissions = 1,
@@ -22,7 +22,7 @@ class SocialFaceCrashEvidenceTest {
             )
         )
         assertTrue(report.contains("Previous session state: process-restarted"))
-        assertTrue(report.contains("Last checkpoint: FACE_DETECT_ASYNC_SUBMIT"))
+        assertTrue(report.contains("Last checkpoint: FACE_DETECT_VIDEO"))
         assertTrue(report.contains("Frames received: 1"))
         assertTrue(report.contains("Accepted callbacks: 0"))
         assertTrue(report.contains("Frame still pending at last checkpoint: true"))
@@ -37,7 +37,7 @@ class SocialFaceCrashEvidenceTest {
         val report = buildSocialFaceCrashEvidenceReport(
             SocialFaceCrashRecord(
                 state = "uncaught-crash",
-                stage = "FACE_DETECT_ASYNC_SUBMIT",
+                stage = "FACE_DETECT_VIDEO",
                 apiLevel = 36,
                 frames = 1,
                 submissions = 1,

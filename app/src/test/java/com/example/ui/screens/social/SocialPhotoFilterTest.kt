@@ -190,7 +190,7 @@ class SocialPhotoFilterTest {
     fun liveDiagnosticReportsOnlyAllowlistedErrorStageAndType() {
         val recorder = SocialFaceLiveDiagnosticRecorder()
         recorder.recordError(
-            SocialFaceLiveErrorStage.FACE_DETECT_ASYNC_SUBMIT,
+            SocialFaceLiveErrorStage.FACE_DETECT_VIDEO,
             UnsupportedOperationException("private/path photo=/data/user/0/app/private.jpg user=private@example.test")
         )
 
@@ -201,7 +201,7 @@ class SocialPhotoFilterTest {
         )
 
         assertTrue(report.contains("Last error type: UnsupportedOperationException"))
-        assertTrue(report.contains("Last error stage: FACE_DETECT_ASYNC_SUBMIT"))
+        assertTrue(report.contains("Last error stage: FACE_DETECT_VIDEO"))
         assertFalse(report.contains("private/path"))
         assertFalse(report.contains("/data/user/0"))
         assertFalse(report.contains("private@example.test"))
@@ -215,9 +215,9 @@ class SocialPhotoFilterTest {
             setOf(
                 "MODEL_INITIALIZATION",
                 "FRAME_PREPARATION",
-                "FACE_DETECT_ASYNC_SUBMIT",
-                "FACE_ASYNC_LISTENER",
+                "FACE_DETECT_VIDEO",
                 "SEGMENTER_SUBMIT",
+                "SEGMENTER_TIMEOUT",
                 "SEGMENTER_ASYNC_LISTENER"
             ),
             SocialFaceLiveErrorStage.entries.map { it.name }.toSet()
