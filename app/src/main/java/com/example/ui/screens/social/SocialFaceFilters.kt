@@ -1,0 +1,1308 @@
+package com.example.ui.screens.social
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
+import android.graphics.Shader
+import android.os.Build
+import android.os.SystemClock
+import android.util.Log
+import android.view.View
+import androidx.camera.core.ImageProxy
+import androidx.camera.view.TransformExperimental
+import androidx.camera.view.transform.CoordinateTransform
+import androidx.camera.view.transform.ImageProxyTransformFactory
+import androidx.camera.view.transform.OutputTransform
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.MediaImageBuilder
+import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.framework.image.ByteBufferExtractor
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
+import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenterResult
+import java.nio.ByteOrder
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.atan2
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+internal enum class SocialFaceFilter(val label: String) {
+    NONE("Sin filtro"),
+    DOG_EARS("Orejas"),
+    GLASSES("Gafas"),
+    CROWN("Corona")
+}
+
+internal enum class SocialBackgroundPreset(val label: String, val topColor: Int, val bottomColor: Int) {
+    ORIGINAL("Original", Color.TRANSPARENT, Color.TRANSPARENT),
+    SKY("Cielo", 0xff38bdf8.toInt(), 0xff1d4ed8.toInt()),
+    SUNSET("Atardecer", 0xfffb7185.toInt(), 0xff7c2d12.toInt()),
+    LAVENDER("Lavanda", 0xffc4b5fd.toInt(), 0xff6d28d9.toInt())
+}
+
+internal data class PersonSegmentationMask(
+    val width: Int,
+    val height: Int,
+    val personConfidence: FloatArray
+)
+
+/** Minimal normalized coordinates consumed by the sticker renderer; no mesh/blendshape payload is retained. */
+internal data class SocialFacePoint(val x: Float, val y: Float)
+internal data class SocialFace(
+    val sideA: SocialFacePoint,
+    val sideB: SocialFacePoint,
+    val top: SocialFacePoint,
+    val bottom: SocialFacePoint,
+    val leftEyeOuter: SocialFacePoint,
+    val leftEyeInner: SocialFacePoint,
+    val rightEyeInner: SocialFacePoint,
+    val rightEyeOuter: SocialFacePoint
+) {
+    fun requiredPoints() = listOf(sideA, sideB, top, bottom, leftEyeOuter, leftEyeInner, rightEyeInner, rightEyeOuter)
+
+    fun withPoints(points: List<SocialFacePoint>) = copy(
+        sideA = points[0], sideB = points[1], top = points[2], bottom = points[3],
+        leftEyeOuter = points[4], leftEyeInner = points[5],
+        rightEyeInner = points[6], rightEyeOuter = points[7]
+    )
+}
+internal typealias SocialFaceResult = List<SocialFace>
+
+internal data class FaceFilterBitmapResult(
+    val bitmap: Bitmap,
+    val detectedFaceCount: Int
+)
+
+/** Creates a transparent background-replacement layer in the original camera-buffer coordinates. */
+internal fun createSocialBackgroundOverlay(
+    mask: PersonSegmentationMask,
+    preset: SocialBackgroundPreset,
+    frameWidth: Int,
+    frameHeight: Int,
+    rotationDegrees: Int
+): Bitmap? {
+    if (preset == SocialBackgroundPreset.ORIGINAL || frameWidth <= 0 || frameHeight <= 0 ||
+        mask.width <= 0 || mask.height <= 0 || mask.personConfidence.size < mask.width * mask.height
+    ) return null
+
+    val maskPixels = IntArray(mask.width * mask.height) { index ->
+        val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
+        Color.argb(alpha, 255, 255, 255)
+    }
+    var personMask = Bitmap.createBitmap(maskPixels, mask.width, mask.height, Bitmap.Config.ARGB_8888)
+    val rotation = ((rotationDegrees % 360) + 360) % 360
+    if (rotation != 0) {
+        val inverseRotation = Matrix().apply { postRotate(-rotation.toFloat()) }
+        val unrotated = Bitmap.createBitmap(personMask, 0, 0, personMask.width, personMask.height, inverseRotation, true)
+        if (unrotated !== personMask) personMask.recycle()
+        personMask = unrotated
+    }
+    if (personMask.width != frameWidth || personMask.height != frameHeight) {
+        val scaled = Bitmap.createScaledBitmap(personMask, frameWidth, frameHeight, true)
+        if (scaled !== personMask) personMask.recycle()
+        personMask = scaled
+    }
+
+    val background = Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(background)
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(0f, 0f, 0f, frameHeight.toFloat(), preset.topColor, preset.bottomColor, Shader.TileMode.CLAMP)
+    }
+    canvas.drawRect(0f, 0f, frameWidth.toFloat(), frameHeight.toFloat(), backgroundPaint)
+    val personCutoutPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+    }
+    canvas.drawBitmap(personMask, 0f, 0f, personCutoutPaint)
+    personCutoutPaint.xfermode = null
+    personMask.recycle()
+    return background
+}
+
+/** Applies a local person mask to a still image, preserving the person and replacing the backdrop. */
+internal fun applySocialBackgroundToBitmap(
+    source: Bitmap,
+    mask: PersonSegmentationMask,
+    preset: SocialBackgroundPreset
+): Bitmap {
+    if (preset == SocialBackgroundPreset.ORIGINAL) return source
+    if (source.width <= 0 || source.height <= 0 || mask.width <= 0 || mask.height <= 0 ||
+        mask.personConfidence.size < mask.width * mask.height
+    ) error("No se pudo aplicar el fondo seleccionado.")
+
+    // Build the person coverage in photo coordinates, then composite a single masked-source
+    // cutout (equivalent to DST_IN/SRC_IN) over the opaque replacement. Applying coverage
+    // once avoids clearing the replacement backdrop twice and preserves soft mask edges.
+    var personMask = Bitmap.createBitmap(
+        IntArray(mask.width * mask.height) { index ->
+            val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
+            Color.argb(alpha, 255, 255, 255)
+        },
+        mask.width,
+        mask.height,
+        Bitmap.Config.ARGB_8888
+    )
+    try {
+        if (personMask.width != source.width || personMask.height != source.height) {
+            val scaled = Bitmap.createScaledBitmap(personMask, source.width, source.height, true)
+            if (scaled !== personMask) personMask.recycle()
+            personMask = scaled
+        }
+
+        val background = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        try {
+            val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(0f, 0f, 0f, source.height.toFloat(), preset.topColor, preset.bottomColor, Shader.TileMode.CLAMP)
+            }
+            Canvas(background).drawRect(0f, 0f, source.width.toFloat(), source.height.toFloat(), backgroundPaint)
+
+            val output = checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
+            try {
+                // Reuse scanline buffers rather than allocating full-photo pixel arrays.
+                val sourceRow = IntArray(source.width)
+                val backgroundRow = IntArray(source.width)
+                val personRow = IntArray(source.width)
+                val outputRow = IntArray(source.width)
+                for (y in 0 until source.height) {
+                    source.getPixels(sourceRow, 0, source.width, 0, y, source.width, 1)
+                    background.getPixels(backgroundRow, 0, source.width, 0, y, source.width, 1)
+                    personMask.getPixels(personRow, 0, source.width, 0, y, source.width, 1)
+                    for (x in 0 until source.width) {
+                        val confidence = Color.alpha(personRow[x])
+                        val sourcePixel = sourceRow[x]
+                        outputRow[x] = when (confidence) {
+                            255 -> sourcePixel // Preserve fully confident person pixels exactly.
+                            0 -> backgroundRow[x] // Keep the replacement fully visible off-person.
+                            else -> {
+                                val sourceWeight = confidence / 255f * (Color.alpha(sourcePixel) / 255f)
+                                val backgroundWeight = 1f - sourceWeight
+                                Color.argb(
+                                    255,
+                                    (Color.red(sourcePixel) * sourceWeight + Color.red(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                                    (Color.green(sourcePixel) * sourceWeight + Color.green(backgroundRow[x]) * backgroundWeight + 0.5f).toInt(),
+                                    (Color.blue(sourcePixel) * sourceWeight + Color.blue(backgroundRow[x]) * backgroundWeight + 0.5f).toInt()
+                                )
+                            }
+                        }
+                    }
+                    output.setPixels(outputRow, 0, source.width, 0, y, source.width, 1)
+                }
+                return output
+            } catch (failure: Throwable) {
+                output.recycle()
+                throw failure
+            }
+        } finally {
+            background.recycle()
+        }
+    } finally {
+        personMask.recycle()
+    }
+}
+
+private const val FACE_LANDMARKER_MODEL = "face_landmarker.task"
+private const val SELFIE_SEGMENTER_MODEL = "selfie_segmenter.tflite"
+private const val MIN_ANALYSIS_INTERVAL_MS = 33L
+internal const val SOCIAL_SEGMENTER_CALLBACK_TIMEOUT_MS = 10_000L
+
+/** FaceLandmarker VIDEO mode returns each processed frame synchronously on the analyzer executor. */
+internal fun socialFaceLandmarkerRunningMode(): RunningMode = RunningMode.VIDEO
+
+/** ImageSegmenter LIVE_STREAM results are correlated by their documented timestamp. */
+internal fun matchesSocialPendingFrame(pendingTimestampMs: Long, callbackTimestampMs: Long): Boolean =
+    pendingTimestampMs == callbackTimestampMs
+
+internal fun shouldExpireSocialSegmentation(isCurrentFrame: Boolean, callbackCompleted: Boolean): Boolean =
+    isCurrentFrame && !callbackCompleted
+
+/** Rotates a camera-buffer bitmap into the orientation MediaPipe expects for ARGB_8888 input. */
+internal fun rotateSocialFaceBitmapForLandmarker(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+    val rotation = normalizeSocialFaceRotationDegrees(rotationDegrees)
+    if (rotation == 0) return bitmap
+    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+}
+
+internal fun normalizeSocialFaceRotationDegrees(rotationDegrees: Int): Int =
+    ((rotationDegrees % 360) + 360) % 360
+
+/** Creates the official on-device MediaPipe Face Landmarker with an already-bundled model. */
+internal fun createSocialFaceLandmarker(
+    context: Context,
+    runningMode: RunningMode,
+    resultListener: ((FaceLandmarkerResult, MPImage) -> Unit)? = null,
+    errorListener: ((RuntimeException) -> Unit)? = null
+): FaceLandmarker {
+    val baseOptions = BaseOptions.builder()
+        .setModelAssetPath(FACE_LANDMARKER_MODEL)
+        .build()
+    val optionsBuilder = FaceLandmarker.FaceLandmarkerOptions.builder()
+        .setBaseOptions(baseOptions)
+        .setRunningMode(runningMode)
+        .setNumFaces(4)
+        .setMinFaceDetectionConfidence(0.5f)
+        .setMinFacePresenceConfidence(0.5f)
+        .setMinTrackingConfidence(0.5f)
+    if (runningMode == RunningMode.LIVE_STREAM) {
+        optionsBuilder
+            .setResultListener(requireNotNull(resultListener) { "LIVE_STREAM needs a result listener." })
+            .setErrorListener(requireNotNull(errorListener) { "LIVE_STREAM needs an error listener." })
+    }
+    return FaceLandmarker.createFromOptions(context, optionsBuilder.build())
+}
+
+/** Creates MediaPipe's on-device Image Segmenter with the official binary selfie model. */
+internal fun createSocialImageSegmenter(
+    context: Context,
+    runningMode: RunningMode,
+    resultListener: ((ImageSegmenterResult, MPImage) -> Unit)? = null,
+    errorListener: ((RuntimeException) -> Unit)? = null
+): ImageSegmenter {
+    val baseOptions = BaseOptions.builder()
+        .setModelAssetPath(SELFIE_SEGMENTER_MODEL)
+        .build()
+    val optionsBuilder = ImageSegmenter.ImageSegmenterOptions.builder()
+        .setBaseOptions(baseOptions)
+        .setRunningMode(runningMode)
+        .setOutputCategoryMask(false)
+        .setOutputConfidenceMasks(true)
+    if (runningMode == RunningMode.LIVE_STREAM) {
+        optionsBuilder
+            .setResultListener(requireNotNull(resultListener) { "LIVE_STREAM needs a segmentation result listener." })
+            .setErrorListener(requireNotNull(errorListener) { "LIVE_STREAM needs a segmentation error listener." })
+    }
+    return ImageSegmenter.createFromOptions(context, optionsBuilder.build())
+}
+
+/** Copies the person-confidence channel before closing MediaPipe's result mask image. */
+internal fun personSegmentationMaskFromResult(result: ImageSegmenterResult): PersonSegmentationMask? {
+    val masks = result.confidenceMasks().orElse(emptyList())
+    try {
+        val personMask = masks.getOrNull(if (masks.size > 1) 1 else 0) ?: return null
+        val pixels = personMask.width * personMask.height
+        val floatBuffer = ByteBufferExtractor.extract(personMask)
+            .duplicate()
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        if (pixels <= 0 || floatBuffer.remaining() < pixels) return null
+        return PersonSegmentationMask(
+            width = personMask.width,
+            height = personMask.height,
+            personConfidence = FloatArray(pixels).also(floatBuffer::get)
+        )
+    } finally {
+        masks.forEach { it.close() }
+        result.categoryMask().ifPresent { it.close() }
+    }
+}
+
+/** Segments an upright still photo locally; no frame or image is sent to a server. */
+internal fun segmentSocialPhoto(context: Context, source: Bitmap): PersonSegmentationMask {
+    val segmenter = createSocialImageSegmenter(context, RunningMode.IMAGE)
+    try {
+        val mpImage = BitmapImageBuilder(source).build()
+        try {
+            return personSegmentationMaskFromResult(segmenter.segment(mpImage))
+                ?: error("No se pudo obtener la máscara de persona.")
+        } finally {
+            mpImage.close()
+        }
+    } finally {
+        segmenter.close()
+    }
+}
+
+/**
+ * Applies a face sticker to a captured photo with MediaPipe's IMAGE mode. This runs on the caller's
+ * background dispatcher; both inference and rendering are local and never transmit image data.
+ */
+internal fun applySocialFaceFilterToBitmap(
+    context: Context,
+    source: Bitmap,
+    filter: SocialFaceFilter,
+    allowInPlace: Boolean = false
+): FaceFilterBitmapResult {
+    if (filter == SocialFaceFilter.NONE) return FaceFilterBitmapResult(source, 0)
+
+    val landmarker = createSocialFaceLandmarker(context, RunningMode.IMAGE)
+    val landmarks = try {
+        val mpImage = BitmapImageBuilder(source).build()
+        try {
+            landmarker.detect(mpImage).toSocialFaceResult()
+        } finally {
+            mpImage.close()
+        }
+    } finally {
+        landmarker.close()
+    }
+    if (landmarks.isEmpty()) return FaceFilterBitmapResult(source, 0)
+
+    val output = if (allowInPlace && source.isMutable && source.config == Bitmap.Config.ARGB_8888) {
+        source
+    } else {
+        checkNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
+    }
+    val canvas = Canvas(output)
+    landmarks.forEach { face -> drawSocialFaceSticker(canvas, output.width.toFloat(), output.height.toFloat(), face, filter) }
+    return FaceFilterBitmapResult(output, landmarks.size)
+}
+
+private const val SOCIAL_FACE_ANALYZER_TAG = "SocialFaceAnalyzer"
+private const val MEDIAPIPE_TASKS_VISION_VERSION = "1.0.0"
+private val diagnosticAbsolutePath = Regex("""(?i)(?:[a-z]:)?[/\\][^\s:/\\]+(?:[/\\][^\s:/\\]+)*""")
+private val diagnosticControlChars = Regex("""\p{Cntrl}+""")
+private val diagnosticClassDescriptor = Regex("""\bL([A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)+);""")
+private val diagnosticUrl = Regex("""(?i)\b(?:https?|ftp|file)://[^\s)\]}>;,]+|\bwww\.[^\s)\]}>;,]+""")
+private val diagnosticEmail = Regex("""(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b""")
+private val diagnosticSecretAssignment = Regex(
+    """(?i)\b(password|passwd|token|secret|api[ _-]?key|access[_ -]?token|authorization|cookie|email|e-mail|phone|account(?:[_ -]?id)?|user(?:name|[_ -]?id)?|uid|customer(?:[_ -]?id)?)\b\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"""
+)
+private val diagnosticBearer = Regex("""(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}""")
+private val diagnosticJwt = Regex("""\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
+private val diagnosticPhoneOrAccountNumber = Regex("""(?<!\w)\+?\d[\d .()\-]{5,}\d(?!\w)""")
+private val diagnosticLongHex = Regex("""(?i)\b[0-9a-f]{32,}\b""")
+
+private data class SocialModelInitialization<T>(val instance: T?, val failure: Throwable?)
+
+internal data class SocialModelInitializationDiagnostic(
+    val taskName: String,
+    val modelBasename: String,
+    val failure: Throwable
+)
+
+/** Scrubs local paths, URLs, credentials, and likely personal/account identifiers before sharing diagnostics. */
+internal fun sanitizeSocialModelDiagnostic(value: String): String = value
+    .replace(diagnosticControlChars, " ")
+    .replace(diagnosticUrl, "<url>")
+    .replace(diagnosticClassDescriptor) { match -> match.groupValues[1].replace('/', '.') }
+    .replace(diagnosticBearer, "Bearer <redacted>")
+    .replace(diagnosticSecretAssignment) { match ->
+        val marker = if (match.groupValues[1].equals("email", ignoreCase = true) || match.groupValues[1].equals("e-mail", ignoreCase = true)) "<redacted-email>" else "<redacted>"
+        "${match.groupValues[1]}=$marker"
+    }
+    .replace(diagnosticJwt, "<redacted-token>")
+    .replace(diagnosticEmail, "<redacted-email>")
+    .replace(diagnosticAbsolutePath, "<path>")
+    .replace(diagnosticPhoneOrAccountNumber, "<redacted-number>")
+    .replace(diagnosticLongHex, "<redacted-token>")
+    .take(2_048)
+
+/** Builds a shareable initialization-only report; it has no access to camera images or inference results. */
+internal fun buildSocialModelInitializationDiagnostic(
+    failures: List<SocialModelInitializationDiagnostic>,
+    sdkApi: Int,
+    supportedAbis: List<String>,
+    buildVariant: String
+): String = buildString {
+    appendLine("MediaPipe local initialization diagnostic")
+    appendLine("Android SDK/API: ${sanitizeSocialModelDiagnostic(sdkApi.toString())}")
+    appendLine("Supported ABIs: ${sanitizeSocialModelDiagnostic(supportedAbis.joinToString(", ").ifBlank { "unknown" })}")
+    appendLine("MediaPipe Tasks Vision: $MEDIAPIPE_TASKS_VISION_VERSION")
+    appendLine("Build variant: ${sanitizeSocialModelDiagnostic(buildVariant.ifBlank { "unknown" })}")
+    var remainingFrames = 24
+    failures.forEachIndexed { failureIndex, diagnostic ->
+        val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+        appendLine()
+        appendLine("Task: ${sanitizeSocialModelDiagnostic(diagnostic.taskName)}")
+        appendLine("Model: ${sanitizeSocialModelDiagnostic(diagnostic.modelBasename.substringAfterLast('/').substringAfterLast('\\'))}")
+        var cause: Throwable? = diagnostic.failure
+        var causeIndex = 0
+        while (cause != null && causeIndex < 16 && seen.put(cause, true) == null) {
+            val type = cause.javaClass.name.takeIf { it.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$.]*""")) } ?: "Throwable"
+            val message = sanitizeSocialModelDiagnostic(cause.message ?: "<no message>")
+            appendLine("Cause[$causeIndex]: $type: $message")
+            val frames = cause.stackTrace
+            val takeCount = minOf(frames.size, remainingFrames)
+            frames.take(takeCount).forEach { frame ->
+                val className = sanitizeSocialModelDiagnostic(frame.className)
+                val methodName = sanitizeSocialModelDiagnostic(frame.methodName)
+                val fileName = frame.fileName?.let { it.substringAfterLast('/').substringAfterLast('\\') } ?: "Unknown Source"
+                val location = if (frame.lineNumber >= 0) "$fileName:${frame.lineNumber}" else fileName
+                appendLine("  at $className.$methodName(${sanitizeSocialModelDiagnostic(location)})")
+            }
+            remainingFrames -= takeCount
+            if (frames.size > takeCount) appendLine("  stack frames truncated")
+            cause = cause.cause
+            causeIndex++
+        }
+        if (cause != null) appendLine("  cause chain truncated or cyclic")
+        if (remainingFrames == 0 && failureIndex < failures.lastIndex) appendLine("  remaining stack frames omitted")
+    }
+    if (failures.isEmpty()) appendLine("No failed local model initialization was recorded.")
+}.take(50_000)
+
+/** Logs only initialization metadata and exception diagnostics, before camera frames are processed. */
+private fun logSocialModelInitializationFailure(
+    taskName: String,
+    assetName: String,
+    runningMode: RunningMode,
+    failure: Throwable
+) {
+    val deviceContext = "task=$taskName asset=$assetName mode=$runningMode sdk=${Build.VERSION.SDK_INT}" +
+        " abis=${Build.SUPPORTED_ABIS.joinToString(",")} tasksVision=$MEDIAPIPE_TASKS_VISION_VERSION"
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    var cause: Throwable? = failure
+    var causeIndex = 0
+    while (cause != null && causeIndex < 8 && seen.put(cause, true) == null) {
+        val message = sanitizeSocialModelDiagnostic(cause.message ?: "<no message>")
+        Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init failure $deviceContext cause[$causeIndex]=${cause.javaClass.name}: $message")
+        val frames = cause.stackTrace
+        frames.take(24).forEachIndexed { frameIndex, frame ->
+            val fileName = frame.fileName?.substringAfterLast('/')?.substringAfterLast('\\') ?: "Unknown Source"
+            val location = if (frame.lineNumber >= 0) "$fileName:${frame.lineNumber}" else fileName
+            val frameText = sanitizeSocialModelDiagnostic("${frame.className}.${frame.methodName}($location)")
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init stack cause[$causeIndex][$frameIndex] $frameText")
+        }
+        if (frames.size > 24) {
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "MediaPipe init stack cause[$causeIndex] truncated=${frames.size - 24}")
+        }
+        cause = cause.cause
+        causeIndex++
+    }
+}
+
+/** Keep independent effects isolated: a broken segmenter must not disable face landmarks, or vice versa. */
+private inline fun <T> initializeSocialModel(
+    taskName: String,
+    assetName: String,
+    runningMode: RunningMode,
+    create: () -> T
+): SocialModelInitialization<T> = try {
+    SocialModelInitialization(create(), null)
+} catch (failure: Exception) {
+    runCatching { logSocialModelInitializationFailure(taskName, assetName, runningMode, failure) }
+    SocialModelInitialization(null, failure)
+} catch (failure: LinkageError) {
+    runCatching { logSocialModelInitializationFailure(taskName, assetName, runningMode, failure) }
+    SocialModelInitialization(null, failure)
+}
+
+/** Extract only JVM class identifiers from standard class-linkage errors; never surface arbitrary exception text. */
+internal fun missingClassNameForDiagnostic(failure: Throwable?): String? {
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    var current = failure
+    var depth = 0
+    while (current != null && depth < 8 && seen.put(current, true) == null) {
+        if (current is NoClassDefFoundError || current is ClassNotFoundException) {
+            val raw = current.message?.trim().orEmpty()
+            val token = when {
+                raw.startsWith("Failed resolution of:") -> raw.substringAfter(':').trim().substringBefore(' ')
+                raw.startsWith("Could not find class ") -> raw.substringAfter("Could not find class ").trim().trim('"', '\'')
+                else -> raw
+            }
+            val className = token.removePrefix("L").removeSuffix(";").replace('/', '.')
+            if (className.contains('.') && className.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$.]*"""))) return className
+        }
+        current = current.cause
+        depth++
+    }
+    return null
+}
+
+internal fun modelInitializationMessage(taskName: String, failure: Throwable?): String {
+    val seen = java.util.IdentityHashMap<Throwable, Boolean>()
+    val types = mutableListOf<String>()
+    var current = failure
+    while (current != null && types.size < 4 && seen.put(current, true) == null) {
+        types += current.javaClass.simpleName.ifBlank { "error" }
+        current = current.cause
+    }
+    val missingClass = missingClassNameForDiagnostic(failure)
+    val detail = buildString {
+        append(types.joinToString(" → ").ifBlank { "error" })
+        if (missingClass != null) append(": ").append(missingClass)
+    }
+    return "No se pudo iniciar el filtro local de $taskName ($detail). Las fotos y videos siguen disponibles."
+}
+
+
+internal fun shouldShowSocialFaceDiagnostic(
+    faceEffectSelected: Boolean,
+    initializationFailure: Boolean,
+    analyzerCreationFailure: Boolean
+): Boolean = faceEffectSelected || initializationFailure || analyzerCreationFailure
+
+internal enum class SocialFaceLiveErrorStage {
+    MODEL_INITIALIZATION,
+    FRAME_PREPARATION,
+    FACE_DETECT_VIDEO,
+    SEGMENTER_SUBMIT,
+    SEGMENTER_ASYNC_LISTENER,
+    SEGMENTER_TIMEOUT
+}
+
+internal data class SocialFaceLiveDiagnosticSnapshot(
+    val analyzerAvailable: Boolean = false,
+    val faceEffectRequested: Boolean = false,
+    val analyzerFramesReceived: Long = 0,
+    val faceFrameSubmissions: Long = 0,
+    val callbacksAccepted: Long = 0,
+    val callbacksStale: Long = 0,
+    val rawDetectedFaceTotal: Long = 0,
+    val lastRawDetectedFaceCount: Int? = null,
+    val transformReady: Boolean? = null,
+    val mappedFaceCount: Int? = null,
+    val lastErrorType: String? = null,
+    val lastErrorStage: SocialFaceLiveErrorStage? = null
+)
+
+/** Thread-safe, content-free counters for diagnosing the live local face pipeline. */
+internal class SocialFaceLiveDiagnosticRecorder {
+    private var analyzerFramesReceived = 0L
+    private var faceFrameSubmissions = 0L
+    private var callbacksAccepted = 0L
+    private var callbacksStale = 0L
+    private var rawDetectedFaceTotal = 0L
+    private var lastRawDetectedFaceCount: Int? = null
+    private var transformReady: Boolean? = null
+    private var mappedFaceCount: Int? = null
+    private var lastErrorType: String? = null
+    private var lastErrorStage: SocialFaceLiveErrorStage? = null
+
+    @Synchronized fun recordAnalyzerFrame() { analyzerFramesReceived++ }
+    @Synchronized fun recordFaceFrameSubmission() { faceFrameSubmissions++ }
+    @Synchronized fun recordAcceptedCallback(rawFaceCount: Int) {
+        callbacksAccepted++
+        val safeCount = rawFaceCount.coerceAtLeast(0)
+        rawDetectedFaceTotal += safeCount
+        lastRawDetectedFaceCount = safeCount
+    }
+    @Synchronized fun recordStaleCallback() { callbacksStale++ }
+    @Synchronized fun recordPreviewMapping(ready: Boolean, mappedCount: Int) {
+        transformReady = ready
+        mappedFaceCount = mappedCount.coerceAtLeast(0)
+    }
+    @Synchronized fun recordError(stage: SocialFaceLiveErrorStage, failure: Throwable?) {
+        val type = failure?.javaClass?.simpleName.orEmpty()
+        lastErrorType = type.takeIf { it.matches(Regex("""[A-Za-z_$][A-Za-z0-9_$]{0,63}""")) } ?: "UnknownError"
+        lastErrorStage = stage
+    }
+    @Synchronized fun snapshot(analyzerAvailable: Boolean, faceEffectRequested: Boolean) =
+        SocialFaceLiveDiagnosticSnapshot(
+            analyzerAvailable = analyzerAvailable,
+            faceEffectRequested = faceEffectRequested,
+            analyzerFramesReceived = analyzerFramesReceived,
+            faceFrameSubmissions = faceFrameSubmissions,
+            callbacksAccepted = callbacksAccepted,
+            callbacksStale = callbacksStale,
+            rawDetectedFaceTotal = rawDetectedFaceTotal,
+            lastRawDetectedFaceCount = lastRawDetectedFaceCount,
+            transformReady = transformReady,
+            mappedFaceCount = mappedFaceCount,
+            lastErrorType = lastErrorType,
+            lastErrorStage = lastErrorStage
+        )
+}
+
+internal fun buildSocialFaceLiveDiagnosticReport(
+    snapshot: SocialFaceLiveDiagnosticSnapshot,
+    sdkApi: Int,
+    buildVariant: String
+): String = buildString {
+    appendLine("OmniStudio live face-filter diagnostic (local counters only)")
+    appendLine("Android API: $sdkApi")
+    appendLine("Build variant: ${buildVariant.take(24).filter { it.isLetterOrDigit() || it in "._-" }.ifBlank { "unknown" }}")
+    appendLine("Analyzer available: ${snapshot.analyzerAvailable}")
+    appendLine("Face effect requested: ${snapshot.faceEffectRequested}")
+    appendLine("Analyzer frames received: ${snapshot.analyzerFramesReceived}")
+    appendLine("Face frame submissions: ${snapshot.faceFrameSubmissions}")
+    appendLine("Callbacks accepted: ${snapshot.callbacksAccepted}")
+    appendLine("Callbacks stale: ${snapshot.callbacksStale}")
+    appendLine("Raw detected faces total: ${snapshot.rawDetectedFaceTotal}")
+    appendLine("Raw faces on last accepted callback: ${snapshot.lastRawDetectedFaceCount ?: "not available"}")
+    appendLine("Preview transform ready: ${snapshot.transformReady?.toString() ?: "not checked"}")
+    appendLine("Mapped faces on last callback: ${snapshot.mappedFaceCount ?: "not checked"}")
+    appendLine("Last error type: ${snapshot.lastErrorType ?: "none"}")
+    appendLine("Last error stage: ${snapshot.lastErrorStage?.name ?: "none"}")
+    val clue = when {
+        !snapshot.analyzerAvailable -> "Analyzer could not be created."
+        !snapshot.faceEffectRequested -> "Face effect is not currently requested."
+        snapshot.analyzerFramesReceived == 0L -> "Analyzer has not received a camera frame."
+        snapshot.faceFrameSubmissions == 0L -> "No face frame has been submitted to MediaPipe."
+        snapshot.callbacksAccepted == 0L && snapshot.callbacksStale > 0L -> "Callbacks arrived, but none matched the submitted timestamp."
+        snapshot.callbacksAccepted == 0L -> "No face result callback has been accepted yet."
+        snapshot.lastRawDetectedFaceCount == 0 -> "The last accepted callback detected no faces."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && snapshot.transformReady == false -> "Faces were detected, but the preview transform was not ready."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && snapshot.mappedFaceCount == 0 -> "Faces were detected, but none mapped into preview coordinates."
+        snapshot.lastRawDetectedFaceCount != null && snapshot.lastRawDetectedFaceCount > 0 && (snapshot.mappedFaceCount ?: 0) > 0 -> "Detection and preview mapping both produced faces; inspect the overlay-rendering stage."
+        else -> "More live camera frames are needed to identify the failing stage."
+    }
+    appendLine("Pipeline clue: $clue")
+}
+
+/** Holds CameraX's frame until synchronous face inference and the optional live segmenter finish or time out. */
+@OptIn(TransformExperimental::class)
+internal class SocialFaceImageAnalyzer(
+    context: Context,
+    private val onResults: (SocialFaceResult, PersonSegmentationMask?, OutputTransform, Int, Int, Int) -> Unit,
+    private val onError: (String) -> Unit
+) : androidx.camera.core.ImageAnalysis.Analyzer, AutoCloseable {
+    private data class PendingFrame(
+        val imageProxy: ImageProxy,
+        val faceImage: MPImage?,
+        val faceBitmap: Bitmap?,
+        val segmentationImage: MPImage?,
+        val sourceTransform: OutputTransform,
+        val width: Int,
+        val height: Int,
+        val rotationDegrees: Int,
+        val timestampMs: Long
+    ) {
+        val remainingCallbacks = AtomicInteger(listOfNotNull(faceImage, segmentationImage).size)
+        val faceCallbackCompleted = AtomicBoolean(faceImage == null)
+        val segmentationCallbackCompleted = AtomicBoolean(segmentationImage == null)
+        val faceResult = AtomicReference<SocialFaceResult>(emptyList())
+        val personMask = AtomicReference<PersonSegmentationMask?>(null)
+        val failed = AtomicBoolean(false)
+        @Volatile var segmentationTimeout: ScheduledFuture<*>? = null
+    }
+
+    @Volatile private var faceEffectsEnabled = false
+    @Volatile private var backgroundReplacementEnabled = false
+    @Volatile private var lastAcceptedFrameMs = 0L
+    private val pendingFrame = AtomicReference<PendingFrame?>(null)
+    private val frameInFlight = AtomicBoolean(false)
+    private val transformFactory = ImageProxyTransformFactory().apply {
+        setUsingCropRect(false)
+        // MediaPipe rotates its input. Its normalized outputs are inverse-rotated before mapping
+        // through CameraX's unrotated buffer transform into PreviewView coordinates.
+        setUsingRotationDegrees(false)
+    }
+    private var lastTimestampMs = 0L
+    @Volatile private var closed = false
+    private val liveDiagnostics = SocialFaceLiveDiagnosticRecorder()
+    private val crashEvidenceContext = context.applicationContext
+    private val segmentationTimeoutExecutor = ScheduledThreadPoolExecutor(1) { runnable ->
+        Thread(runnable, "social-segmenter-timeout").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+
+    private fun persistCheckpoint(stage: String, pending: Boolean) {
+        runCatching {
+            SocialFaceCrashEvidence.recordCheckpoint(
+                crashEvidenceContext,
+                liveDiagnosticSnapshot(),
+                stage,
+                pending
+            )
+        }
+    }
+
+    fun liveDiagnosticSnapshot(): SocialFaceLiveDiagnosticSnapshot =
+        liveDiagnostics.snapshot(analyzerAvailable = landmarker != null, faceEffectRequested = faceEffectsEnabled)
+
+    fun recordPreviewMapping(transformReady: Boolean, mappedCount: Int) =
+        liveDiagnostics.recordPreviewMapping(transformReady, mappedCount)
+
+    fun setRequestedEffects(faceEffects: Boolean, backgroundReplacement: Boolean) {
+        faceEffectsEnabled = faceEffects && landmarker != null
+        if (faceEffects && landmarker == null) liveDiagnostics.recordError(SocialFaceLiveErrorStage.MODEL_INITIALIZATION, faceInitialization.failure)
+        backgroundReplacementEnabled = backgroundReplacement && segmenter != null
+        if (faceEffects && landmarker == null) {
+            onError(modelInitializationMessage("FaceLandmarker", faceInitialization.failure))
+        }
+        if (backgroundReplacement && segmenter == null) {
+            onError(modelInitializationMessage("ImageSegmenter", segmentationInitialization.failure))
+        }
+    }
+
+    fun hasActiveLocalEffects(): Boolean = faceEffectsEnabled || backgroundReplacementEnabled
+
+    private val faceInitialization = initializeSocialModel("FaceLandmarker", FACE_LANDMARKER_MODEL, socialFaceLandmarkerRunningMode()) {
+        createSocialFaceLandmarker(context, socialFaceLandmarkerRunningMode())
+    }
+    private val landmarker = faceInitialization.instance
+
+    private val segmentationInitialization = initializeSocialModel("ImageSegmenter", SELFIE_SEGMENTER_MODEL, RunningMode.LIVE_STREAM) {
+        createSocialImageSegmenter(
+            context,
+            RunningMode.LIVE_STREAM,
+            resultListener = { result, input -> handleSegmentationResult(result, input) },
+            errorListener = { error ->
+                liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_ASYNC_LISTENER, error)
+                Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter live inference failed.", error)
+                handleSegmentationError()
+            }
+        )
+    }
+    private val segmenter = segmentationInitialization.instance
+
+    fun initializationDiagnostics(): List<SocialModelInitializationDiagnostic> = buildList {
+        faceInitialization.failure?.let {
+            add(SocialModelInitializationDiagnostic("FaceLandmarker", FACE_LANDMARKER_MODEL, it))
+        }
+        segmentationInitialization.failure?.let {
+            add(SocialModelInitializationDiagnostic("ImageSegmenter", SELFIE_SEGMENTER_MODEL, it))
+        }
+    }
+
+    override fun analyze(imageProxy: ImageProxy) {
+        liveDiagnostics.recordAnalyzerFrame()
+        val now = SystemClock.uptimeMillis()
+        if (closed || (!faceEffectsEnabled && !backgroundReplacementEnabled) ||
+            now - lastAcceptedFrameMs < MIN_ANALYSIS_INTERVAL_MS ||
+            !frameInFlight.compareAndSet(false, true)
+        ) {
+            imageProxy.close()
+            return
+        }
+        lastAcceptedFrameMs = now
+        var faceImage: MPImage? = null
+        var faceBitmap: Bitmap? = null
+        var segmentationImage: MPImage? = null
+        var frame: PendingFrame? = null
+        try {
+            val mediaImage = imageProxy.image ?: error("CameraX did not provide a media image.")
+            if (faceEffectsEnabled) {
+                val cameraBitmap = imageProxy.toBitmap()
+                faceBitmap = try {
+                    rotateSocialFaceBitmapForLandmarker(cameraBitmap, imageProxy.imageInfo.rotationDegrees)
+                } catch (failure: Exception) {
+                    cameraBitmap.recycle()
+                    throw failure
+                }
+                if (faceBitmap !== cameraBitmap) cameraBitmap.recycle()
+                faceImage = BitmapImageBuilder(checkNotNull(faceBitmap)).build()
+            }
+            if (backgroundReplacementEnabled) segmentationImage = MediaImageBuilder(mediaImage).build()
+            val timestamp = max(SystemClock.uptimeMillis(), lastTimestampMs + 1L)
+            lastTimestampMs = timestamp
+            val pending = PendingFrame(
+                imageProxy = imageProxy,
+                faceImage = faceImage,
+                faceBitmap = faceBitmap,
+                segmentationImage = segmentationImage,
+                sourceTransform = transformFactory.getOutputTransform(imageProxy),
+                width = imageProxy.width,
+                height = imageProxy.height,
+                rotationDegrees = imageProxy.imageInfo.rotationDegrees,
+                timestampMs = timestamp
+            )
+            frame = pending
+            check(pending.remainingCallbacks.get() > 0) { "No active local camera effect was requested." }
+            check(pendingFrame.compareAndSet(null, pending)) { "A previous MediaPipe camera frame is still pending." }
+            val options = ImageProcessingOptions.builder()
+                .setRotationDegrees(pending.rotationDegrees)
+                .build()
+            pending.faceImage?.let { input ->
+                try {
+                    liveDiagnostics.recordFaceFrameSubmission()
+                    persistCheckpoint("FACE_DETECT_VIDEO_BEGIN", pending = true)
+                    // FaceLandmarker 1.0.0's VIDEO API is synchronous. The bitmap is physically
+                    // rotated above, so detectForVideo's default-options overload applies no second rotation.
+                    val result = checkNotNull(landmarker).detectForVideo(input, timestamp)
+                    liveDiagnostics.recordAcceptedCallback(result.faceLandmarks().size)
+                    persistCheckpoint("FACE_DETECT_VIDEO_RESULT", pending = true)
+                    finishFace(pending, result.toSocialFaceResult())
+                } catch (failure: Exception) {
+                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.FACE_DETECT_VIDEO, failure)
+                    persistCheckpoint("FACE_DETECT_VIDEO_ERROR", pending = true)
+                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "FaceLandmarker video inference failed.", failure)
+                    finishFace(pending, null)
+                }
+            }
+            pending.segmentationImage?.let { input ->
+                try {
+                    checkNotNull(segmenter).segmentAsync(input, options, timestamp)
+                    scheduleSegmentationTimeout(pending)
+                } catch (failure: Exception) {
+                    liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_SUBMIT, failure)
+                    Log.e(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter rejected a live camera frame.", failure)
+                    finishSegmentation(pending, null)
+                }
+            }
+        } catch (failure: Exception) {
+            liveDiagnostics.recordError(SocialFaceLiveErrorStage.FRAME_PREPARATION, failure)
+            persistCheckpoint("FRAME_PREPARATION_ERROR", pending = false)
+            Log.e(SOCIAL_FACE_ANALYZER_TAG, "Failed to prepare a local camera frame for MediaPipe.", failure)
+            val submitted = frame
+            if (submitted != null) {
+                if (pendingFrame.compareAndSet(submitted, null)) release(submitted)
+            } else {
+                runCatching { faceImage?.close() }
+                runCatching { faceBitmap?.recycle() }
+                runCatching { segmentationImage?.close() }
+                imageProxy.close()
+            }
+            frameInFlight.set(false)
+            if (!closed) onError("No se pudo analizar la cámara localmente.")
+        }
+    }
+
+    private fun scheduleSegmentationTimeout(frame: PendingFrame) {
+        val timeout = segmentationTimeoutExecutor.schedule({
+            if (shouldExpireSocialSegmentation(
+                    isCurrentFrame = pendingFrame.get() === frame,
+                    callbackCompleted = frame.segmentationCallbackCompleted.get()
+                )
+            ) {
+                val failure = java.util.concurrent.TimeoutException("ImageSegmenter callback timed out.")
+                liveDiagnostics.recordError(SocialFaceLiveErrorStage.SEGMENTER_TIMEOUT, failure)
+                persistCheckpoint("SEGMENTER_CALLBACK_TIMEOUT", pending = true)
+                Log.w(SOCIAL_FACE_ANALYZER_TAG, "ImageSegmenter callback timed out; releasing the pending camera frame.")
+                finishSegmentation(frame, null)
+            }
+        }, SOCIAL_SEGMENTER_CALLBACK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        frame.segmentationTimeout = timeout
+        // A fast callback may complete before the scheduled handle is assigned.
+        if (frame.segmentationCallbackCompleted.get() || pendingFrame.get() !== frame) timeout.cancel(false)
+    }
+
+    private fun handleSegmentationResult(result: ImageSegmenterResult, input: MPImage) {
+        // Extracting also closes MediaPipe's output masks, including for a late/stale callback.
+        val mask = runCatching { personSegmentationMaskFromResult(result) }.getOrNull()
+        val frame = pendingFrame.get()
+        if (frame == null || !matchesSocialPendingFrame(frame.timestampMs, result.timestampMs())) {
+            if (frame?.segmentationImage !== input) runCatching { input.close() }
+            return
+        }
+        if (frame.segmentationImage !== input) runCatching { input.close() }
+        finishSegmentation(frame, mask)
+    }
+
+    private fun handleSegmentationError() {
+        pendingFrame.get()?.let { finishSegmentation(it, null) }
+    }
+
+    private fun finishFace(frame: PendingFrame, result: SocialFaceResult?) {
+        if (!frame.faceCallbackCompleted.compareAndSet(false, true)) return
+        if (result == null) frame.failed.set(true) else frame.faceResult.set(result)
+        finishCallback(frame)
+    }
+
+    private fun finishSegmentation(frame: PendingFrame, result: PersonSegmentationMask?) {
+        if (!frame.segmentationCallbackCompleted.compareAndSet(false, true)) return
+        if (result == null) frame.failed.set(true) else frame.personMask.set(result)
+        finishCallback(frame)
+    }
+
+    private fun finishCallback(frame: PendingFrame) {
+        if (frame.remainingCallbacks.decrementAndGet() != 0) return
+        pendingFrame.compareAndSet(frame, null)
+        release(frame)
+        frameInFlight.set(false)
+        if (closed) return
+        persistCheckpoint(if (frame.failed.get()) "CALLBACK_COMPLETED_WITH_ERROR" else "CALLBACKS_COMPLETED", pending = false)
+        if (frame.failed.get()) onError("No se pudo completar el efecto local de rostro o fondo.")
+        onResults(
+            frame.faceResult.get(),
+            frame.personMask.get(),
+            frame.sourceTransform,
+            frame.width,
+            frame.height,
+            frame.rotationDegrees
+        )
+    }
+
+    private fun release(frame: PendingFrame) {
+        frame.segmentationTimeout?.cancel(false)
+        frame.segmentationTimeout = null
+        runCatching { frame.faceImage?.close() }
+        runCatching { frame.faceBitmap?.recycle() }
+        runCatching { frame.segmentationImage?.close() }
+        runCatching { frame.imageProxy.close() }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        segmentationTimeoutExecutor.shutdownNow()
+        landmarker?.close()
+        segmenter?.close()
+        pendingFrame.getAndSet(null)?.let(::release)
+        frameInFlight.set(false)
+    }
+}
+
+private fun FaceLandmarkerResult.toSocialFaceResult(): SocialFaceResult = faceLandmarks().mapNotNull { face ->
+    if (face.size <= 454) return@mapNotNull null
+    fun point(index: Int) = SocialFacePoint(face[index].x(), face[index].y())
+    SocialFace(
+        sideA = point(234),
+        sideB = point(454),
+        top = point(10),
+        bottom = point(152),
+        leftEyeOuter = point(LEFT_EYE_OUTER),
+        leftEyeInner = point(LEFT_EYE_INNER),
+        rightEyeInner = point(RIGHT_EYE_INNER),
+        rightEyeOuter = point(RIGHT_EYE_OUTER)
+    )
+}
+
+/** Maps MediaPipe's rotated normalized points through CameraX into the PreviewView's real viewport. */
+@OptIn(TransformExperimental::class)
+internal fun mapSocialFacesToPreview(
+    faces: SocialFaceResult,
+    sourceTransform: OutputTransform,
+    targetTransform: OutputTransform?,
+    frameWidth: Int,
+    frameHeight: Int,
+    rotationDegrees: Int,
+    previewWidth: Int,
+    previewHeight: Int
+): SocialFaceResult {
+    if (targetTransform == null || frameWidth <= 0 || frameHeight <= 0 || previewWidth <= 0 || previewHeight <= 0) {
+        return emptyList()
+    }
+    val coordinateTransform = CoordinateTransform(sourceTransform, targetTransform)
+    return faces.map { face ->
+        val requiredPoints = face.requiredPoints()
+        val points = FloatArray(requiredPoints.size * 2)
+        requiredPoints.forEachIndexed { index, point ->
+            val raw = rotatedPointToImageBuffer(point, frameWidth, frameHeight, rotationDegrees)
+            points[index * 2] = raw.first
+            points[index * 2 + 1] = raw.second
+        }
+        coordinateTransform.mapPoints(points)
+        face.withPoints(requiredPoints.indices.map { index ->
+            SocialFacePoint(points[index * 2] / previewWidth, points[index * 2 + 1] / previewHeight)
+        })
+    }
+}
+
+internal fun rotatedPointToImageBuffer(
+    point: SocialFacePoint,
+    width: Int,
+    height: Int,
+    rotationDegrees: Int
+): Pair<Float, Float> {
+    val rotation = normalizeSocialFaceRotationDegrees(rotationDegrees)
+    val rotatedWidth = if (rotation == 90 || rotation == 270) height.toFloat() else width.toFloat()
+    val rotatedHeight = if (rotation == 90 || rotation == 270) width.toFloat() else height.toFloat()
+    val x = point.x * rotatedWidth
+    val y = point.y * rotatedHeight
+    return when (rotation) {
+        90 -> y to (height - x)
+        180 -> (width - x) to (height - y)
+        270 -> (width - y) to x
+        else -> x to y
+    }
+}
+
+/** Draws one of the three decorative filters using normalized MediaPipe face landmarks. */
+@Synchronized
+internal fun drawSocialFaceSticker(
+    canvas: Canvas,
+    imageWidth: Float,
+    imageHeight: Float,
+    face: SocialFace,
+    filter: SocialFaceFilter
+) {
+    if (filter == SocialFaceFilter.NONE || imageWidth <= 0f || imageHeight <= 0f) return
+    val sideLeft = min(face.sideA.x, face.sideB.x)
+    val sideRight = max(face.sideA.x, face.sideB.x)
+    val faceTop = min(face.top.y, face.bottom.y)
+    val faceBottom = max(face.top.y, face.bottom.y)
+    val bounds = RectF(sideLeft * imageWidth, faceTop * imageHeight, sideRight * imageWidth, faceBottom * imageHeight)
+    if (bounds.width() < 1f || bounds.height() < 1f) return
+
+    val leftEye = midpoint(face.leftEyeOuter, face.leftEyeInner, imageWidth, imageHeight)
+    val rightEye = midpoint(face.rightEyeInner, face.rightEyeOuter, imageWidth, imageHeight)
+    val eyeAngle = if (leftEye != null && rightEye != null) {
+        Math.toDegrees(atan2((rightEye.second - leftEye.second).toDouble(), (rightEye.first - leftEye.first).toDouble())).toFloat()
+    } else {
+        0f
+    }
+
+    val saveCount = canvas.save()
+    try {
+        // Keep the face-roll alignment local to this sticker so drawing multiple faces cannot
+        // leak a transform into the next overlay or into the caller's preview/photo canvas.
+        canvas.rotate(eyeAngle, bounds.centerX(), bounds.centerY())
+        when (filter) {
+            SocialFaceFilter.NONE -> Unit
+            SocialFaceFilter.DOG_EARS -> drawDogEars(canvas, bounds)
+            SocialFaceFilter.GLASSES -> drawGlasses(canvas, bounds, leftEye, rightEye)
+            SocialFaceFilter.CROWN -> drawCrown(canvas, bounds)
+        }
+    } finally {
+        canvas.restoreToCount(saveCount)
+    }
+}
+
+private fun midpoint(first: SocialFacePoint, second: SocialFacePoint, width: Float, height: Float): Pair<Float, Float> =
+    ((first.x + second.x) * 0.5f * width) to ((first.y + second.y) * 0.5f * height)
+
+private object SocialStickerPaints {
+    val dogOuter = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff75452b.toInt() }
+    val dogInner = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffffb8a1.toInt() }
+    val glassesTint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x553ab7bf }
+    val glassesFrame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xff18212b.toInt()
+        style = Paint.Style.STROKE
+    }
+    val glassesBridge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xff18212b.toInt()
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    val crownFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffffc83d.toInt() }
+    val crownOutline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xff9a5b13.toInt()
+        style = Paint.Style.STROKE
+    }
+    val crownJewel = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffe1306c.toInt() }
+    val dogOuterPath = Path()
+    val dogInnerPath = Path()
+    val crownPath = Path()
+}
+
+private fun drawDogEars(canvas: Canvas, bounds: RectF) {
+    val faceWidth = bounds.width()
+    val faceHeight = bounds.height()
+    val earWidth = faceWidth * 0.27f
+    val earHeight = faceHeight * 0.38f
+    val baseY = bounds.top + faceHeight * 0.12f
+    val outerPaint = SocialStickerPaints.dogOuter
+    val innerPaint = SocialStickerPaints.dogInner
+
+    listOf(bounds.left + faceWidth * 0.14f, bounds.right - faceWidth * 0.14f).forEach { centerX ->
+        val outer = SocialStickerPaints.dogOuterPath.apply {
+            reset()
+            moveTo(centerX - earWidth * 0.48f, baseY)
+            cubicTo(centerX - earWidth * 0.70f, baseY - earHeight * 0.42f,
+                centerX - earWidth * 0.24f, baseY - earHeight, centerX + earWidth * 0.03f, baseY - earHeight * 0.82f)
+            cubicTo(centerX + earWidth * 0.62f, baseY - earHeight * 0.68f,
+                centerX + earWidth * 0.65f, baseY - earHeight * 0.24f, centerX + earWidth * 0.48f, baseY)
+            close()
+        }
+        canvas.drawPath(outer, outerPaint)
+        val inner = SocialStickerPaints.dogInnerPath.apply {
+            reset()
+            moveTo(centerX - earWidth * 0.24f, baseY - faceHeight * 0.025f)
+            cubicTo(centerX - earWidth * 0.36f, baseY - earHeight * 0.42f,
+                centerX - earWidth * 0.12f, baseY - earHeight * 0.77f, centerX + earWidth * 0.04f, baseY - earHeight * 0.68f)
+            cubicTo(centerX + earWidth * 0.35f, baseY - earHeight * 0.53f,
+                centerX + earWidth * 0.34f, baseY - earHeight * 0.19f, centerX + earWidth * 0.25f, baseY - faceHeight * 0.025f)
+            close()
+        }
+        canvas.drawPath(inner, innerPaint)
+    }
+}
+
+private fun drawGlasses(
+    canvas: Canvas,
+    bounds: RectF,
+    leftEye: Pair<Float, Float>?,
+    rightEye: Pair<Float, Float>?
+) {
+    val faceWidth = bounds.width()
+    val faceHeight = bounds.height()
+    val fallbackY = bounds.top + faceHeight * 0.40f
+    val eyeDistance = if (leftEye != null && rightEye != null) {
+        sqrt((rightEye.first - leftEye.first).let { it * it } + (rightEye.second - leftEye.second).let { it * it })
+    } else {
+        faceWidth * 0.32f
+    }
+    val lensWidth = max(faceWidth * 0.25f, eyeDistance * 0.82f)
+    val lensHeight = lensWidth * 0.58f
+    val lensRadius = lensHeight * 0.25f
+    val stroke = max(faceWidth * 0.022f, 2f)
+    val eyeLeft = leftEye ?: (bounds.left + faceWidth * 0.34f to fallbackY)
+    val eyeRight = rightEye ?: (bounds.left + faceWidth * 0.66f to fallbackY)
+    val leftRect = RectF(eyeLeft.first - lensWidth / 2f, eyeLeft.second - lensHeight / 2f,
+        eyeLeft.first + lensWidth / 2f, eyeLeft.second + lensHeight / 2f)
+    val rightRect = RectF(eyeRight.first - lensWidth / 2f, eyeRight.second - lensHeight / 2f,
+        eyeRight.first + lensWidth / 2f, eyeRight.second + lensHeight / 2f)
+    val tint = SocialStickerPaints.glassesTint
+    val frame = SocialStickerPaints.glassesFrame.apply { strokeWidth = stroke }
+    val bridge = SocialStickerPaints.glassesBridge.apply { strokeWidth = stroke }
+    canvas.drawRoundRect(leftRect, lensRadius, lensRadius, tint)
+    canvas.drawRoundRect(rightRect, lensRadius, lensRadius, tint)
+    canvas.drawRoundRect(leftRect, lensRadius, lensRadius, frame)
+    canvas.drawRoundRect(rightRect, lensRadius, lensRadius, frame)
+    canvas.drawLine(leftRect.right, (eyeLeft.second + eyeRight.second) * 0.5f,
+        rightRect.left, (eyeLeft.second + eyeRight.second) * 0.5f, bridge)
+}
+
+private fun drawCrown(canvas: Canvas, bounds: RectF) {
+    val crownWidth = bounds.width() * 0.70f
+    val crownHeight = bounds.height() * 0.29f
+    val left = bounds.centerX() - crownWidth / 2f
+    val right = bounds.centerX() + crownWidth / 2f
+    val bottom = bounds.top + bounds.height() * 0.09f
+    val top = bottom - crownHeight
+    val crown = SocialStickerPaints.crownPath.apply {
+        reset()
+        moveTo(left, bottom)
+        lineTo(left + crownWidth * 0.08f, top + crownHeight * 0.34f)
+        lineTo(left + crownWidth * 0.31f, top + crownHeight * 0.62f)
+        lineTo(left + crownWidth * 0.50f, top)
+        lineTo(left + crownWidth * 0.69f, top + crownHeight * 0.62f)
+        lineTo(left + crownWidth * 0.92f, top + crownHeight * 0.34f)
+        lineTo(right, bottom)
+        close()
+    }
+    val fill = SocialStickerPaints.crownFill
+    val outline = SocialStickerPaints.crownOutline.apply { strokeWidth = max(bounds.width() * 0.018f, 2f) }
+    canvas.drawPath(crown, fill)
+    canvas.drawPath(crown, outline)
+    val jewel = SocialStickerPaints.crownJewel
+    listOf(0.08f, 0.50f, 0.92f).forEach { fraction ->
+        canvas.drawCircle(left + crownWidth * fraction, bottom - crownHeight * 0.10f, crownWidth * 0.035f, jewel)
+    }
+}
+
+/** Draws the local person mask as a live transparent cutout over the camera preview. */
+@OptIn(TransformExperimental::class)
+internal class SocialFaceOverlayView(context: Context) : View(context) {
+    private var selectedFilter: SocialFaceFilter = SocialFaceFilter.NONE
+    private var selectedBackground: SocialBackgroundPreset = SocialBackgroundPreset.ORIGINAL
+    private var faces: SocialFaceResult = emptyList()
+    private var segmentationFrame: SocialPreviewSegmentationFrame? = null
+    private var sourceToPreview = Matrix()
+    private var maskToBuffer = Matrix()
+    private var maskBitmap: Bitmap? = null
+    private var backgroundBitmap: Bitmap? = null
+    private var backgroundCanvas: Canvas? = null
+    private var maskPixels = IntArray(0)
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val backgroundBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val maskCutoutPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+    }
+    private var gradientKey: Triple<Int, Int, Int>? = null
+
+    fun update(
+        filter: SocialFaceFilter,
+        results: SocialFaceResult,
+        background: SocialBackgroundPreset,
+        newSegmentationFrame: SocialPreviewSegmentationFrame?,
+        targetTransform: OutputTransform?
+    ) {
+        selectedFilter = filter
+        faces = results
+        selectedBackground = background
+        val frame = newSegmentationFrame
+        if (background != SocialBackgroundPreset.ORIGINAL && frame != null && targetTransform != null) {
+            segmentationFrame = frame
+            updateMask(frame.mask)
+            sourceToPreview = cameraBufferToPreviewMatrix(
+                frame.sourceTransform, targetTransform, frame.width, frame.height
+            )
+            maskToBuffer = maskToImageBufferMatrix(frame.mask, frame.width, frame.height, frame.rotationDegrees)
+            updateBackgroundShader(frame.width, frame.height, background)
+            updateBackgroundLayer(frame)
+        } else {
+            segmentationFrame = null
+        }
+        invalidate()
+    }
+
+    private fun updateMask(mask: PersonSegmentationMask) {
+        val bitmap = maskBitmap?.takeIf { !it.isRecycled && it.width == mask.width && it.height == mask.height }
+            ?: Bitmap.createBitmap(mask.width, mask.height, Bitmap.Config.ARGB_8888).also { maskBitmap = it }
+        val requiredPixels = mask.width * mask.height
+        if (maskPixels.size != requiredPixels) maskPixels = IntArray(requiredPixels)
+        for (index in 0 until requiredPixels) {
+            val alpha = (mask.personConfidence[index].coerceIn(0f, 1f) * 255f).toInt()
+            maskPixels[index] = Color.argb(alpha, 255, 255, 255)
+        }
+        bitmap.setPixels(maskPixels, 0, mask.width, 0, 0, mask.width, mask.height)
+    }
+
+    private fun updateBackgroundShader(frameWidth: Int, frameHeight: Int, preset: SocialBackgroundPreset) {
+        val key = Triple(frameWidth, frameHeight, preset.ordinal)
+        if (gradientKey == key) return
+        backgroundPaint.shader = LinearGradient(
+            0f, 0f, 0f, frameHeight.toFloat(), preset.topColor, preset.bottomColor, Shader.TileMode.CLAMP
+        )
+        gradientKey = key
+    }
+
+    private fun updateBackgroundLayer(frame: SocialPreviewSegmentationFrame) {
+        val current = backgroundBitmap
+        val bitmap = current?.takeIf {
+            !it.isRecycled && it.width == frame.width && it.height == frame.height
+        } ?: Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888).also {
+            current?.takeIf { old -> !old.isRecycled }?.recycle()
+            backgroundBitmap = it
+            backgroundCanvas = Canvas(it)
+        }
+        val target = backgroundCanvas ?: Canvas(bitmap).also { backgroundCanvas = it }
+        val bounds = RectF(0f, 0f, frame.width.toFloat(), frame.height.toFloat())
+        target.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        target.drawRect(bounds, backgroundPaint)
+        maskBitmap?.let { mask -> target.drawBitmap(mask, maskToBuffer, maskCutoutPaint) }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (width == 0 || height == 0) return
+        val frame = segmentationFrame
+        val backgroundLayer = backgroundBitmap
+        if (selectedBackground != SocialBackgroundPreset.ORIGINAL && frame != null &&
+            backgroundLayer != null && !backgroundLayer.isRecycled
+        ) {
+            canvas.save()
+            canvas.concat(sourceToPreview)
+            canvas.drawBitmap(backgroundLayer, 0f, 0f, backgroundBitmapPaint)
+            canvas.restore()
+        }
+        faces.forEach { face -> drawSocialFaceSticker(canvas, width.toFloat(), height.toFloat(), face, selectedFilter) }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        maskBitmap?.takeIf { !it.isRecycled }?.recycle()
+        maskBitmap = null
+        backgroundBitmap?.takeIf { !it.isRecycled }?.recycle()
+        backgroundBitmap = null
+        backgroundCanvas = null
+        maskPixels = IntArray(0)
+        segmentationFrame = null
+    }
+}
+
+@OptIn(TransformExperimental::class)
+private fun cameraBufferToPreviewMatrix(
+    sourceTransform: OutputTransform,
+    targetTransform: OutputTransform,
+    frameWidth: Int,
+    frameHeight: Int
+): Matrix {
+    val source = floatArrayOf(0f, 0f, frameWidth.toFloat(), 0f, 0f, frameHeight.toFloat())
+    val destination = source.copyOf()
+    CoordinateTransform(sourceTransform, targetTransform).mapPoints(destination)
+    return Matrix().apply { setPolyToPoly(source, 0, destination, 0, 3) }
+}
+
+private fun maskToImageBufferMatrix(
+    mask: PersonSegmentationMask,
+    frameWidth: Int,
+    frameHeight: Int,
+    rotationDegrees: Int
+): Matrix {
+    val source = floatArrayOf(0f, 0f, mask.width.toFloat(), 0f, 0f, mask.height.toFloat())
+    val width = frameWidth.toFloat()
+    val height = frameHeight.toFloat()
+    val rotation = ((rotationDegrees % 360) + 360) % 360
+    val destination = when (rotation) {
+        90 -> floatArrayOf(0f, height, 0f, 0f, width, height)
+        180 -> floatArrayOf(width, height, 0f, height, width, 0f)
+        270 -> floatArrayOf(width, 0f, width, height, 0f, 0f)
+        else -> floatArrayOf(0f, 0f, width, 0f, 0f, height)
+    }
+    return Matrix().apply { setPolyToPoly(source, 0, destination, 0, 3) }
+}
+
+private const val LEFT_EYE_OUTER = 33
+private const val LEFT_EYE_INNER = 133
+private const val RIGHT_EYE_INNER = 362
+private const val RIGHT_EYE_OUTER = 263
