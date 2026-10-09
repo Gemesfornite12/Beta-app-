@@ -69,7 +69,12 @@ internal object SocialFaceCrashEvidence {
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching { saveUncaughtCameraFailure(appContext, throwable) }
-            if (previousHandler != null) previousHandler.uncaughtException(thread, throwable)
+            if (previousHandler != null) {
+                previousHandler.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
         }
     }
 
