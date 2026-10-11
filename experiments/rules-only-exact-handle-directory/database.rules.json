@@ -1,0 +1,276 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "ultimate": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "chats": {
+      ".read": "auth != null",
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "calls": {
+      ".indexOn": [
+        "callerUid",
+        "peerUid"
+      ],
+      ".read": "auth != null && ((query.orderByChild == 'callerUid' && query.equalTo == auth.uid) || (query.orderByChild == 'peerUid' && query.equalTo == auth.uid))",
+      "$callId": {
+        ".read": "auth != null && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())",
+        ".write": "auth != null && ((!data.exists() && newData.exists() && auth.uid == newData.child('callerUid').val() && newData.child('peerUid').isString() && newData.child('peerUid').val() != auth.uid) || (data.exists() && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val()) && newData.exists() && newData.child('callerUid').val() == data.child('callerUid').val() && newData.child('peerUid').val() == data.child('peerUid').val()) || (data.exists() && !newData.exists() && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['callId', 'channelId', 'status', 'callerUid', 'peerUid', 'isVideo', 'startTimeMs']) && newData.child('callId').val() == $callId && newData.child('channelId').isString() && newData.child('channelId').val().beginsWith('direct') && newData.child('callerUid').isString() && newData.child('peerUid').isString() && newData.child('callerUid').val() != newData.child('peerUid').val() && newData.child('isVideo').isBoolean() && newData.child('startTimeMs').isNumber() && (newData.child('status').val() == 'RINGING' || newData.child('status').val() == 'CONNECTED' || newData.child('status').val() == 'ENDED') && (!newData.child('groupName').exists() || newData.child('groupName').val() == ''))"
+      }
+    },
+    "presence": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "typing": {
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "documents": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$docId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "audio_projects": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$projectId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "sara_knowledge": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        "$entryId": {
+          ".write": "auth != null && auth.uid == $uid && (!newData.exists() || newData.child('ownerUid').val() == auth.uid)"
+        }
+      }
+    },
+    "sara_chat_history": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid && !newData.exists()",
+        ".indexOn": [
+          "createdAt"
+        ],
+        "$entryId": {
+          ".write": "auth != null && auth.uid == $uid && (!data.exists() || !newData.exists())",
+          ".validate": "newData.hasChildren(['uid', 'role', 'text', 'createdAt']) && newData.child('uid').val() == auth.uid && (newData.child('role').val() == 'user' || newData.child('role').val() == 'assistant') && newData.child('text').isString() && newData.child('text').val().length <= 4000 && newData.child('createdAt').isNumber()"
+        }
+      }
+    },
+    "social_test": {
+      "profiles": {
+        "$uid": {
+          ".read": "auth != null && (auth.uid == $uid || data.child('visibility').val() == 'public')",
+          ".write": "auth != null && auth.uid == $uid",
+          ".validate": "!newData.exists() || (newData.child('uid').val() == $uid && (newData.child('visibility').val() == 'public' || newData.child('visibility').val() == 'private'))"
+        }
+      },
+      "directory": {
+        ".read": "auth != null",
+        "$handle": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "!newData.exists() || (newData.child('uid').val() == $uid && newData.child('usernameLower').val() == $handle)"
+          }
+        }
+      },
+      "postsByUser": {
+        "$ownerUid": {
+          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+          ".indexOn": [
+            "createdAt"
+          ],
+          "$postId": {
+            ".write": "auth != null && auth.uid == $ownerUid",
+            ".validate": "!newData.exists() || (newData.child('ownerUid').val() == $ownerUid && newData.child('id').val() == $postId && newData.child('caption').isString() && newData.child('caption').val().length <= 2200 && newData.child('createdAt').isNumber())"
+          }
+        }
+      },
+      "publicFeed": {
+        ".read": "auth != null",
+        ".indexOn": [
+          "createdAt"
+        ],
+        "$feedKey": {
+          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test').child('profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
+          ".validate": "!newData.exists() || (newData.child('ownerUid').val() == auth.uid && newData.child('id').isString() && newData.child('createdAt').isNumber())"
+        }
+      },
+      "following": {
+        "$followerUid": {
+          ".read": "auth != null && auth.uid == $followerUid",
+          "$targetUid": {
+            ".write": "auth != null && auth.uid == $followerUid && (!newData.exists() || newData.child('status').val() == 'pending' || root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($targetUid).child($followerUid).child('status').val() == 'accepted')",
+            ".validate": "!newData.exists() || (newData.child('status').val() == 'pending' || newData.child('status').val() == 'accepted')"
+          }
+        }
+      },
+      "followers": {
+        "$targetUid": {
+          ".read": "auth != null && (auth.uid == $targetUid || root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' || data.child(auth.uid).child('status').val() == 'accepted')",
+          "$followerUid": {
+            ".read": "auth != null && (auth.uid == $targetUid || auth.uid == $followerUid)",
+            ".write": "auth != null && ((auth.uid == $followerUid && root.child('social_test').child('profiles').child($targetUid).child('visibility').val() == 'public' && newData.child('status').val() == 'accepted') || (auth.uid == $targetUid && newData.child('status').val() == 'accepted') || (!newData.exists() && (auth.uid == $followerUid || auth.uid == $targetUid)))",
+            ".validate": "!newData.exists() || (newData.child('status').val() == 'accepted' && newData.child('createdAt').isNumber())"
+          }
+        }
+      },
+      "followRequests": {
+        "$targetUid": {
+          ".read": "auth != null && auth.uid == $targetUid",
+          "$requesterUid": {
+            ".read": "auth != null && (auth.uid == $targetUid || auth.uid == $requesterUid)",
+            ".write": "auth != null && (auth.uid == $requesterUid || auth.uid == $targetUid)",
+            ".validate": "!newData.exists() || (newData.child('requesterUid').val() == $requesterUid && ((auth.uid == $requesterUid && newData.child('status').val() == 'pending') || (auth.uid == $targetUid && (newData.child('status').val() == 'accepted' || newData.child('status').val() == 'rejected'))))"
+          }
+        }
+      },
+      "likes": {
+        "$ownerUid": {
+          "$postId": {
+            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+            "$likerUid": {
+              ".write": "auth != null && auth.uid == $likerUid && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+              ".validate": "!newData.exists() || newData.val() == true"
+            }
+          }
+        }
+      },
+      "preferences": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": "auth != null && auth.uid == $uid"
+        }
+      },
+      "storiesByUser": {
+        "$ownerUid": {
+          ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+          ".indexOn": [
+            "createdAt",
+            "expiresAt"
+          ],
+          "$storyId": {
+            ".write": "auth != null && auth.uid == $ownerUid",
+            ".validate": "!newData.exists() || (newData.child('ownerUid').val() == $ownerUid && newData.child('id').val() == $storyId && newData.child('createdAt').isNumber() && newData.child('expiresAt').isNumber())"
+          }
+        }
+      },
+      "publicStories": {
+        ".read": "auth != null",
+        ".indexOn": [
+          "createdAt",
+          "expiresAt"
+        ],
+        "$storyKey": {
+          ".write": "auth != null && ((newData.exists() && newData.child('ownerUid').val() == auth.uid && root.child('social_test').child('profiles').child(auth.uid).child('visibility').val() == 'public') || (!newData.exists() && data.child('ownerUid').val() == auth.uid))",
+          ".validate": "!newData.exists() || (newData.child('ownerUid').val() == auth.uid && newData.child('id').isString() && newData.child('createdAt').isNumber() && newData.child('expiresAt').isNumber())"
+        }
+      },
+      "comments": {
+        "$ownerUid": {
+          "$postId": {
+            ".read": "auth != null && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+            ".indexOn": [
+              "createdAt"
+            ],
+            "$commentId": {
+              ".write": "auth != null && !data.exists() && newData.exists() && newData.child('authorUid').val() == auth.uid && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')",
+              ".validate": "!newData.exists() || (newData.hasChildren(['authorUid', 'authorUsername', 'authorDisplayName', 'text', 'createdAt']) && newData.child('authorUid').isString() && newData.child('authorUid').val() == auth.uid && newData.child('authorUsername').isString() && newData.child('authorDisplayName').isString() && newData.child('text').isString() && newData.child('text').val().matches(/.*[^\t- \u0084-\u0086 \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2027-\u202a\u202f\u205f\u3000].*/) && newData.child('text').val().length <= 1000 && newData.child('createdAt').isNumber())",
+              "authorUid": {
+                ".validate": true
+              },
+              "authorUsername": {
+                ".validate": true
+              },
+              "authorDisplayName": {
+                ".validate": true
+              },
+              "text": {
+                ".validate": true
+              },
+              "createdAt": {
+                ".validate": true
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
+      },
+      "savedPosts": {
+        "$uid": {
+          ".read": "auth != null && auth.uid == $uid",
+          "$ownerUid": {
+            "$postId": {
+              ".write": "auth != null && auth.uid == $uid && (!newData.exists() || (root.child('social_test').child('postsByUser').child($ownerUid).child($postId).exists() && root.child('social_test').child('postsByUser').child($ownerUid).child($postId).child('mediaType').val() == 'video' && (auth.uid == $ownerUid || root.child('social_test').child('profiles').child($ownerUid).child('visibility').val() == 'public' || root.child('social_test').child('followers').child($ownerUid).child(auth.uid).child('status').val() == 'accepted')))",
+              ".validate": "!newData.exists() || (newData.hasChildren(['ownerUid', 'postId', 'savedAt']) && newData.child('ownerUid').isString() && newData.child('ownerUid').val() == $ownerUid && newData.child('postId').isString() && newData.child('postId').val() == $postId && newData.child('savedAt').isNumber())",
+              "ownerUid": {
+                ".validate": true
+              },
+              "postId": {
+                ".validate": true
+              },
+              "savedAt": {
+                ".validate": true
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
+      },
+      "memberDirectory": {
+        "byHandle": {
+          "$handle": {
+            ".read": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/)",
+            ".write": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/) && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && root.child('social_test').child('memberDirectory').child('byUid').child(auth.uid).val() == $handle) || (data.exists() && !newData.exists() && data.child('uid').val() == auth.uid))",
+            ".validate": "!newData.exists() || (newData.numChildren() == 2 && newData.hasChildren(['uid', 'handle']) && newData.child('uid').isString() && newData.child('handle').isString() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && $handle.matches(/^[a-z0-9_]{3,20}$/))"
+          }
+        },
+        "byUid": {
+          "$uid": {
+            ".read": "auth != null && auth.uid == $uid",
+            ".write": "auth != null && auth.uid == $uid && ((!data.exists() && newData.exists() && newData.isString() && newData.val().matches(/^[a-z0-9_]{3,20}$/) && root.child('social_test').child('profiles').child(auth.uid).child('uid').val() == auth.uid && !root.child('social_test').child('memberDirectory').child('byHandle').child(newData.val()).exists()) || (data.exists() && !newData.exists() && root.child('social_test').child('memberDirectory').child('byHandle').child(data.val()).child('uid').val() != auth.uid))",
+            ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^[a-z0-9_]{3,20}$/))"
+          }
+        }
+      }
+    },
+    "calls_test": {
+      ".indexOn": [
+        "callerUid",
+        "peerUid"
+      ],
+      ".read": "auth != null && ((query.orderByChild == 'callerUid' && query.equalTo == auth.uid) || (query.orderByChild == 'peerUid' && query.equalTo == auth.uid))",
+      "$callId": {
+        ".read": "auth != null && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())",
+        ".write": "auth != null && ((newData.exists() && newData.child('pushEnvironment').val() == 'test' && (( !data.exists() && auth.uid == newData.child('callerUid').val() && newData.child('peerUid').isString() && newData.child('peerUid').val() != auth.uid) || (data.exists() && data.child('pushEnvironment').val() == 'test' && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val()) && newData.child('callerUid').val() == data.child('callerUid').val() && newData.child('peerUid').val() == data.child('peerUid').val()))) || (!newData.exists() && data.child('pushEnvironment').val() == 'test' && (auth.uid == data.child('callerUid').val() || auth.uid == data.child('peerUid').val())))"
+      }
+    }
+  }
+}
