@@ -43,6 +43,9 @@ async function createIfAbsent(target, value) {
   await assertFails(get(root(bob, 'social_test/memberDirectory')));
   await assertFails(get(root(bob, 'social_test/memberDirectory/byHandle')));
   await assertFails(get(query(root(bob, 'social_test/memberDirectory/byHandle'), orderByKey())));
+  await assertFails(get(root(alice, 'social_test/memberDirectory/byUid')));
+  await assertFails(get(root(bob, 'social_test/memberDirectory/byUid')));
+  await assertFails(get(query(root(alice, 'social_test/memberDirectory/byUid'), orderByKey())));
   await assertFails(get(handleRef(unauth, 'alice_1')));
   await assertSucceeds(get(ownPointer(alice, 'alice')));
   await assertFails(get(ownPointer(bob, 'alice')));
