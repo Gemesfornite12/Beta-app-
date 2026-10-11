@@ -104,8 +104,11 @@ test('same-handle concurrent claim has one canonical winner; loser can clear its
     createIfAbsent(handleRef(alice, 'shared_handle'), { uid: 'alice', handle: 'shared_handle' }),
     createIfAbsent(handleRef(bob, 'shared_handle'), { uid: 'bob', handle: 'shared_handle' }),
   ]);
-  assert.equal(results.filter((x) => x.status === 'fulfilled').length, 1);
-  assert.equal(results.filter((x) => x.status === 'rejected').length, 1);
+  // A losing RTDB transaction may resolve with committed:false when its
+  // callback returns undefined after seeing the winner; it need not reject.
+  assert.equal(results.filter((x) => x.status === 'fulfilled' && x.value.committed).length, 1);
+  assert.equal(results.filter((x) => x.status === 'rejected').length +
+    results.filter((x) => x.status === 'fulfilled' && !x.value.committed).length, 1);
   const owner = (await get(handleRef(alice, 'shared_handle'))).val().uid;
   const loser = owner === 'alice' ? bob : alice;
   const loserUid = owner === 'alice' ? 'bob' : 'alice';
