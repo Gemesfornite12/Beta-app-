@@ -51,7 +51,9 @@ data class GroupMember(
     val canSendMessages: Boolean = true,
     val canSendMedia: Boolean = true,
     val canInviteMembers: Boolean = true,
-    val avatarUrl: String = ""
+    val avatarUrl: String = "",
+    /** Stable Firebase Auth UID; blank only for legacy/unverified records. */
+    val uid: String = ""
 )
 
 data class ChannelInfo(
@@ -66,8 +68,40 @@ data class ChannelInfo(
     val creatorName: String = "",
     val members: List<GroupMember> = emptyList(),
     val pendingDeletionTimestamp: Long? = null,
-    val isDeleting: Boolean = false
+    val isDeleting: Boolean = false,
+    /** Stable Firebase Auth UID for newly created groups; never inferred from email. */
+    val creatorUid: String = ""
 )
+
+/** Display-compatible member serializer; UID is emitted only when explicitly known. */
+internal fun GroupMember.toDatabaseMap(): Map<String, Any> = buildMap {
+    put("email", email)
+    put("name", name)
+    put("role", role)
+    put("canSendMessages", canSendMessages)
+    put("canSendMedia", canSendMedia)
+    put("canInviteMembers", canInviteMembers)
+    put("avatarUrl", avatarUrl)
+    if (uid.isNotBlank()) put("uid", uid)
+}
+
+/** Channel writer payload shared by the RTDB and Firestore compatibility writers. */
+internal fun ChannelInfo.toDatabaseMap(): Map<String, Any?> = buildMap {
+    put("id", id)
+    put("name", name)
+    put("description", description)
+    put("iconEmoji", iconEmoji)
+    put("isDirect", isDirect)
+    put("isGroup", isGroup)
+    put("groupPhotoUrl", groupPhotoUrl)
+    put("creatorEmail", creatorEmail)
+    put("creatorName", creatorName)
+    put("members", members.map { it.toDatabaseMap() })
+    put("isDeleting", isDeleting)
+    if (creatorUid.isNotBlank()) put("creatorUid", creatorUid)
+    if (pendingDeletionTimestamp != null) put("pendingDeletionTimestamp", pendingDeletionTimestamp)
+    put("lastUpdated", System.currentTimeMillis())
+}
 
 class FirestoreChatService(private val context: Context) {
 
@@ -1031,38 +1065,13 @@ class FirestoreChatService(private val context: Context) {
      * Guarda o actualiza la información y metadatos de un canal o grupo en RTDB y Firestore.
      */
     suspend fun saveOrUpdateChannel(channel: ChannelInfo): Boolean {
-        val membersData = channel.members.map { m ->
-            mapOf(
-                "email" to m.email,
-                "name" to m.name,
-                "role" to m.role,
-                "canSendMessages" to m.canSendMessages,
-                "canSendMedia" to m.canSendMedia,
-                "canInviteMembers" to m.canInviteMembers,
-                "avatarUrl" to m.avatarUrl
-            )
-        }
-        val data = hashMapOf(
-            "id" to channel.id,
-            "name" to channel.name,
-            "description" to channel.description,
-            "iconEmoji" to channel.iconEmoji,
-            "isDirect" to channel.isDirect,
-            "isGroup" to channel.isGroup,
-            "groupPhotoUrl" to channel.groupPhotoUrl,
-            "creatorEmail" to channel.creatorEmail,
-            "creatorName" to channel.creatorName,
-            "members" to membersData,
-            "isDeleting" to channel.isDeleting,
-            "pendingDeletionTimestamp" to channel.pendingDeletionTimestamp,
-            "lastUpdated" to System.currentTimeMillis()
-        )
+        val data = channel.toDatabaseMap()
 
         var success = false
         val rtdb = rtdbRef
         if (rtdb != null) {
             try {
-                rtdb.child("chats").child(channel.id).updateChildren(data as Map<String, Any>).await()
+                rtdb.child("chats").child(channel.id).updateChildren(data.filterValues { it != null } as Map<String, Any>).await()
                 success = true
                 Log.d(TAG, "Canal/Chat sincronizado en RTDB: ${channel.name} (${channel.id})")
             } catch (e: Exception) {
@@ -1110,7 +1119,18 @@ class FirestoreChatService(private val context: Context) {
                 val canMedia = (memMap["canSendMedia"] as? Boolean) ?: true
                 val canInvite = (memMap["canInviteMembers"] as? Boolean) ?: true
                 val avatar = (memMap["avatarUrl"] as? String) ?: ""
-                membersList.add(GroupMember(email, memName, role, canSend, canMedia, canInvite, avatar))
+                membersList.add(
+                    GroupMember(
+                        email = email,
+                        name = memName,
+                        role = role,
+                        canSendMessages = canSend,
+                        canSendMedia = canMedia,
+                        canInviteMembers = canInvite,
+                        avatarUrl = avatar,
+                        uid = (memMap["uid"] as? String) ?: ""
+                    )
+                )
             }
         }
 
@@ -1126,7 +1146,8 @@ class FirestoreChatService(private val context: Context) {
             creatorName = creatorName,
             members = membersList,
             pendingDeletionTimestamp = pendingDeletionTimestamp,
-            isDeleting = isDeleting
+            isDeleting = isDeleting,
+            creatorUid = (map["creatorUid"] as? String) ?: ""
         )
     }
 
@@ -1153,7 +1174,8 @@ class FirestoreChatService(private val context: Context) {
                 canSendMessages = m["canSendMessages"] as? Boolean ?: true,
                 canSendMedia = m["canSendMedia"] as? Boolean ?: true,
                 canInviteMembers = m["canInviteMembers"] as? Boolean ?: true,
-                avatarUrl = m["avatarUrl"] as? String ?: ""
+                avatarUrl = m["avatarUrl"] as? String ?: "",
+                uid = m["uid"] as? String ?: ""
             )
         }
 
@@ -1169,7 +1191,8 @@ class FirestoreChatService(private val context: Context) {
             creatorName = creatorName,
             members = members,
             pendingDeletionTimestamp = pendingDeletionTimestamp,
-            isDeleting = isDeleting
+            isDeleting = isDeleting,
+            creatorUid = doc.getString("creatorUid") ?: ""
         )
     }
 

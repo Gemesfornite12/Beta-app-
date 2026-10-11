@@ -81,7 +81,8 @@ class RealtimeDatabaseService {
                 canSendMessages = (m["canSendMessages"] as? Boolean) ?: true,
                 canSendMedia = (m["canSendMedia"] as? Boolean) ?: true,
                 canInviteMembers = (m["canInviteMembers"] as? Boolean) ?: true,
-                avatarUrl = (m["avatarUrl"] as? String) ?: ""
+                avatarUrl = (m["avatarUrl"] as? String) ?: "",
+                uid = (m["uid"] as? String) ?: ""
             )
         } ?: emptyList()
 
@@ -97,7 +98,8 @@ class RealtimeDatabaseService {
             creatorName = (map["creatorName"] as? String) ?: "",
             members = membersList,
             pendingDeletionTimestamp = (map["pendingDeletionTimestamp"] as? Number)?.toLong(),
-            isDeleting = (map["isDeleting"] as? Boolean) ?: false
+            isDeleting = (map["isDeleting"] as? Boolean) ?: false,
+            creatorUid = (map["creatorUid"] as? String) ?: ""
         )
     }
 
@@ -439,35 +441,7 @@ class RealtimeDatabaseService {
     }
 
     suspend fun saveOrUpdateChannel(channel: ChannelInfo) {
-        val membersList = channel.members.map { m ->
-            mapOf(
-                "email" to m.email,
-                "name" to m.name,
-                "role" to m.role,
-                "canSendMessages" to m.canSendMessages,
-                "canSendMedia" to m.canSendMedia,
-                "canInviteMembers" to m.canInviteMembers,
-                "avatarUrl" to m.avatarUrl
-            )
-        }
-
-        val chatData = mutableMapOf(
-            "id" to channel.id,
-            "name" to channel.name,
-            "description" to channel.description,
-            "iconEmoji" to channel.iconEmoji,
-            "isDirect" to channel.isDirect,
-            "isGroup" to channel.isGroup,
-            "groupPhotoUrl" to channel.groupPhotoUrl,
-            "creatorEmail" to channel.creatorEmail,
-            "creatorName" to channel.creatorName,
-            "members" to membersList,
-            "isDeleting" to channel.isDeleting,
-            "lastUpdated" to System.currentTimeMillis()
-        )
-        if (channel.pendingDeletionTimestamp != null) {
-            chatData["pendingDeletionTimestamp"] = channel.pendingDeletionTimestamp
-        }
+        val chatData = channel.toDatabaseMap().filterValues { it != null }.toMutableMap()
 
         database.child("chats").child(channel.id).updateChildren(chatData as Map<String, Any>).await()
     }

@@ -3124,10 +3124,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         photoUrl: String,
         memberEmails: List<String>
     ) {
-        val user = _authUiState.value.currentUser
-        val ownerEmail = user?.email ?: "gonzalez24029@gmail.com"
-        val ownerName = user?.displayName ?: "Alex González"
-        val ownerAvatar = user?.avatarUrl ?: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&q=80"
+        val user = _authUiState.value.currentUser ?: return
+        val ownerEmail = user.email
+        val ownerName = user.displayName
+        val ownerAvatar = user.avatarUrl
+        val ownerUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+        if (ownerUid.isBlank() || ownerEmail.isBlank()) return
 
         val ownerMember = GroupMember(
             email = ownerEmail,
@@ -3136,7 +3138,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             canSendMessages = true,
             canSendMedia = true,
             canInviteMembers = true,
-            avatarUrl = ownerAvatar
+            avatarUrl = ownerAvatar,
+            uid = ownerUid
         )
 
         val allAvailableUsers = allUsers.value
@@ -3149,7 +3152,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 canSendMessages = true,
                 canSendMedia = true,
                 canInviteMembers = true,
-                avatarUrl = u?.avatarUrl ?: ""
+                avatarUrl = u?.avatarUrl ?: "",
+                uid = u?.uid?.takeIf { it.isNotBlank() } ?: ""
             )
         }
 
@@ -3164,7 +3168,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             groupPhotoUrl = photoUrl,
             creatorEmail = ownerEmail,
             creatorName = ownerName,
-            members = allGroupMembers
+            members = allGroupMembers,
+            creatorUid = ownerUid
         )
 
         _availableChannels.value = _availableChannels.value + newGroup
@@ -3229,7 +3234,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             canSendMessages = true,
             canSendMedia = true,
             canInviteMembers = true,
-            avatarUrl = finalAvatar
+            avatarUrl = finalAvatar,
+            uid = allUsers.value.firstOrNull { it.email.equals(userEmail, ignoreCase = true) }
+                ?.uid?.takeIf { it.isNotBlank() } ?: ""
         )
         val updatedMembers = ch.members + newMember
         val updatedChannel = ch.copy(members = updatedMembers)
