@@ -18,6 +18,9 @@ Exact point reads are allowed only on authenticated `byHandle/{handle}` records;
 
 Directory lookup only resolves an opted-in UID. It grants no chat membership or write authority. Checked-in `/chats/$chatId/.write = auth != null` is intentionally untouched and remains a separate blocker for secure group authorization.
 
-## Local validation status
+## Emulator validation checklist
 
-An Emulator Suite rules test file is included under `test/`. No emulator/Node/Firebase CLI is available in this workspace, so tests were not executed. No live RTDB access, live reads/writes, deployment, CI, merge, or production changes were made. Before implementation, run these tests in a disposable local Emulator Suite project and review transaction/rules behavior against the exact SDK/rules versions used by the app.
+- [x] Added an Actions workflow limited to the exact draft branch and the experiment's rules/config/tests paths. It installs the exact direct dependency versions declared in `package.json`, with Node 20 and Java 17; the emulator uses the `demo-rtdb-handle-directory-rules-only` project ID.
+- [x] Corrected the same-handle race assertion: an RTDB `runTransaction` callback returning `undefined` can resolve with `committed: false`, rather than reject.
+- [ ] Emulator test execution: **not completed**. The single workflow run [38114436743](https://github.com/Gemesfornite12/Beta-app-/actions/runs/38114436743) failed during workflow setup because GitHub could not resolve `actions/setup-node@1e60f620b9541d2cc4a1e6d4a25b4f394429514c`. No test steps ran; the seven test cases have not been validated by the Emulator Suite. Per instruction, the workflow was not retried.
+- [x] No live RTDB access, live reads/writes, deployment, merge, or production changes were made. The candidate remains isolated on this draft branch; do not treat the design as Emulator-validated or deployable based on this run.
