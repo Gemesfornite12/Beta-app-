@@ -32,4 +32,17 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Run RTDB Emulator Suite rules tests
         working-directory: experiments/rules-only-exact-handle-directory
-        run: npm run test:emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/rtdb-emulator-test.log"
+          npm run test:emulator 2>&1 | tee "$log"
+
+          tests="$(sed -nE 's/^# tests ([0-9]+)$/\1/p' "$log" | tail -n 1)"
+          passed="$(sed -nE 's/^# pass ([0-9]+)$/\1/p' "$log" | tail -n 1)"
+          failed="$(sed -nE 's/^# fail ([0-9]+)$/\1/p' "$log" | tail -n 1)"
+          if [[ -z "$tests" || -z "$passed" || -z "$failed" || "$tests" -lt 1 || "$passed" -ne "$tests" || "$failed" -ne 0 ]]; then
+            echo "TAP summary missing, empty, or unsuccessful (tests=${tests:-missing}, pass=${passed:-missing}, fail=${failed:-missing})." >&2
+            exit 1
+          fi
+          echo "Verified TAP execution: $passed/$tests tests passed; 0 failed."

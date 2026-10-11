@@ -249,7 +249,10 @@
           "$handle": {
             ".read": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/)",
             ".write": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/) && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && root.child('social_test').child('memberDirectory').child('byUid').child(auth.uid).val() == $handle) || (data.exists() && !newData.exists() && data.child('uid').val() == auth.uid))",
-            ".validate": "!newData.exists() || (newData.numChildren() == 2 && newData.hasChildren(['uid', 'handle']) && newData.child('uid').isString() && newData.child('handle').isString() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && $handle.matches(/^[a-z0-9_]{3,20}$/))"
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'handle']) && newData.child('uid').isString() && newData.child('handle').isString() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && $handle.matches(/^[a-z0-9_]{3,20}$/))",
+            "uid": { ".validate": true },
+            "handle": { ".validate": true },
+            "$other": { ".validate": false }
           }
         },
         "byUid": {
