@@ -20,18 +20,80 @@ beforeEach(async () => { await env.clearDatabase(); });
 const root = (db, path = '') => ref(db, path);
 const ownPointer = (db, uid) => root(db, `social_test/memberDirectory/byUid/${uid}`);
 const handleRef = (db, handle) => root(db, `social_test/memberDirectory/byHandle/${handle}`);
-async function seedProfile(uid, matchingUid = uid) {
+async function seedProfile(uid, matchingUid = uid, directoryOptIn = true) {
   await env.withSecurityRulesDisabled(async (ctx) => {
-    await set(root(ctx.database(), `social_test/profiles/${uid}`), {
+    const db = ctx.database();
+    await set(root(db, `social_test/profiles/${uid}`), {
       uid: matchingUid, visibility: 'private',
     });
+    if (directoryOptIn !== null) {
+      await set(root(db, `social_test/preferences/${uid}/memberDirectoryOptIn`), directoryOptIn);
+    }
   });
 }
 async function createIfAbsent(target, value) {
   return runTransaction(target, (current) => current === null ? value : undefined);
 }
 
- test('exact authenticated handle read only; parent/list and private reverse slot denied', async () => {
+test('absent or false directory opt-in denies reservation and canonical creation', async () => {
+  await seedProfile('absent', 'absent', null);
+  const absent = env.authenticatedContext('absent').database();
+  await assertFails(createIfAbsent(ownPointer(absent, 'absent'), 'absent_1'));
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await set(ownPointer(ctx.database(), 'absent'), 'absent_1');
+  });
+  await assertFails(set(handleRef(absent, 'absent_1'), { uid: 'absent', handle: 'absent_1' }));
+
+  await seedProfile('declined', 'declined', false);
+  const declined = env.authenticatedContext('declined').database();
+  await assertFails(createIfAbsent(ownPointer(declined, 'declined'), 'declined_1'));
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await set(ownPointer(ctx.database(), 'declined'), 'declined_1');
+  });
+  await assertFails(set(handleRef(declined, 'declined_1'), { uid: 'declined', handle: 'declined_1' }));
+});
+
+test('true directory opt-in permits the bound owner reservation and canonical create', async () => {
+  await seedProfile('opted_in');
+  const db = env.authenticatedContext('opted_in').database();
+  await assertSucceeds(createIfAbsent(ownPointer(db, 'opted_in'), 'opted_in_1'));
+  await assertSucceeds(createIfAbsent(handleRef(db, 'opted_in_1'), { uid: 'opted_in', handle: 'opted_in_1' }));
+});
+
+test('an authenticated UID cannot borrow another UID\'s directory opt-in', async () => {
+  await seedProfile('consenting');
+  await seedProfile('nonconsenting', 'nonconsenting', null);
+  const consenting = env.authenticatedContext('consenting').database();
+  const nonconsenting = env.authenticatedContext('nonconsenting').database();
+  await assertFails(set(root(nonconsenting, 'social_test/preferences/consenting/memberDirectoryOptIn'), true));
+  await assertFails(createIfAbsent(ownPointer(nonconsenting, 'nonconsenting'), 'borrowed_1'));
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await set(ownPointer(ctx.database(), 'nonconsenting'), 'borrowed_1');
+  });
+  await assertFails(set(handleRef(nonconsenting, 'borrowed_1'), { uid: 'nonconsenting', handle: 'borrowed_1' }));
+  await assertSucceeds(get(root(consenting, 'social_test/preferences/consenting/memberDirectoryOptIn')));
+});
+
+test('opt-out still permits ordered revoke and stale reservation cleanup', async () => {
+  await seedProfile('alice');
+  const alice = env.authenticatedContext('alice').database();
+  const consent = root(alice, 'social_test/preferences/alice/memberDirectoryOptIn');
+  await assertSucceeds(createIfAbsent(ownPointer(alice, 'alice'), 'alice_optout'));
+  await assertSucceeds(createIfAbsent(handleRef(alice, 'alice_optout'), { uid: 'alice', handle: 'alice_optout' }));
+  await assertSucceeds(set(consent, false));
+  await assertFails(set(ownPointer(alice, 'alice'), null));
+  await assertSucceeds(set(handleRef(alice, 'alice_optout'), null));
+  await assertSucceeds(set(ownPointer(alice, 'alice'), null));
+  await assertFails(createIfAbsent(ownPointer(alice, 'alice'), 'alice_after_optout'));
+
+  await seedProfile('stale');
+  const stale = env.authenticatedContext('stale').database();
+  await assertSucceeds(createIfAbsent(ownPointer(stale, 'stale'), 'stale_slot'));
+  await assertSucceeds(set(root(stale, 'social_test/preferences/stale/memberDirectoryOptIn'), false));
+  await assertSucceeds(set(ownPointer(stale, 'stale'), null));
+});
+
+test('exact authenticated handle read only; parent/list and private reverse slot denied', async () => {
   await seedProfile('alice');
   const alice = env.authenticatedContext('alice').database();
   const bob = env.authenticatedContext('bob').database();

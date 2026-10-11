@@ -248,7 +248,7 @@
         "byHandle": {
           "$handle": {
             ".read": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/)",
-            ".write": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/) && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && root.child('social_test').child('memberDirectory').child('byUid').child(auth.uid).val() == $handle) || (data.exists() && !newData.exists() && data.child('uid').val() == auth.uid))",
+            ".write": "auth != null && $handle.matches(/^[a-z0-9_]{3,20}$/) && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && root.child('social_test').child('profiles').child(auth.uid).child('uid').val() == auth.uid && root.child('social_test').child('preferences').child(auth.uid).child('memberDirectoryOptIn').val() == true && root.child('social_test').child('memberDirectory').child('byUid').child(auth.uid).val() == $handle) || (data.exists() && !newData.exists() && data.child('uid').val() == auth.uid))",
             ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'handle']) && newData.child('uid').isString() && newData.child('handle').isString() && newData.child('uid').val() == auth.uid && newData.child('handle').val() == $handle && $handle.matches(/^[a-z0-9_]{3,20}$/))",
             "uid": { ".validate": true },
             "handle": { ".validate": true },
@@ -258,7 +258,7 @@
         "byUid": {
           "$uid": {
             ".read": "auth != null && auth.uid == $uid",
-            ".write": "auth != null && auth.uid == $uid && ((!data.exists() && newData.exists() && newData.isString() && newData.val().matches(/^[a-z0-9_]{3,20}$/) && root.child('social_test').child('profiles').child(auth.uid).child('uid').val() == auth.uid && !root.child('social_test').child('memberDirectory').child('byHandle').child(newData.val()).exists()) || (data.exists() && !newData.exists() && root.child('social_test').child('memberDirectory').child('byHandle').child(data.val()).child('uid').val() != auth.uid))",
+            ".write": "auth != null && auth.uid == $uid && ((!data.exists() && newData.exists() && newData.isString() && newData.val().matches(/^[a-z0-9_]{3,20}$/) && root.child('social_test').child('profiles').child(auth.uid).child('uid').val() == auth.uid && root.child('social_test').child('preferences').child(auth.uid).child('memberDirectoryOptIn').val() == true && !root.child('social_test').child('memberDirectory').child('byHandle').child(newData.val()).exists()) || (data.exists() && !newData.exists() && root.child('social_test').child('memberDirectory').child('byHandle').child(data.val()).child('uid').val() != auth.uid))",
             ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^[a-z0-9_]{3,20}$/))"
           }
         }
